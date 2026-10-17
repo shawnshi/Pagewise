@@ -16,6 +16,7 @@ import {
   type CatalogSourceRec,
 } from '../storage'
 import { importReadingLogRows, listReadingLog, normalizeRow, rowKey, type ReadingLogRow } from './readingLog.ts'
+import { isReadingStatus } from './readingStatus.ts'
 
 const LEGACY_JSON_FORMAT = 'org.lightread.library'
 /** 每日阅读记录, 放在包根目录 (OKF 解析只看 .md, 不受影响); 旧包没有此文件 */
@@ -268,6 +269,12 @@ function markdownLabel(value: string): string {
   return value.replace(/([\\[\]])/g, '\\$1')
 }
 
+function optionalReadingStatus(value: unknown) {
+  if (value == null) return undefined
+  if (!isReadingStatus(value)) archiveError('readingStatus 无效')
+  return value
+}
+
 /** 只接受存储层明确支持的字段，避免把包中的任意键写入数据库。 */
 function parseBookMeta(value: unknown, index: number): BookMeta {
   if (!isRecord(value)) archiveError(`books[${index}] 不是对象`)
@@ -298,6 +305,9 @@ function parseBookMeta(value: unknown, index: number): BookMeta {
     fileName: value.fileName as string,
     description: optionalString(value.description),
     language: optionalString(value.language),
+    publisher: optionalString(value.publisher),
+    publicationDate: optionalString(value.publicationDate),
+    readingStatus: optionalReadingStatus(value.readingStatus),
     tags: [...value.tags] as string[],
     addedAt: value.addedAt,
     lastReadAt: optionalNumber(value.lastReadAt),
@@ -524,6 +534,9 @@ function parseOkfBundle(entries: Record<string, Uint8Array>): RestorableManifest
         fileName,
         description: optionalString(frontmatter.description),
         language: optionalString(frontmatter.language),
+        publisher: optionalString(frontmatter.publisher),
+        publicationDate: optionalString(frontmatter.publication_date),
+        readingStatus: optionalReadingStatus(reading.status),
         tags: stringList(frontmatter.tags),
         addedAt,
         lastReadAt: reading.last_read_at == null
@@ -653,6 +666,8 @@ export async function exportBackup(onProgress?: (msg: string) => void): Promise<
       id: book.id,
       authors: book.author ? [book.author] : [],
       language: book.language,
+      publisher: book.publisher,
+      publication_date: book.publicationDate,
       collection: book.kind === 'paper' ? 'papers' : 'books',
       provenance: book.source,
       file: assetToOkf(content, book.fileName, book.format),
@@ -663,6 +678,7 @@ export async function exportBackup(onProgress?: (msg: string) => void): Promise<
         location: book.location,
         progress: book.progress,
         reading_seconds: book.readingSeconds,
+        status: book.readingStatus,
         pinned_at: toIso(book.pinnedAt),
       }),
       annotations: annotations.map(annotation => compactRecord({

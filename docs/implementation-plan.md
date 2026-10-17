@@ -1,5 +1,7 @@
 # 知页阅读器 · Pagewise：实施方案与阶段验收
 
+> 历史快照：本文件保留当时的计划或执行记录，不作为当前功能、验收状态或安装指令。当前实现以[项目说明](../readme.md)、[验证状态](validation-status.md)和[设备准入](device-admission.md)为准。
+
 ## 1. 当前目标与范围
 
 面向 BOOX Note X3 Pro，维护一个 Android 个人本地阅读器，承载 4000+ 本书的书库。源码基于 LightRead v1.15.0 / `9027e9a09ef19c1c37cc828c9fd42b21119e1ac9`，位于 `reader/`，工作分支仍为 `pagewise/epub-first`。版本保持 `1.15.0`，包标识保持 `io.pagewise.reader[.debug]`。

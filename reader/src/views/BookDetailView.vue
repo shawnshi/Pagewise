@@ -8,6 +8,7 @@ import { readerPath } from '../services/readerRoute'
 import { resolveReadingStatus, READING_STATUSES } from '../services/readingStatus'
 import { formatReadingTime } from '../composables/useReadingTimer'
 import { loadLibrarySession } from '../services/librarySession'
+import AppIcon from '../components/AppIcon.vue'
 import { toast } from '../services/toast'
 import { t } from '../i18n'
 
@@ -170,9 +171,7 @@ const activeTab = ref<'overview' | 'toc' | 'records'>('overview')
         :aria-label="t('common.back')"
         @click="goBack"
       >
-        <svg viewBox="0 0 24 24" width="18" height="18" aria-hidden="true">
-          <path fill="currentColor" d="M20 11H7.83l5.59-5.59L12 4l-8 8 8 8 1.41-1.41L7.83 13H20v-2z" />
-        </svg>
+        <AppIcon name="back" :size="20" aria-hidden="true" />
         <span>{{ t('common.back') }}</span>
       </button>
       <div class="header-title">
@@ -197,7 +196,13 @@ const activeTab = ref<'overview' | 'toc' | 'records'>('overview')
 
         <div class="meta-section">
           <h1 class="book-title">{{ book.title }}</h1>
-          <p class="book-author">{{ book.author || t('common.anonymous') }}</p>
+          <p class="book-author">
+            <span>{{ book.author || t('book.unknownAuthor') }}</span>
+            <span class="meta-sep">·</span>
+            <span>{{ book.publisher || t('book.unknownPublisher') }}</span>
+            <span class="meta-sep">·</span>
+            <span>{{ book.publicationDate || t('book.unknownDate') }}</span>
+          </p>
 
           <div class="status-row">
             <span class="label">{{ t("uiV02.copy.阅读状态：") }}</span>
@@ -235,11 +240,17 @@ const activeTab = ref<'overview' | 'toc' | 'records'>('overview')
               {{ progress && progress > 0 ? t('catalog.continueReading') : t('settings.navReading') }}
             </button>
             <button type="button" class="btn" @click="togglePin">
-              {{ book.pinnedAt ? t('library.unpin') : t('library.pin') }}
+              <AppIcon name="pin" :size="16" aria-hidden="true" />
+              <span>{{ book.pinnedAt ? t('library.unpin') : t('library.pin') }}</span>
             </button>
-            <button type="button" class="btn btn-danger" @click="removeBook">
-              {{ t('book.removeFromLibrary') }}
+            <button v-if="!book.sourceRef" type="button" class="btn btn-danger" @click="removeBook">
+              <AppIcon name="delete" :size="16" aria-hidden="true" />
+              <span>{{ t('book.removeFromLibrary') }}</span>
             </button>
+            <div v-else class="source-managed-notice" :title="t('book.sourceManagedHint')">
+              <AppIcon name="folder" :size="16" aria-hidden="true" />
+              <span>{{ t('book.sourceManaged') }}</span>
+            </div>
           </div>
         </div>
       </section>
@@ -285,9 +296,29 @@ const activeTab = ref<'overview' | 'toc' | 'records'>('overview')
             <dt>{{ t("uiV02.copy.格式：") }}</dt>
             <dd>{{ FORMAT_LABELS[book.format] }} ({{ book.format }})</dd>
           </div>
-          <div v-if="book.language" class="meta-item">
+          <div class="meta-item">
+            <dt>{{ t('book.author') }}：</dt>
+            <dd>{{ book.author || t('book.unknownAuthor') }}</dd>
+          </div>
+          <div class="meta-item">
+            <dt>{{ t('book.publisher') }}：</dt>
+            <dd>{{ book.publisher || t('book.unknownPublisher') }}</dd>
+          </div>
+          <div class="meta-item">
+            <dt>{{ t('book.publicationDate') }}：</dt>
+            <dd>{{ book.publicationDate || t('book.unknownDate') }}</dd>
+          </div>
+          <div class="meta-item">
             <dt>{{ t("uiV02.copy.语言：") }}</dt>
-            <dd>{{ book.language }}</dd>
+            <dd>{{ book.language || t('uiV02.languageUnknown') }}</dd>
+          </div>
+          <div v-if="book.sourceRef" class="meta-item full-width">
+            <dt>{{ t('book.sourcePath') }}：</dt>
+            <dd>
+              <code>{{ book.sourceRef.relativePath }}</code>
+              <span v-if="book.fileAvailability === 'missing'" class="source-status-badge missing"> · {{ t('book.sourceMissing') }}</span>
+              <span v-else-if="book.fileAvailability === 'permission-denied'" class="source-status-badge denied"> · {{ t('book.sourceDenied') }}</span>
+            </dd>
           </div>
           <div v-if="book.readingSeconds && book.readingSeconds >= 60" class="meta-item">
             <dt>{{ t("uiV02.copy.累计时长：") }}</dt>
@@ -305,10 +336,13 @@ const activeTab = ref<'overview' | 'toc' | 'records'>('overview')
             <dt>{{ t("uiV02.copy.文件名：") }}</dt>
             <dd class="text-truncate">{{ book.fileName }}</dd>
           </div>
-          <div v-if="book.tags.length" class="meta-item full-width">
+          <div class="meta-item full-width">
             <dt>{{ t("uiV02.copy.标签：") }}</dt>
             <dd class="tags-list">
-              <span v-for="tag in book.tags" :key="tag" class="tag">{{ tag }}</span>
+              <template v-if="book.tags?.length">
+                <span v-for="tag in book.tags" :key="tag" class="tag">{{ tag }}</span>
+              </template>
+              <span v-else class="tag-placeholder">{{ t('book.noTags') }}</span>
             </dd>
           </div>
           <div v-if="book.description" class="meta-item full-width">
@@ -618,6 +652,36 @@ const activeTab = ref<'overview' | 'toc' | 'records'>('overview')
   margin: 0;
   font-size: 13px;
   color: var(--brand);
+}
+
+.meta-sep {
+  opacity: 0.5;
+  margin: 0 4px;
+}
+.source-managed-notice {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 8px 14px;
+  background: var(--surface-2);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  font-size: 13px;
+  color: var(--text-2);
+}
+.source-status-badge {
+  font-size: 12px;
+  font-weight: 500;
+}
+.source-status-badge.missing {
+  color: var(--danger);
+}
+.source-status-badge.denied {
+  color: var(--warning);
+}
+.tag-placeholder {
+  color: var(--text-3);
+  font-style: italic;
 }
 
 @media (max-width: 640px) {

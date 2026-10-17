@@ -7,6 +7,16 @@ export type BookFormat =
 
 export type ReadingStatus = 'unread' | 'reading' | 'finished' | 'paused'
 
+export interface BookSourceRef {
+  folderId: string
+  documentId: string
+  relativePath: string
+  /** Provider size/mtime hint, not a content hash or authorization token. */
+  version: string
+}
+
+export type FileAvailability = 'available' | 'missing' | 'permission-denied'
+
 export interface BookMeta {
   id: string
   title: string
@@ -15,6 +25,11 @@ export interface BookMeta {
   fileName: string
   description?: string
   language?: string
+  publisher?: string
+  /** Embedded value, preserving year/month/day precision; never inferred from filenames. */
+  publicationDate?: string
+  sourceRef?: BookSourceRef
+  fileAvailability?: FileAvailability
   tags: string[]
   addedAt: number
   lastReadAt?: number
@@ -122,6 +137,8 @@ export interface LibraryStorage {
   listBooks(): Promise<BookMeta[]>
   getBook(id: string): Promise<BookMeta | undefined>
   addBook(meta: NewBookMeta, file: Blob, cover?: Blob): Promise<string>
+  /** Registers a read-only source document without copying its contents. */
+  addReferencedBook(meta: NewBookMeta & { sourceRef: BookSourceRef }, cover?: Blob): Promise<string>
   updateBook(id: string, patch: Partial<Omit<BookMeta, 'id'>>): Promise<void>
   deleteBook(id: string): Promise<void>
   getBookFile(id: string): Promise<Blob>

@@ -35,13 +35,6 @@ export function isTextLike(format: BookFormat): boolean {
   return ['txt', 'md'].includes(format)
 }
 
-/** 可转换为 EPUB 的流式格式; PDF 为固定版式, 不转换。 */
-export const EPUB_CONVERTIBLE: readonly BookFormat[] = ['mobi', 'txt', 'md']
-
-export function canConvertToEpub(format: BookFormat | null | undefined): boolean {
-  return !!format && EPUB_CONVERTIBLE.includes(format)
-}
-
 export const FORMAT_LABELS: Record<BookFormat, string> = {
   epub: 'EPUB',
   mobi: 'MOBI',

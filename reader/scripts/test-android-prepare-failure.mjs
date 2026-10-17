@@ -12,13 +12,16 @@ const activity = `${generated}/app/src/main/java/io/pagewise/reader/MainActivity
 const strings = `${generated}/app/src/main/res/values/strings.xml`
 const manifest = `${generated}/app/src/main/AndroidManifest.xml`
 const template = 'src-tauri/android/MainActivity.kt'
+const buildBridge = `${generated}/buildSrc/src/main/java/io/pagewise/reader/kotlin/BuildTask.kt`
+const legacyBridge = 'val executable = """npm""";\nval args = listOf("run", "--", "tauri", "android", "android-studio-script");\n'
 const permission = '<uses-permission android:name="android.permission.REQUEST_INSTALL_PACKAGES" />'
 const xml = `<manifest xmlns:android="http://schemas.android.com/apk/res/android"><uses-permission android:name="android.permission.INTERNET" />${permission}<application><provider android:name="androidx.core.content.FileProvider" android:authorities="\${applicationId}.fileprovider" /></application></manifest>`
 
 function fixture() {
   const base = mkdtempSync(join(tmpdir(), 'pagewise-android-prepare-'))
   const put = (path, value) => { mkdirSync(dirname(join(base, path)), { recursive: true }); writeFileSync(join(base, path), value) }
-  for (const path of ['src-tauri/tauri.conf.json', template]) put(path, readFileSync(join(root, path)))
+  for (const path of ['package.json', 'src-tauri/tauri.conf.json', template]) put(path, readFileSync(join(root, path)))
+  put(buildBridge, legacyBridge)
   cpSync(join(root, 'src-tauri/icons/android'), join(base, 'src-tauri/icons/android'), { recursive: true })
   put(activity, 'old activity\r\n')
   put(strings, '<resources><string name="app_name">old</string><string name="main_activity_title">old</string></resources>')
@@ -43,6 +46,10 @@ for (const [name, path, value] of [
   ['truncated template', template, 'package io.pagewise.reader\n'],
   ['missing FileProvider', manifest, '<manifest><application /></manifest>'],
   ['malformed manifest', manifest, xml.replace('</application>', '')],
+  ['unsupported native build bridge', buildBridge, 'val args = listOf("run", "unknown");'],
+  ['unexpected trailing bridge statement', buildBridge, legacyBridge.replace(');', '); unexpectedCall()')],
+  ['duplicate bridge argument declarations', buildBridge, legacyBridge + legacyBridge],
+  ['wrong Android npm entry', 'package.json', JSON.stringify({ scripts: { android: 'unsupported-cli' } })],
 ]) {
   test(`${name}: no generated file changes`, () => {
     const { base, put, cleanup } = fixture()
@@ -91,6 +98,12 @@ test('successful prepare retains branding, FileProvider, INTERNET and unmanaged 
     const previousPaths = readFileSync(filePaths)
     prepareAndroidProject(base)
     assert.deepEqual(readFileSync(join(base, activity)), readFileSync(join(root, template)))
+    const bridge = readFileSync(join(base, buildBridge), 'utf8')
+    assert.match(bridge, /listOf\("run", "--", "android", "android-studio-script"\)/)
+    assert.doesNotMatch(bridge, /"tauri", "android"/)
+    const pkg = JSON.parse(readFileSync(join(base, 'package.json'), 'utf8'))
+    assert.equal(pkg.scripts.android, 'tauri android')
+    assert.equal(pkg.scripts.tauri, undefined, 'do not revive the desktop-capable generic entry')
     assert.match(readFileSync(join(base, strings), 'utf8'), />知页</)
     assert.equal(readFileSync(join(base, manifest), 'utf8'), xml.replace(permission, ''))
     assert.deepEqual(readFileSync(filePaths), previousPaths)
@@ -104,6 +117,25 @@ test('successful prepare retains branding, FileProvider, INTERNET and unmanaged 
     assert.equal(existsSync(join(root, 'scripts/patch-android-project.mjs')), false)
   } finally { cleanup() }
 })
+
+for (const [name, bridge] of [
+  ['semicolon-free legacy bridge', legacyBridge.replaceAll(';', '')],
+  ['semicolon-free prepared bridge', legacyBridge.replaceAll(';', '').replace('"tauri", "android"', '"android"')],
+]) {
+  test(`${name}: supports normal Kotlin formatting without reviving generic npm entry`, () => {
+    const { base, put, cleanup } = fixture()
+    try {
+      put(buildBridge, bridge)
+      prepareAndroidProject(base)
+      const output = readFileSync(join(base, buildBridge), 'utf8')
+      assert.match(output, /listOf\("run", "--", "android", "android-studio-script"\)/)
+      assert.doesNotMatch(output, /"tauri", "android"/)
+      const before = snapshot(join(base, generated))
+      prepareAndroidProject(base)
+      assert.deepEqual(snapshot(join(base, generated)), before)
+    } finally { cleanup() }
+  })
+}
 
 test('native allowlist is exact and Android bridge excludes only updater functionality', () => {
   const lib = readFileSync(join(root, 'src-tauri/src/lib.rs'), 'utf8')

@@ -1,6 +1,7 @@
 <script setup lang="ts">
 import { AUTO_SPEED_LEVELS, AUTO_SPEED_STEPS, speedPosition, secondsAtPosition } from '../services/autoReadSpeed'
 import LevelSlider from '../components/LevelSlider.vue'
+import AppIcon from '../components/AppIcon.vue'
 import { TTS_RATE_MAX, TTS_RATE_MIN, TTS_RATE_STOPS, rateText } from '../services/ttsRate'
 import { pingUsage } from '../services/usageStats'
 import { computed, nextTick, onBeforeUnmount, onMounted, ref, watch } from 'vue'
@@ -12,7 +13,6 @@ import {
   restorePlaceholders,
   type PaperParagraph,
 } from '../services/paperText'
-import { translatePage, cachedTranslation } from '../services/paperTranslate'
 import { aiConfigured, chatStream, explainPrompt, readerSystemPrompt, type AiMessage } from '../services/ai'
 import {
   PdfiumDoc,
@@ -72,7 +72,6 @@ const currentPage = ref(1)
 const pageInput = ref('1')
 const scroller = ref<HTMLElement>()
 const pagedBox = ref<HTMLElement>()
-const rightPane = ref<HTMLElement>()
 const thumbnailScroller = ref<HTMLElement>()
 const pdfOpenInput = ref<HTMLInputElement>()
 let openingPdf = false
@@ -113,11 +112,8 @@ const { pingAuto: pingReadingAuto } = useReadingTimer(bookId)
 watch(currentPage, () => pingReadingAuto())
 
 const aiReady = computed(() => aiConfigured())
-/** 归属: 论文/藏书 (藏书 PDF 也走本阅读器, 返回目标随归属) */
-// kind 缺省是历史藏书记录；只有显式标记为 paper 才进入论文功能集。
-const isPaper = computed(() => meta.value?.kind === 'paper')
-const backTarget = computed(() => (isPaper.value ? '/papers' : '/library'))
-const backLabel = computed(() => (isPaper.value ? t('paper.backToPapers') : t('reader.backToLibrary')))
+const backTarget = '/library'
+const backLabel = computed(() => t('reader.backToLibrary'))
 /** 幻灯片放映 (整页翻页 + 全屏); 放映时不受竖屏单页滚动约束 */
 const presentationMode = ref(false)
 /**
@@ -152,7 +148,7 @@ const DPR = () => Math.max(window.devicePixelRatio || 1, 1)
 /** 仅作为浏览器画布安全阈值；可覆盖桌面端 200% + 3x DPR 的常见页面。 */
 const MAX_DIM = 8192
 
-/** 页面尺寸；保留 baseDims 供译文镜像等只处理当前标准页的旧路径使用。 */
+/** 未取得页面尺寸时使用的标准页回退。 */
 const baseDims = ref({ w: 612, h: 792 })
 const pageDims = ref<Array<{ w: number; h: number }>>([])
 /** 当前实际渲染缩放 */
@@ -687,7 +683,7 @@ const primaryShortcutLabel = isMacPlatform ? '⌘' : 'Ctrl'
 const shortcutsOpen = ref(false)
 const shortcutMenu = ref<HTMLElement>()
 const shortcutRows = computed(() => getPdfShortcutHelpRows({
-  isPaper: isPaper.value,
+  isPaper: false,
   pdfLayout: pdfLayout.value,
 }, isMacPlatform).map(row => ({ ...row, label: t(row.labelKey) })))
 
@@ -821,9 +817,8 @@ async function onPdfOpenPicked(event: Event) {
   if (openingPdf) return
   openingPdf = true
   const initiatingRoute = router.currentRoute.value.fullPath
-  const collectionRoute = backTarget.value
+  const collectionRoute = backTarget
   const collectionFullPath = router.resolve(collectionRoute).fullPath
-  const kind = isPaper.value ? 'paper' : 'book'
   try {
     let probe: PdfiumDoc | null = null
     try {
@@ -834,7 +829,7 @@ async function onPdfOpenPicked(event: Event) {
     if (!isCurrentReaderRequest(initiatingRoute)) return
 
     const result = await importFile(file, '本地导入', {
-      kind,
+      kind: 'book',
     })
     if (!isCurrentReaderRequest(initiatingRoute)) return
     if (!result.ok || !result.bookId) throw new Error(result.error || t('reader.openPdfFailed'))
@@ -842,7 +837,7 @@ async function onPdfOpenPicked(event: Event) {
     if (!isCurrentReaderRequest(initiatingRoute)) return
     await router.replace(collectionRoute)
     if (router.currentRoute.value.fullPath !== collectionFullPath) return
-    await router.push(`/read-paper/${result.bookId}`)
+    await router.push(`/read-pdf/${result.bookId}`)
   } catch (error: any) {
     if (isCurrentReaderRequest(initiatingRoute)) {
       toast(t('reader.openPdfFailedWithMessage', { msg: error?.message ?? error }), 'error', 5000)
@@ -2133,12 +2128,7 @@ async function copySelection() {
   if (shouldClearCopiedSelection(selection.value, copiedSelection)) selection.value = null
 }
 
-/* ---- 划词 AI 翻译 (点击才触发, 流式输出, 可关闭即取消) ---- */
-
-const SEL_PROMPT =
-  '你是专业的学术论文翻译。把用户给出的论文片段翻译成流畅准确的简体中文: ' +
-  '术语首次出现保留英文原文于括号内, 公式、变量名、引用编号原样保留。只输出译文, 不要任何解释。'
-
+/* ---- 划词 AI 解读 (点击才触发, 流式输出, 可关闭即取消) ---- */
 const selTr = ref<{ src: string; out: string; busy: boolean } | null>(null)
 const selTrPos = ref({ x: 0, y: 0 })
 let selTrSession = 0
@@ -2147,7 +2137,7 @@ async function translateSelection() {
   const s = selection.value
   if (!s) return
   if (!aiReady.value) {
-    toast(t('paper.setupHint'), 'error', 5000)
+    toast(t('ai.setupHint'), 'error', 5000)
     router.push('/settings')
     return
   }
@@ -2157,26 +2147,20 @@ async function translateSelection() {
   selTr.value = { src: s.text, out: '', busy: true }
   const session = ++selTrSession
   try {
-    // 论文划词 → 学术翻译; 藏书划词 → AI 解读 (中文书场景)
     const lang = settings.language === 'en' ? 'en' : 'zh'
-    const messages: AiMessage[] = isPaper.value
-      ? [
-          { role: 'system', content: SEL_PROMPT },
-          { role: 'user', content: s.text },
-        ]
-      : [
-          {
-            role: 'system',
-            content: readerSystemPrompt({ title: meta.value?.title, author: meta.value?.author }, '', lang),
-          },
-          { role: 'user', content: explainPrompt(s.text, lang) },
-        ]
+    const messages: AiMessage[] = [
+      {
+        role: 'system',
+        content: readerSystemPrompt({ title: meta.value?.title, author: meta.value?.author }, '', lang),
+      },
+      { role: 'user', content: explainPrompt(s.text, lang) },
+    ]
     for await (const delta of chatStream(messages)) {
       if (session !== selTrSession) return
       selTr.value.out += delta
     }
   } catch (e: any) {
-    if (session === selTrSession) toast(`${t('paper.translateFailed')}: ${e?.message ?? e}`, 'error', 6000)
+    if (session === selTrSession) toast(`${t('ai.requestFailed')}: ${e?.message ?? e}`, 'error', 6000)
   } finally {
     if (session === selTrSession && selTr.value) selTr.value.busy = false
   }
@@ -2197,205 +2181,18 @@ async function copySelTr() {
   }
 }
 
-/* ================= 整页翻译面板: 版式对照连续滚动 (独立于左栏) ================= */
-
-interface MirPageData {
-  paras: PaperParagraph[]
-  trs: string[]
-  err?: string
-}
-
-/** 右侧视图: 版式对照 (默认) / 段落列表 */
-const VIEW_KEY = 'lightread-paper-view'
-const viewMode = ref<'mirror' | 'cards'>(localStorage.getItem(VIEW_KEY) === 'cards' ? 'cards' : 'mirror')
-const effectiveMode = computed(() => viewMode.value)
-
-/** 每页的段落与译文 (提取/翻译均按需触发, 译文走 localStorage 缓存) */
-const mirData = ref<Record<number, MirPageData>>({})
-/** 对照视图当前页 (独立于左栏页码) */
-const mirCur = ref(1)
-/** 正在翻译的页码, 0 为空闲 */
-const translatingPage = ref(0)
-const expanded = ref<Set<number>>(new Set())
-/** 已切回原文的块: "页:块id" */
-const showOrig = ref<Set<string>>(new Set())
-let translateSession = 0
-let mirSettleTimer: ReturnType<typeof setTimeout> | undefined
-let mirScrollScheduled = false
-
-const mirScroller = ref<HTMLElement>()
-const mirScale = ref(1)
-const MIR_PAD = 12
-const MIR_GAP = 12
-const mirRendered = new Map<number, number>()
-const mirRendering = new Set<number>()
-
-const mirHolderW = computed(() => baseDims.value.w * mirScale.value)
-const mirHolderH = computed(() => baseDims.value.h * mirScale.value)
-const mirHolderStyle = computed(() => ({ width: `${mirHolderW.value}px`, height: `${mirHolderH.value}px` }))
-
-const curMir = computed(() => mirData.value[mirCur.value])
-
+const paragraphCache = new Map<number, PaperParagraph[]>()
 const origText = (p: PaperParagraph) => restorePlaceholders(p.text, p.placeholders)
-const trText = (d: MirPageData, id: number) => restorePlaceholders(d.trs[id] ?? '', d.paras[id]?.placeholders)
 
-/**
- * 版式求解 (先算好每个块的最终几何再填充, 避免遮罩互相覆盖):
- * 按列分组 → 列内按纵向排序 → 与下一块重叠时裁掉本块底部。按 (段落数组, 缩放) 缓存。
- */
-interface BlockRect {
-  left: number
-  top: number
-  width: number
-  height: number
-  base: number
-}
-const layoutCache = new WeakMap<PaperParagraph[], { scale: number; map: Map<number, BlockRect> }>()
-
-function solveLayout(paras: PaperParagraph[], s: number): Map<number, BlockRect> {
-  const hit = layoutCache.get(paras)
-  if (hit && Math.abs(hit.scale - s) < 1e-4) return hit.map
-  const pageH = baseDims.value.h
-  const pageW = baseDims.value.w * s
-  const rects = paras
-    .filter(p => p.bbox)
-    .map(p => ({
-      id: p.id,
-      left: p.bbox!.x * s,
-      top: (pageH - p.bbox!.y - p.bbox!.h) * s,
-      width: p.bbox!.w * s,
-      height: p.bbox!.h * s,
-      base: Math.max(8, Math.min(26, (p.fontSize ?? 10) * s)),
-    }))
-  const groups: Record<string, typeof rects> = { L: [], R: [], full: [] }
-  for (const r of rects) {
-    const key = r.width > pageW * 0.6 ? 'full' : r.left + r.width / 2 < pageW / 2 ? 'L' : 'R'
-    groups[key].push(r)
-  }
-  for (const key of ['L', 'R', 'full']) {
-    const arr = groups[key].sort((a, b) => a.top - b.top)
-    for (let i = 0; i < arr.length - 1; i++) {
-      const cur = arr[i]
-      const next = arr[i + 1]
-      if (cur.top + cur.height > next.top - 2) cur.height = Math.max(10, next.top - 2 - cur.top)
-    }
-  }
-  const map = new Map(rects.map(r => [r.id, r]))
-  layoutCache.set(paras, { scale: s, map })
-  return map
-}
-
-/** 按容量预计算字号: 中文按 1 字宽、拉丁按 0.52 估算, 使文本恰好放进框 */
-function fitFont(text: string, w: number, h: number, base: number) {
-  let eff = 0
-  for (const ch of text) eff += ch.charCodeAt(0) > 0x2e00 ? 1 : 0.52
-  eff = Math.max(eff, 1)
-  let f = Math.min(base, Math.sqrt((w * h) / (1.36 * eff)))
-  for (let i = 0; i < 10; i++) {
-    const cap = Math.max(1, Math.floor(w / f)) * Math.max(1, Math.floor(h / (f * 1.34)))
-    if (cap >= eff * 1.04) break
-    f *= 0.95
-  }
-  return Math.max(7, f)
-}
-
-interface MirBlock {
-  id: number
-  text: string
-  orig: boolean
-  style: Record<string, string>
-}
-
-/** 某页已译几何段落 → 定位好的对照块 */
-function blocksOf(n: number): MirBlock[] {
-  const d = mirData.value[n]
-  if (!d || !d.trs.some(Boolean)) return []
-  const map = solveLayout(d.paras, mirScale.value)
-  const out: MirBlock[] = []
-  for (const p of d.paras) {
-    if (!p.bbox) continue
-    const tr = trText(d, p.id)
-    if (!tr) continue
-    const r = map.get(p.id)
-    if (!r) continue
-    const orig = showOrig.value.has(`${n}:${p.id}`)
-    const text = orig ? origText(p) : tr
-    out.push({
-      id: p.id,
-      text,
-      orig,
-      style: {
-        left: `${r.left}px`,
-        top: `${r.top}px`,
-        width: `${r.width}px`,
-        height: `${r.height}px`,
-        fontSize: `${fitFont(text, r.width, r.height, r.base)}px`,
-      },
-    })
-  }
-  return out
-}
-
-/** 兜底微调: 预计算字号后仍溢出的个别块 (换行低效) 再小步递减 */
-let fitQueued = false
-function queueFit() {
-  if (fitQueued) return
-  fitQueued = true
-  nextTick(() =>
-    requestAnimationFrame(() => {
-      fitQueued = false
-      const host = mirScroller.value
-      if (!host) return
-      for (const el of Array.from(host.querySelectorAll<HTMLElement>('.pm-block'))) {
-        let size = parseFloat(el.style.fontSize || '12')
-        let guard = 6
-        while (guard-- > 0 && size > 7 && el.scrollHeight > el.clientHeight + 2) {
-          size *= 0.95
-          el.style.fontSize = `${size}px`
-        }
-      }
-    }),
-  )
-}
-watch([mirData, showOrig], queueFit)
-
-function setMode(mode: 'mirror' | 'cards') {
-  viewMode.value = mode
-  localStorage.setItem(VIEW_KEY, mode)
-  if (mode === 'mirror') nextTick(() => mirLayoutNow())
-}
-
-function toggleBlock(n: number, id: number) {
-  // 划词选择时不触发切换
-  if (window.getSelection()?.toString()) return
-  const key = `${n}:${id}`
-  const next = new Set(showOrig.value)
-  if (next.has(key)) next.delete(key)
-  else next.add(key)
-  showOrig.value = next
-}
-
-/** 段落提取 (按页缓存), 顺带装入已缓存的译文 */
-async function ensureParas(page: number): Promise<MirPageData> {
-  const cur = mirData.value[page]
-  if (cur) return cur
-  const d: MirPageData = { paras: [], trs: [] }
-  try {
-    // 段落几何提取: PDFium 字符流合成 runs → 既有聚类管线
-    const dims = dimensionsOf(page)
-    const items = pdm ? textRuns(pdm.text(page - 1), dims.h) : []
-    d.paras = extractParagraphsFromItems(items, dims.w)
-    // 严格算法无结果时宽松兜底: 只要页面有文字就切得出块
-    if (!d.paras.length) d.paras = extractParagraphsLooseFromItems(items)
-  } catch (e: any) {
-    console.error('paragraph extraction failed:', e)
-    d.err = String(e?.message ?? e).slice(0, 160)
-  }
-  d.trs = new Array(d.paras.length).fill('')
-  const cached = cachedTranslation(bookId, page, d.paras.length)
-  if (cached) d.trs = cached
-  mirData.value = { ...mirData.value, [page]: d }
-  return d
+async function ensureParas(page: number): Promise<PaperParagraph[]> {
+  const cached = paragraphCache.get(page)
+  if (cached) return cached
+  const dims = dimensionsOf(page)
+  const items = pdm ? textRuns(pdm.text(page - 1), dims.h) : []
+  let paras = extractParagraphsFromItems(items, dims.w)
+  if (!paras.length) paras = extractParagraphsLooseFromItems(items)
+  paragraphCache.set(page, paras)
+  return paras
 }
 
 /* ================= PDF 流式阅读：文本层重排为单栏正文 ================= */
@@ -2463,9 +2260,9 @@ async function buildReflow() {
   const sizes: number[] = []
   try {
     for (let page = 1; page <= pageCount.value; page++) {
-      const data = await ensureParas(page)
+      const paragraphs = await ensureParas(page)
       if (session !== reflowSession) return
-      const paras = data.paras
+      const paras = paragraphs
         .map(p => ({
           id: p.id,
           text: origText(p),
@@ -2580,199 +2377,6 @@ async function switchPdfLayout(next: 'original' | 'reflow') {
 async function openOriginalPage(page: number) {
   currentPage.value = page
   await switchPdfLayout('original')
-}
-
-/* ---- 对照视图: 连续滚动 (虚拟化渲染 + 停稳翻译) ---- */
-
-function mirHolderOf(n: number) {
-  return mirScroller.value?.querySelector<HTMLElement>(`[data-mp="${n}"]`) ?? null
-}
-
-async function renderMirPage(n: number) {
-  if (!pdm || n < 1 || n > pageCount.value || mirRendering.has(n)) return
-  const holder = mirHolderOf(n)
-  if (!holder) return
-  const s = mirScale.value
-  if (mirRendered.get(n) === s) return
-  mirRendering.add(n)
-  try {
-    const canvas = await renderBitmapCanvas(n, s)
-    if (s !== mirScale.value) return
-    holder.querySelector('.mp-canvas')?.replaceChildren(canvas)
-    mirRendered.set(n, s)
-  } finally {
-    mirRendering.delete(n)
-  }
-}
-
-function mirEvict(center: number) {
-  for (const n of [...mirRendered.keys()]) {
-    if (Math.abs(n - center) > KEEP) {
-      mirHolderOf(n)?.querySelector('.mp-canvas')?.replaceChildren()
-      mirRendered.delete(n)
-    }
-  }
-}
-
-function mirPageAtCenter(): number {
-  const el = mirScroller.value
-  if (!el || !mirHolderH.value) return 1
-  const center = el.scrollTop + el.clientHeight / 2 - MIR_PAD
-  const idx = Math.floor(center / (mirHolderH.value + MIR_GAP))
-  return Math.min(Math.max(idx + 1, 1), pageCount.value)
-}
-
-function updateMirViewport() {
-  const cur = mirPageAtCenter()
-  if (cur !== mirCur.value) mirCur.value = cur
-  for (let i = cur - 1; i <= cur + 2; i++) renderMirPage(i)
-  mirEvict(cur)
-}
-
-function onMirScroll() {
-  if (mirScrollScheduled) return
-  mirScrollScheduled = true
-  requestAnimationFrame(() => {
-    mirScrollScheduled = false
-    updateMirViewport()
-  })
-}
-
-watch(mirCur, () => {
-  expanded.value = new Set()
-  clearTimeout(mirSettleTimer)
-  mirSettleTimer = setTimeout(mirSettled, 600)
-})
-
-/** 对照视图滚动停稳: 提取当前页段落并翻译 (缓存优先; 面板打开即视为翻译授权) */
-async function mirSettled() {
-  if (!translateOpen.value) return
-  const p = mirCur.value
-  await ensureParas(p)
-  queueFit()
-  if (aiReady.value) runTranslateFor(p)
-}
-
-function mirGoto(n: number) {
-  const clamped = Math.min(Math.max(1, n || 1), pageCount.value)
-  mirScroller.value?.scrollTo({ top: Math.max(0, MIR_PAD + (clamped - 1) * (mirHolderH.value + MIR_GAP)) })
-}
-
-/** 重算对照缩放 (适宽), 保持当前页锚点 */
-function mirLayoutNow() {
-  const el = mirScroller.value
-  if (!el) return
-  const next = Math.min(Math.max((el.clientWidth - 40) / baseDims.value.w, 0.2), 2.5)
-  const anchor = mirCur.value
-  if (Math.abs(next - mirScale.value) > 1e-4) {
-    mirScale.value = next
-    mirRendered.clear()
-  }
-  nextTick(() => {
-    mirGoto(anchor)
-    updateMirViewport()
-    queueFit()
-  })
-}
-
-/** 翻译栏点击才展开，打开论文默认纯 PDF 阅读。 */
-const rightTab = ref<'translate' | null>(null)
-const translateOpen = computed(() => rightTab.value === 'translate')
-
-/* ---- 分栏拖拽: 右栏宽度可调, 持久化 ---- */
-const RIGHTW_KEY = 'lightread-paper-rightw'
-const rightW = ref(parseFloat(localStorage.getItem(RIGHTW_KEY) ?? '') || 0)
-const rightPaneStyle = computed(() =>
-  rightW.value > 0 ? { flex: `0 0 ${rightW.value}px` } : { flex: '0 0 42%' },
-)
-
-function startSplit(e: PointerEvent) {
-  const split = e.currentTarget as HTMLElement
-  const container = split.parentElement!
-  split.setPointerCapture(e.pointerId)
-  const move = (ev: PointerEvent) => {
-    const rect = container.getBoundingClientRect()
-    rightW.value = Math.min(Math.max(rect.right - ev.clientX, 300), rect.width * 0.75)
-  }
-  const up = () => {
-    split.removeEventListener('pointermove', move)
-    split.removeEventListener('pointerup', up)
-    localStorage.setItem(RIGHTW_KEY, String(Math.round(rightW.value)))
-  }
-  split.addEventListener('pointermove', move)
-  split.addEventListener('pointerup', up)
-}
-
-async function openRight(tab: 'translate') {
-  if (rightTab.value === tab) return closeRight()
-  const wasOpen = rightTab.value !== null
-  cancelTranslate()
-  rightTab.value = tab
-  await nextTick()
-  if (!wasOpen) {
-    // 面板挂载后左栏变窄, 重排原文页
-    await relayout(true)
-    if (rightPane.value) resizeObserver?.observe(rightPane.value)
-  }
-  if (tab === 'translate') {
-    // 对照视图: 独立连续滚动, 打开时跳到左栏当前页
-    mirScroller.value?.addEventListener('scroll', onMirScroll, { passive: true })
-    if (mirScroller.value) resizeObserver?.observe(mirScroller.value)
-    mirCur.value = currentPage.value
-    mirLayoutNow()
-    nextTick(() => {
-      mirGoto(currentPage.value)
-      updateMirViewport()
-      mirSettled()
-    })
-  }
-}
-
-function closeRight() {
-  cancelTranslate()
-  rightTab.value = null
-  nextTick(() => void relayout(true))
-}
-
-function cancelTranslate() {
-  translateSession++
-  translatingPage.value = 0
-}
-
-/** 翻译某页 (缓存/已译则跳过; force 重译) */
-async function runTranslateFor(page: number, force = false) {
-  const d = await ensureParas(page)
-  if (!d.paras.length) return
-  if (!force && d.trs.some(Boolean)) return
-  if (!aiReady.value) return
-  const session = ++translateSession
-  translatingPage.value = page
-  try {
-    await translatePage(
-      bookId,
-      page,
-      d.paras.map(p => p.text),
-      snapshot => {
-        if (session === translateSession) {
-          mirData.value = { ...mirData.value, [page]: { ...d, trs: snapshot } }
-        }
-      },
-      () => session !== translateSession,
-    )
-  } catch (e: any) {
-    if (session === translateSession) {
-      toast(`${t('paper.translateFailed')}: ${e?.message ?? e}`, 'error', 6000)
-    }
-  } finally {
-    if (session === translateSession) translatingPage.value = 0
-  }
-}
-
-function toggleOriginal(id: number) {
-  const next = new Set(expanded.value)
-  if (next.has(id)) next.delete(id)
-  else next.add(id)
-  expanded.value = next
 }
 
 /* ================= 读书功能集 (藏书 PDF): 听书 / 自动翻页 ================= */
@@ -3183,7 +2787,7 @@ function runPdfShortcutCommand(command: PdfReaderShortcutCommandId) {
 function handleKeydown(e: KeyboardEvent) {
   dispatchPdfReaderShortcut(e, isMacPlatform, {
     state: {
-      isPaper: isPaper.value,
+      isPaper: false,
       pdfLayout: pdfLayout.value,
     },
     isEditableTarget: () => isEditableShortcutTarget(e.target),
@@ -3242,8 +2846,6 @@ onMounted(async () => {
     pageCount.value = pdm.pages.length
     pageDims.value = pdm.pages.map(page => ({ w: page.w, h: page.h }))
     baseDims.value = pageDims.value[0] ?? { w: 612, h: 792 }
-    // 连续阅读默认适宽；论文沿用同一阅读模型。
-    if (restoredZoom == null && isPaper.value) zoom.value = 'fit-width'
     const saved = parseInt(meta.value.location ?? '1', 10)
     currentPage.value = Number.isFinite(saved)
       ? Math.min(Math.max(saved, 1), pageCount.value)
@@ -3279,7 +2881,6 @@ onMounted(async () => {
             updateViewport()
           }
         }
-        if (translateOpen.value) mirLayoutNow()
       }, 200)
     })
     observeActiveViewport()
@@ -3299,11 +2900,9 @@ onBeforeUnmount(() => {
   document.removeEventListener('webkitfullscreenchange', onFullscreenChange as EventListener)
   fullscreenWindowUnlisten?.()
   fullscreenWindowUnlisten = undefined
-  translateSession++
   selTrSession++
   stopTTS()
   stopAutoRead()
-  clearTimeout(mirSettleTimer)
   resizeObserver?.disconnect()
   listenedScroller?.removeEventListener('scroll', onScroll)
   listenedScroller = undefined
@@ -3350,7 +2949,7 @@ onBeforeUnmount(() => {
       <div class="paper-bar">
         <div class="paper-document">
           <button class="icon-btn document-back" :title="backLabel" @click="router.push(backTarget)">
-            <svg viewBox="0 0 24 24" width="18" height="18"><path fill="currentColor" d="M14.7 5.3a1 1 0 0 1 0 1.4L9.42 12l5.3 5.3a1 1 0 0 1-1.42 1.4l-6-6a1 1 0 0 1 0-1.4l6-6a1 1 0 0 1 1.42 0z"/></svg>
+            <AppIcon name="back" /><span>{{ backLabel }}</span>
           </button>
           <div class="paper-title">
             <strong>{{ meta?.title }}</strong>
@@ -3359,16 +2958,6 @@ onBeforeUnmount(() => {
         </div>
 
         <div class="paper-context-actions">
-          <template v-if="isPaper">
-            <button
-              class="btn btn-sm context-action"
-              :class="translateOpen ? 'btn-active' : 'btn-primary'"
-              :disabled="!pageCount"
-              @click="openRight('translate')"
-            >
-              {{ t('paper.openTranslate') }}
-            </button>
-          </template>
           <button class="btn btn-sm change-document" @click="router.push(backTarget)">
             {{ t('reader.changeDocument') }}
           </button>
@@ -3384,7 +2973,7 @@ onBeforeUnmount(() => {
             :aria-pressed="tocOpen"
             @click="toggleDrawerTab('toc')"
           >
-            <svg viewBox="0 0 24 24" width="18" height="18"><path fill="currentColor" d="M4 6a1 1 0 0 1 1-1h14a1 1 0 1 1 0 2H5a1 1 0 0 1-1-1zm0 6a1 1 0 0 1 1-1h14a1 1 0 1 1 0 2H5a1 1 0 0 1-1-1zm1 5a1 1 0 1 0 0 2h9a1 1 0 1 0 0-2H5z"/></svg>
+            <AppIcon name="toc" /><span>{{ t('reader.toc') }}</span>
           </button>
           <button
             class="icon-btn"
@@ -3393,9 +2982,7 @@ onBeforeUnmount(() => {
             :aria-pressed="thumbnailOpen"
             @click="toggleDrawerTab('thumbnails')"
           >
-            <svg viewBox="0 0 24 24" width="18" height="18" aria-hidden="true">
-              <path fill="currentColor" d="M4.75 3.5h5.5c.69 0 1.25.56 1.25 1.25v6.5c0 .69-.56 1.25-1.25 1.25h-5.5c-.69 0-1.25-.56-1.25-1.25v-6.5c0-.69.56-1.25 1.25-1.25zm0 10h5.5c.69 0 1.25.56 1.25 1.25v4.5c0 .69-.56 1.25-1.25 1.25h-5.5c-.69 0-1.25-.56-1.25-1.25v-4.5c0-.69.56-1.25 1.25-1.25zm9-10h5.5c.69 0 1.25.56 1.25 1.25v4.5c0 .69-.56 1.25-1.25 1.25h-5.5c-.69 0-1.25-.56-1.25-1.25v-4.5c0-.69.56-1.25 1.25-1.25zm0 8h5.5c.69 0 1.25.56 1.25 1.25v6.5c0 .69-.56 1.25-1.25 1.25h-5.5c-.69 0-1.25-.56-1.25-1.25v-6.5c0-.69.56-1.25 1.25-1.25z"/>
-            </svg>
+            <AppIcon name="thumbnails" /><span>{{ t('reader.thumbnails') }}</span>
           </button>
           <button
             class="icon-btn"
@@ -3404,33 +2991,33 @@ onBeforeUnmount(() => {
             :aria-pressed="annoOpen"
             @click="toggleDrawerTab('annotations')"
           >
-            <svg viewBox="0 0 24 24" width="18" height="18"><path fill="currentColor" d="M15.6 3.6a2 2 0 0 1 2.8 0l2 2a2 2 0 0 1 0 2.8l-9.2 9.2a2 2 0 0 1-.9.5l-4 1a1 1 0 0 1-1.2-1.2l1-4a2 2 0 0 1 .5-.9l9-9.4zM14 7.4 7 14.6l-.5 2 2-.5 7-7.2L14 7.4zm2.4-2.4-1 1L17 7.6l1-1-1.6-1.6z"/></svg>
+            <AppIcon name="notes" /><span>{{ t('reader.highlightsTab') }}</span>
           </button>
         </div>
         <span class="toolbar-sep" />
 
         <div class="toolbar-group toolbar-page">
           <button class="icon-btn" :title="t('reader.prevPage')" :disabled="atFirstPage" @click="prevPage">
-            <svg viewBox="0 0 24 24" width="16" height="16"><path fill="currentColor" d="M14.7 5.3a1 1 0 0 1 0 1.4L9.42 12l5.3 5.3a1 1 0 0 1-1.42 1.4l-6-6a1 1 0 0 1 0-1.4l6-6a1 1 0 0 1 1.42 0z"/></svg>
+            <AppIcon name="back" /><span>{{ t('reader.prevPage') }}</span>
           </button>
           <span class="paper-pagenum">
             <input v-model="pageInput" class="input page-input" :aria-label="t('common.current')" @keyup.enter="jumpTo" @blur="jumpTo" />
             <span>/ {{ pageCount }}</span>
           </span>
           <button class="icon-btn" :title="t('reader.nextPage')" :disabled="atLastPage" @click="nextPage">
-            <svg viewBox="0 0 24 24" width="16" height="16"><path fill="currentColor" d="M9.3 5.3a1 1 0 0 1 1.4 0l6 6a1 1 0 0 1 0 1.4l-6 6a1 1 0 0 1-1.4-1.4l5.29-5.3-5.3-5.3a1 1 0 0 1 0-1.4z"/></svg>
+            <AppIcon name="next" /><span>{{ t('reader.nextPage') }}</span>
           </button>
         </div>
         <span class="toolbar-sep" />
 
         <div class="toolbar-group toolbar-zoom">
           <template v-if="pdfLayout === 'original'">
-            <button class="icon-btn" :title="`${t('reader.zoomOut')} (${primaryShortcutLabel} −)`" @click="zoomStep(-1)">−</button>
+            <button class="icon-btn" :title="`${t('reader.zoomOut')} (${primaryShortcutLabel} −)`" @click="zoomStep(-1)"><AppIcon name="zoomOut" /><span>{{ t('reader.zoomOut') }}</span></button>
             <button class="dock-zoom" @click="zoomMenu = !zoomMenu">
               {{ zoom === 'fit-page' ? t('reader.fitPage') : zoom === 'fit-width' ? t('reader.fitWidth') : zoomPercentLabel(zoom as number) }}
               <span class="dock-caret">⌄</span>
-            </button>
-            <button class="icon-btn" :title="`${t('reader.zoomIn')} (${primaryShortcutLabel} +)`" @click="zoomStep(1)">＋</button>
+          </button>
+            <button class="icon-btn" :title="`${t('reader.zoomIn')} (${primaryShortcutLabel} +)`" @click="zoomStep(1)"><AppIcon name="zoomIn" /><span>{{ t('reader.zoomIn') }}</span></button>
           </template>
           <button v-else class="dock-zoom" @click="typographyOpen = !typographyOpen">
             Aa · {{ settings.reader.fontSize }}
@@ -3478,7 +3065,7 @@ onBeforeUnmount(() => {
               :aria-pressed="spreadMode === 'single'"
               @click="setSpreadMode('single')"
             >
-              <svg viewBox="0 0 20 20" aria-hidden="true"><path d="M5.25 3.5h9.5v13h-9.5z" /></svg>
+              <AppIcon name="reading" /><span>{{ t('reader.singlePage') }}</span>
             </button>
             <button
               type="button"
@@ -3488,7 +3075,7 @@ onBeforeUnmount(() => {
               :aria-pressed="spreadMode === 'facing'"
               @click="setSpreadMode('facing')"
             >
-              <svg viewBox="0 0 20 20" aria-hidden="true"><path d="M2.75 4h6v12h-6zM11.25 4h6v12h-6z" /></svg>
+              <AppIcon name="library" /><span>{{ t('reader.facingPages') }}</span>
             </button>
             <button
               type="button"
@@ -3498,7 +3085,7 @@ onBeforeUnmount(() => {
               :aria-pressed="spreadMode === 'book'"
               @click="setSpreadMode('book')"
             >
-              <svg viewBox="0 0 20 20" aria-hidden="true"><path d="M2.5 4.5c2.8-.5 5.1.1 7.5 1.8v10c-2.4-1.7-4.7-2.3-7.5-1.8zM17.5 4.5c-2.8-.5-5.1.1-7.5 1.8v10c2.4-1.7 4.7-2.3 7.5-1.8z" /></svg>
+              <AppIcon name="library" /><span>{{ t('reader.bookView') }}</span>
             </button>
           </div>
           <button
@@ -3509,7 +3096,7 @@ onBeforeUnmount(() => {
             :title="autoReading && !autoPanel ? t('reader.expandAutoControls') : t('reader.autoRead')"
             @click="toggleAutoPanel"
           >
-            <svg viewBox="0 0 20 20" aria-hidden="true"><path d="m7 5.25 7 4.75-7 4.75z" /></svg>
+            <AppIcon name="reading" />
             <span>{{ autoReading ? t('reader.autoReading') : t('reader.autoRead') }}</span>
           </button>
           <button
@@ -3519,7 +3106,7 @@ onBeforeUnmount(() => {
             :aria-pressed="ttsState !== 'stopped' || ttsPanel"
             @click="openTTSPanel"
           >
-            <svg viewBox="0 0 20 20" aria-hidden="true"><path d="M4 8h3l3-3v10l-3-3H4zM13 7.2a4 4 0 0 1 0 5.6M14.9 5.4a6.5 6.5 0 0 1 0 9.2" /></svg>
+            <AppIcon name="audio" />
             <span>{{ ttsState !== 'stopped' ? t('tts.readingNow') : t('tts.title') }}</span>
           </button>
         </div>
@@ -3533,16 +3120,16 @@ onBeforeUnmount(() => {
             :aria-pressed="pdfSearchOpen"
             @click="pdfSearchOpen ? closePdfSearch() : openPdfSearch()"
           >
-            <svg viewBox="0 0 24 24" width="18" height="18"><path fill="currentColor" d="M10.5 3a7.5 7.5 0 1 0 4.55 13.46l3.75 3.75a1 1 0 0 0 1.4-1.42l-3.74-3.74A7.5 7.5 0 0 0 10.5 3zM5 10.5a5.5 5.5 0 1 1 11 0 5.5 5.5 0 0 1-11 0z"/></svg>
+            <AppIcon name="search" /><span>{{ t('common.search') }}</span>
           </button>
           <button class="icon-btn no-phone" :title="`${t('reader.print')} (${primaryShortcutLabel} P)`" @click="printDocument">
-            <svg viewBox="0 0 24 24" width="18" height="18" aria-hidden="true"><path fill="none" stroke="currentColor" stroke-width="1.8" stroke-linejoin="round" d="M7 8V3h10v5M7 17H5a2 2 0 0 1-2-2v-5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2v5a2 2 0 0 1-2 2h-2M7 14h10v7H7z"/></svg>
+            <AppIcon name="print" /><span>{{ t('reader.print') }}</span>
           </button>
           <button class="icon-btn no-phone" :title="`${t('reader.slideshow')} (F5)`" @click="enterPresentation">
-            <svg viewBox="0 0 24 24" width="18" height="18" aria-hidden="true"><path fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" d="M4 4h16v12H4zM9 20h6M12 16v4m-2.5-9V8l4 3-4 3z"/></svg>
+            <AppIcon name="slideshow" /><span>{{ t('reader.slideshow') }}</span>
           </button>
           <button class="icon-btn" :title="`${t('reader.fullscreen')} (F)`" @click="toggleFullscreen">
-            <svg viewBox="0 0 24 24" width="18" height="18"><path fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" d="M9 4H4v5M15 4h5v5M9 20H4v-5M15 20h5v-5"/></svg>
+            <AppIcon name="fullscreen" /><span>{{ t('reader.fullscreen') }}</span>
           </button>
           <div class="reader-more-wrap">
             <button
@@ -3552,7 +3139,7 @@ onBeforeUnmount(() => {
               :aria-expanded="moreMenu"
               @click="moreMenu = !moreMenu"
             >
-              <svg viewBox="0 0 24 24" width="18" height="18" aria-hidden="true"><path fill="currentColor" d="M6 10a2 2 0 1 1 0 4 2 2 0 0 1 0-4zm6 0a2 2 0 1 1 0 4 2 2 0 0 1 0-4zm6 0a2 2 0 1 1 0 4 2 2 0 0 1 0-4z"/></svg>
+              <AppIcon name="more" /><span>{{ t('common.more') }}</span>
             </button>
             <div v-if="moreMenu" class="reader-more-backdrop" @click="moreMenu = false" />
             <div v-if="moreMenu" class="reader-more-menu card" role="menu">
@@ -3579,7 +3166,7 @@ onBeforeUnmount(() => {
             :aria-label="t('reader.keyboardShortcuts')"
             :aria-pressed="shortcutsOpen"
             @click="toggleShortcutGuide"
-          >?</button>
+          ><AppIcon name="info" /><span>{{ t('reader.keyboardShortcuts') }}</span></button>
         </div>
       </div>
     </header>
@@ -3619,7 +3206,7 @@ onBeforeUnmount(() => {
             <small>PDF</small>
             <h2>{{ t('reader.propertiesTitle') }}</h2>
           </div>
-          <button class="icon-btn" :aria-label="t('common.close')" @click="propertiesOpen = false">×</button>
+          <button class="icon-btn" :aria-label="t('common.close')" @click="propertiesOpen = false"><AppIcon name="close" /><span>{{ t('common.close') }}</span></button>
         </header>
         <dl>
           <template v-for="row in propertyRows" :key="row.label">
@@ -3984,80 +3571,9 @@ onBeforeUnmount(() => {
         </div>
       </div>
 
-      <!-- 分栏拖拽把手 -->
-      <div v-if="rightTab" class="splitter" @pointerdown.prevent="startSplit" />
-
-      <!-- 右: 翻译 (版式对照 / 段落列表) / AI 辅读
-           标签切换在顶栏 (再点当前项即关闭), 面板内不再重复一排标签 -->
-      <div v-if="rightTab" ref="rightPane" class="pane-right" :style="rightPaneStyle">
-        <div v-if="!aiReady" class="rt-body">
-          <div class="chat-head ai-top">
-            <strong>{{ t('paper.translationTitle') }}</strong>
-            <span style="flex: 1" />
-            <button class="icon-btn" :title="t('common.close')" @click="closeRight" :aria-label="t('common.close')"><svg viewBox="0 0 24 24" width="16" height="16" aria-hidden="true"><path fill="currentColor" d="M6.3 6.3a1 1 0 0 1 1.4 0L12 10.58l4.3-4.3a1 1 0 1 1 1.4 1.42L13.42 12l4.3 4.3a1 1 0 0 1-1.42 1.4L12 13.42l-4.3 4.3a1 1 0 0 1-1.4-1.42L10.58 12l-4.3-4.3a1 1 0 0 1 0-1.4z"/></svg></button>
-          </div>
-          <div class="pt-setup">
-            <p>{{ t('paper.setupHint') }}</p>
-            <button class="btn btn-sm btn-primary" @click="router.push('/settings')">{{ t('ai.goSettings') }}</button>
-          </div>
-        </div>
-
-        <!-- 翻译: 版式对照连续滚动 (独立于左栏) / 段落列表 -->
-        <template v-else>
-          <div class="rt-body rt-translate">
-            <div class="pt-head">
-              <span class="pt-page">P{{ mirCur }} / {{ pageCount }}</span>
-              <span style="flex: 1" />
-              <span class="pm-switch">
-                <button :class="{ active: viewMode === 'mirror' }" @click="setMode('mirror')">{{ t('paper.viewMirror') }}</button>
-                <button :class="{ active: viewMode === 'cards' }" @click="setMode('cards')">{{ t('paper.viewCards') }}</button>
-              </span>
-              <button v-if="translatingPage" class="pt-act" @click="cancelTranslate">{{ t('paper.cancelTranslate') }}</button>
-              <button v-else class="pt-act" @click="runTranslateFor(mirCur, true)">{{ t('paper.retranslate') }}</button>
-              <span v-if="translatingPage" class="pt-busy">{{ t('paper.translating') }} P{{ translatingPage }}</span>
-              <button class="icon-btn" :title="t('common.close')" @click="closeRight" :aria-label="t('common.close')"><svg viewBox="0 0 24 24" width="16" height="16" aria-hidden="true"><path fill="currentColor" d="M6.3 6.3a1 1 0 0 1 1.4 0L12 10.58l4.3-4.3a1 1 0 1 1 1.4 1.42L13.42 12l4.3 4.3a1 1 0 0 1-1.42 1.4L12 13.42l-4.3 4.3a1 1 0 0 1-1.4-1.42L10.58 12l-4.3-4.3a1 1 0 0 1 0-1.4z"/></svg></button>
-            </div>
-            <p v-if="curMir && !curMir.paras.length" class="pt-empty">
-              {{ t('paper.noText') }}
-              <span v-if="curMir.err" class="pt-errdetail">{{ curMir.err }}</span>
-            </p>
-
-            <!-- 版式对照: 原页做底, 译文按原位铺回; 滚到哪页停稳即翻译哪页 -->
-            <div v-show="effectiveMode === 'mirror'" ref="mirScroller" class="mp-scroll" :title="t('paper.blockHint')">
-              <div v-for="n in pageCount" :key="n" class="mp-holder" :data-mp="n" :style="mirHolderStyle">
-                <span class="p-num">{{ n }}</span>
-                <div class="mp-canvas" />
-                <div
-                  v-for="blk in blocksOf(n)"
-                  :key="blk.id"
-                  class="pm-block"
-                  :class="{ 'pm-original': blk.orig }"
-                  :style="blk.style"
-                  @click="toggleBlock(n, blk.id)"
-                >{{ blk.text }}</div>
-              </div>
-            </div>
-
-            <!-- 段落列表 (对照视图当前页) -->
-            <div v-show="effectiveMode === 'cards'" class="cards-scroll">
-              <div v-for="p in curMir?.paras ?? []" :key="p.id" class="pt-card">
-                <div class="pt-zh">
-                  <template v-if="curMir && trText(curMir, p.id)">{{ trText(curMir, p.id) }}</template>
-                  <span v-else-if="translatingPage === mirCur" class="pt-pending">{{ t('paper.translating') }}</span>
-                  <span v-else class="pt-pending">{{ origText(p).slice(0, 120) }}</span>
-                </div>
-                <button class="pt-toggle" @click="toggleOriginal(p.id)">
-                  {{ expanded.has(p.id) ? t('paper.hideOriginal') : t('paper.showOriginal') }}
-                </button>
-                <p v-if="expanded.has(p.id)" class="pt-en">{{ origText(p) }}</p>
-              </div>
-            </div>
-          </div>
-        </template>
-      </div>
     </div>
 
-    <!-- 划词浮条: 高亮 / 想法 / 复制 / AI 翻译 -->
+    <!-- 划词浮条: 高亮 / 想法 / 复制 / AI 解读 -->
     <div
       v-if="selection"
       class="sel-bar"
@@ -4086,7 +3602,7 @@ onBeforeUnmount(() => {
       </button>
       <button type="button" class="sel-act sel-act-ai" @click="translateSelection">
         <svg viewBox="0 0 20 20" aria-hidden="true"><path d="M10.2 2.75c.45 3.2 1.85 4.6 5.05 5.05-3.2.45-4.6 1.85-5.05 5.05-.45-3.2-1.85-4.6-5.05-5.05 3.2-.45 4.6-1.85 5.05-5.05Z" /><path d="M15.15 12.65c.2 1.45.85 2.1 2.3 2.3-1.45.2-2.1.85-2.3 2.3-.2-1.45-.85-2.1-2.3-2.3 1.45-.2 2.1-.85 2.3-2.3Z" /></svg>
-        <span>{{ isPaper ? t('paper.selTranslateBtn') : t('ai.explain') }}</span>
+        <span>{{ t('ai.explain') }}</span>
       </button>
       <button type="button" class="sel-act" @click="copySelection">
         <svg viewBox="0 0 20 20" aria-hidden="true"><rect x="6.25" y="6.25" width="9.5" height="9.5" rx="1.75" /><path d="M13.75 6.25v-1.5a1.5 1.5 0 0 0-1.5-1.5h-7.5a1.5 1.5 0 0 0-1.5 1.5v7.5a1.5 1.5 0 0 0 1.5 1.5h1.5" /></svg>
@@ -4101,8 +3617,8 @@ onBeforeUnmount(() => {
     <!-- 划词翻译浮卡 (流式) -->
     <div v-if="selTr" class="sel-tr card" :style="{ left: `${selTrPos.x}px`, top: `${selTrPos.y}px` }">
       <div class="sel-tr-head">
-        <strong>{{ isPaper ? t('paper.selTranslate') : t('ai.explain') }}</strong>
-        <span v-if="selTr.busy" class="pt-busy">{{ t('paper.translating') }}</span>
+        <strong>{{ t('ai.explain') }}</strong>
+        <span v-if="selTr.busy" class="pt-busy">{{ t('common.loading') }}</span>
         <span style="flex: 1" />
         <button class="icon-btn" :title="t('paper.copy')" :disabled="!selTr.out" @click="copySelTr">⧉</button>
         <button class="icon-btn" @click="closeSelTr"><svg viewBox="0 0 24 24" width="16" height="16" aria-hidden="true"><path fill="currentColor" d="M6.3 6.3a1 1 0 0 1 1.4 0L12 10.58l4.3-4.3a1 1 0 1 1 1.4 1.42L13.42 12l4.3 4.3a1 1 0 0 1-1.42 1.4L12 13.42l-4.3 4.3a1 1 0 0 1-1.4-1.42L10.58 12l-4.3-4.3a1 1 0 0 1 0-1.4z"/></svg></button>
@@ -6208,5 +5724,44 @@ onBeforeUnmount(() => {
     padding-left: 0;
     box-shadow: none;
   }
+}
+/* Keep labeled actions usable even when compact PDF controls overflow horizontally. */
+.paper button,
+.paper select,
+.paper input:not([type="range"]) {
+  min-width: 48px;
+  min-height: 48px;
+}
+.paper .icon-btn {
+  width: auto;
+  height: auto;
+  gap: 6px;
+  padding: 8px;
+  white-space: nowrap;
+}
+.paper button:focus-visible,
+.paper select:focus-visible,
+.paper input:focus-visible {
+  outline: 2px solid currentColor;
+  outline-offset: 2px;
+}
+.paper .toolbar-end {
+  position: static;
+}
+.paper .reader-segment {
+  height: auto;
+  min-height: 54px;
+}
+.paper .reader-segment button {
+  height: auto;
+}
+.paper .fullscreen-exit,
+.paper .fullscreen-toc-toggle {
+  width: auto;
+  padding-inline: 12px;
+}
+.paper .fullscreen-exit span,
+.paper .fullscreen-toc-toggle span {
+  display: inline;
 }
 </style>

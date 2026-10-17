@@ -70,12 +70,12 @@ try {
   const sourceContext = await isolatedContext()
   const sourcePage = await sourceContext.newPage()
   await sourcePage.goto(`${base}/#/library`, { waitUntil: 'networkidle' })
-  await sourcePage.setInputFiles('input[type="file"]', {
-    name: 'archive-test.txt',
-    mimeType: 'text/plain',
-    buffer: Buffer.from('# 藏书包测试\n\n这是正文。', 'utf8'),
+  // Legacy copied-book fixture uses the retained importer; manual library import UI is retired.
+  await sourcePage.evaluate(async () => {
+    const { importFile } = await import('/src/services/importer.ts')
+    const result = await importFile(new File(['# 藏书包测试\n\n这是正文。'], 'archive-test.txt', { type: 'text/plain' }))
+    if (!result.ok || !result.bookId) throw new Error('Synthetic copied-book import failed')
   })
-  await sourcePage.locator('.toast.success').waitFor({ timeout: 15_000 })
   // 书单 (含一条待找条目) 随藏书包导出 / 导入, 见 docs/booklists.md
   await sourcePage.evaluate(async () => {
     const { getStorage } = await import('/src/storage/index.ts')

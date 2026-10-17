@@ -9,7 +9,10 @@ import { fetchRemote } from '../services/net'
 import { toast } from '../services/toast'
 import { CURRENT_VERSION } from '../services/appVersion'
 import { t } from '../i18n'
-import { AI_PROVIDERS, providerById, chatStream } from '../services/ai'
+import { providerById, chatStream } from '../services/ai'
+import AppIcon from '../components/AppIcon.vue'
+import AiProviderSelector from '../components/AiProviderSelector.vue'
+import { useFolderLibrary } from '../services/folderLibrary'
 
 const settings = useSettings()
 const library = useLibrary()
@@ -17,8 +20,28 @@ const storageKind = ref('')
 const busy = ref('')
 const backupInput = ref<HTMLInputElement>()
 
+const folderLibrary = computed(() => useFolderLibrary())
+
+async function onChooseMonitoredFolder() {
+  try {
+    await folderLibrary.value?.chooseFolder()
+  } catch (err: any) {
+    toast(err?.message || t('common.unknownError'), 'error')
+  }
+}
+
+async function onRescanMonitoredFolder() {
+  try {
+    await folderLibrary.value?.rescan()
+    toast(t('common.done'), 'success', 2000)
+  } catch (err: any) {
+    toast(err?.message || t('common.unknownError'), 'error')
+  }
+}
+
 const navSections = computed(() => [
   { id: 'general', label: t('settings.general') },
+  { id: 'folder', label: t('folder.monitoredTitle') },
   { id: 'reading', label: t('settings.navReading') },
   { id: 'ai', label: t('settings.aiTitle') },
   { id: 'data', label: t('settings.data') },
@@ -139,20 +162,22 @@ async function testProxy() {
 
 const aiTesting = ref(false)
 const aiTestResult = ref('')
-function onAiProviderChange() {
-  const preset = providerById(settings.aiProvider)
-  if (preset.id !== 'custom') {
-    settings.aiBaseUrl = preset.baseUrl
-    settings.aiModel = preset.defaultModel
-  }
-  aiTestResult.value = ''
-}
 const aiBaseUrlOpen = ref(false)
 const aiShowBaseUrl = computed(() => {
-  const preset = providerById(settings.aiProvider)
-  return aiBaseUrlOpen.value || preset.id === 'custom' || !settings.aiBaseUrl || settings.aiBaseUrl !== preset.baseUrl
+  try {
+    const preset = providerById(settings.aiProvider)
+    return aiBaseUrlOpen.value || preset.id === 'custom' || !settings.aiBaseUrl || settings.aiBaseUrl !== preset.baseUrl
+  } catch {
+    return true
+  }
 })
-const aiDocsUrl = computed(() => providerById(settings.aiProvider).docsUrl ?? '')
+const aiDocsUrl = computed(() => {
+  try {
+    return providerById(settings.aiProvider).docsUrl ?? ''
+  } catch {
+    return ''
+  }
+})
 
 async function openAiDocs() {
   if (isTauri()) {
@@ -290,6 +315,55 @@ const APPEARANCE_OPTIONS = [
       </label>
     </section>
 
+    <section id="settings-folder" class="card section" aria-labelledby="settings-folder-heading">
+      <h2 id="settings-folder-heading" tabindex="-1">{{ t('settings.monitoredFolderTitle') }}</h2>
+      <p class="section-desc">{{ t('settings.monitoredFolderDesc') }}</p>
+      <div class="folder-status-box">
+        <div class="folder-status-row">
+          <div class="folder-status-info">
+            <div class="folder-path-row">
+              <AppIcon name="folder" :size="20" aria-hidden="true" />
+              <strong class="folder-label">{{ folderLibrary?.status?.value?.folderLabel || t('folder.status.unconfigured') }}</strong>
+              <span class="badge" :class="folderLibrary?.status?.value?.state || 'unconfigured'">
+                {{ t('folder.status.' + (folderLibrary?.status?.value?.state === 'permission-denied' ? 'permissionDenied' : (folderLibrary?.status?.value?.state || 'unconfigured'))) }}
+              </span>
+            </div>
+            <p v-if="!folderLibrary?.status?.value?.folderLabel || folderLibrary?.status?.value?.state === 'unconfigured'" class="folder-hint">
+              {{ t('folder.status.unconfiguredHint') }}
+            </p>
+            <p v-else class="folder-stats">
+              <span>{{ t('folder.indexedCount', { n: folderLibrary?.status?.value?.indexed ?? 0 }) }}</span>
+              <span v-if="folderLibrary?.status?.value?.unavailable" class="unavailable-text"> · {{ t('folder.unavailableCount', { n: folderLibrary.status.value.unavailable }) }}</span>
+            </p>
+            <p v-if="folderLibrary?.status?.value?.error" class="folder-error" role="alert">
+              {{ folderLibrary.status.value.error }}
+            </p>
+          </div>
+          <div class="folder-actions">
+            <button
+              class="btn btn-primary"
+              :disabled="folderLibrary?.status?.value?.state === 'scanning'"
+              @click="onChooseMonitoredFolder"
+            >
+              {{ (!folderLibrary?.status?.value?.folderLabel || folderLibrary?.status?.value?.state === 'unconfigured') ? t('folder.choose') : t('folder.change') }}
+            </button>
+            <button
+              v-if="folderLibrary?.status?.value?.folderLabel && folderLibrary?.status?.value?.state !== 'unconfigured'"
+              class="btn"
+              :disabled="folderLibrary?.status?.value?.state === 'scanning'"
+              @click="onRescanMonitoredFolder"
+            >
+              <AppIcon name="refresh" :size="16" aria-hidden="true" />
+              <span>{{ t('folder.rescan') }}</span>
+            </button>
+          </div>
+        </div>
+        <p class="folder-notice">
+          {{ t('settings.monitoredFolderNotice') }}
+        </p>
+      </div>
+    </section>
+
     <section id="settings-reading" class="card section" aria-labelledby="settings-reading-heading">
       <h2 id="settings-reading-heading" tabindex="-1">{{ t('settings.reading') }}</h2>
       <div class="row">
@@ -309,11 +383,8 @@ const APPEARANCE_OPTIONS = [
       <h2 id="settings-ai-heading" tabindex="-1">{{ t('settings.aiTitle') }}</h2>
       <p class="section-desc">{{ t('settings.aiDesc') }}</p>
       <div class="field-grid">
-        <div class="field">
-          <label class="field-label" for="ai-provider">{{ t('settings.aiProvider') }}</label>
-          <select id="ai-provider" v-model="settings.aiProvider" class="input" @change="onAiProviderChange">
-            <option v-for="p in AI_PROVIDERS" :key="p.id" :value="p.id">{{ p.label }}{{ p.id === 'trial' ? t('settings.aiTrialTag') : p.id === 'siliconflow' || p.id === 'zhipu' ? t('settings.aiFreeTag') : '' }}</option>
-          </select>
+        <div class="field field-wide">
+          <AiProviderSelector />
         </div>
         <div class="field"><label class="field-label" for="ai-model">{{ t('settings.aiModelLabel') }}</label><input id="ai-model" v-model="settings.aiModel" class="input" autocapitalize="off" spellcheck="false" :placeholder="t('settings.aiModelPh')" /></div>
         <div v-if="aiShowBaseUrl" class="field field-wide"><label class="field-label" for="ai-base-url">{{ t('settings.aiBaseUrlLabel') }}</label><input id="ai-base-url" v-model="settings.aiBaseUrl" class="input" type="url" inputmode="url" autocapitalize="off" spellcheck="false" placeholder="https://api.siliconflow.cn/v1" /></div>
@@ -407,6 +478,20 @@ h2 { font-size: 17px; margin: 0 0 18px; }
 .field .input { width: 100%; }
 .ai-actions, .backup-actions, .location-actions, .about-actions { display: flex; align-items: center; flex-wrap: wrap; gap: 8px; }
 .ai-actions { margin-top: 16px; }
+.folder-status-box { background: var(--surface-2); border-radius: var(--radius); padding: 16px; margin-top: 12px; }
+.folder-status-row { display: flex; align-items: center; justify-content: space-between; flex-wrap: wrap; gap: 16px; }
+.folder-path-row { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
+.folder-label { font-size: 15px; color: var(--text); }
+.folder-hint, .folder-stats { margin: 6px 0 0; font-size: 13px; color: var(--text-2); }
+.folder-error { margin: 6px 0 0; font-size: 13px; color: var(--danger); }
+.folder-actions { display: flex; align-items: center; gap: 8px; }
+.folder-notice { margin: 12px 0 0; padding-top: 10px; border-top: 1px dashed var(--border); font-size: 12px; color: var(--text-3); }
+.badge.unconfigured { background: var(--surface-3); color: var(--text-2); }
+.badge.idle { background: var(--brand-light); color: var(--brand); }
+.badge.scanning { background: color-mix(in srgb, var(--brand) 20%, transparent); color: var(--brand); }
+.badge.partial, .badge.permission-denied { background: color-mix(in srgb, var(--warning) 20%, transparent); color: var(--warning); }
+.badge.error { background: color-mix(in srgb, var(--danger) 20%, transparent); color: var(--danger); }
+.btn { min-height: 48px; display: inline-flex; align-items: center; gap: 6px; }
 .link-btn { padding: 6px 0; border: none; background: none; color: var(--brand); cursor: pointer; font-size: 13px; }
 .status-info { margin-top: 12px; padding: 10px 12px; border-radius: var(--radius-sm); background: var(--surface-2); color: var(--text-2); font-size: 13px; overflow-wrap: anywhere; }
 .proxy-row { display: flex; align-items: center; gap: 8px; }

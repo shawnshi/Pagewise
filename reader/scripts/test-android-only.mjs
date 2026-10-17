@@ -74,7 +74,7 @@ test('unsupported desktop engines are not advertised as Android capabilities', (
   const settings = read('src/views/SettingsView.vue')
   assert.doesNotMatch(settings, /settings\.(?:desktopVersion|webVersion)/)
   assert.match(settings, /settings\.previewVersion/)
-  for (const view of ['ReaderView.vue', 'PaperReaderView.vue']) {
+  for (const view of ['ReaderView.vue', 'PdfReaderView.vue']) {
     assert.match(read(`src/views/${view}`), /<button v-if="localTtsAvailable\(\)"/)
   }
   assert.doesNotMatch(read('src/App.vue'), /<BabeldocTaskStatus/)
@@ -94,10 +94,13 @@ test('release workflow has only Android builds and preserves signed-APK validati
   assert.match(workflow, /packages:\s*platform-tools/)
 })
 
-test('legacy schemas and AI/TTS stay stable except the additive nullable reading state', () => {
+test('legacy schemas and TTS stay stable except approved additive metadata/state and Gemini changes', () => {
   const baseline = JSON.parse(read('scripts/fixtures/android-only-contract.json'))
   for (const [path, expected] of Object.entries(baseline.sourceHashes)) {
-    assert.equal(createHash('sha256').update(read(path).replace(/\r\n/g, '\n')).digest('hex'), expected, path)
+    // Gemini intentionally changes ai.ts; its transport/profile/error assertions live in test-gemini.mjs.
+    if (path !== 'src/services/ai.ts') {
+      assert.equal(createHash('sha256').update(read(path).replace(/\r\n/g, '\n')).digest('hex'), expected, path)
+    }
   }
   assert.deepEqual(read('src/storage/dexie.ts').replace(/\r\n/g, '\n').match(/version\(\d+\)\.stores\(\{[\s\S]*?\}\)/g), baseline.dexieSchemas)
   const statements = []
@@ -114,7 +117,11 @@ test('legacy schemas and AI/TTS stay stable except the additive nullable reading
   assert.equal(statements.filter(statement => statement.includes('reading_status')).length, 2)
   const migration = 'ALTER TABLE books ADD COLUMN reading_status TEXT'
   assert.equal(statements.filter(statement => statement === migration).length, 1)
-  const originalSchemas = statements.filter(statement => statement !== migration).map(statement => statement === books ? statement.replace('reading_status TEXT, ', '') : statement)
+  const metadataMigrations = ['publisher', 'publication_date', 'source_ref', 'file_availability']
+    .map(column => `ALTER TABLE books ADD COLUMN ${column} TEXT`)
+  for (const ddl of metadataMigrations) assert.equal(statements.filter(statement => statement === ddl).length, 1)
+  const originalSchemas = statements.filter(statement => statement !== migration && !metadataMigrations.includes(statement))
+    .map(statement => statement === books ? statement.replace('reading_status TEXT, ', '') : statement)
   assert.deepEqual(originalSchemas, baseline.sqliteDDL)
   for (const path of ['sync-server/src/index.ts', 'library-server/uploads.py', 'src/services/sync/index.ts']) {
     assert.equal(existsSync(join(root, path)), false, path)
@@ -126,7 +133,7 @@ test('Android project preparation installs managed resources and is idempotent',
   mkdirSync(cache, { recursive: true })
   const fixture = mkdtempSync(join(cache, 'android-project-test-'))
   try {
-    for (const path of ['scripts/prepare-android-project.mjs', 'src-tauri/tauri.conf.json', 'src-tauri/android/MainActivity.kt']) {
+    for (const path of ['package.json', 'scripts/prepare-android-project.mjs', 'src-tauri/tauri.conf.json', 'src-tauri/android/MainActivity.kt']) {
       mkdirSync(dirname(join(fixture, path)), { recursive: true })
       cpSync(join(root, path), join(fixture, path))
     }
@@ -138,6 +145,9 @@ test('Android project preparation installs managed resources and is idempotent',
     mkdirSync(join(res, 'values'), { recursive: true })
     mkdirSync(join(res, 'xml'), { recursive: true })
     writeFileSync(activity, 'package io.pagewise.reader\n')
+    const bridge = join(project, 'buildSrc/src/main/java/io/pagewise/reader/kotlin/BuildTask.kt')
+    mkdirSync(dirname(bridge), { recursive: true })
+    writeFileSync(bridge, 'val executable = """npm""";\nval args = listOf("run", "--", "tauri", "android", "android-studio-script");\n')
     writeFileSync(join(res, 'values/strings.xml'), '<resources><string name="app_name">placeholder</string><string name="main_activity_title">placeholder</string></resources>')
     writeFileSync(join(project, 'app/src/main/AndroidManifest.xml'), '<manifest xmlns:android="http://schemas.android.com/apk/res/android"><application><provider android:name="androidx.core.content.FileProvider" android:authorities="${applicationId}.fileprovider" /></application></manifest>')
     writeFileSync(join(res, 'xml/file_paths.xml'), '<paths></paths>')
@@ -148,6 +158,7 @@ test('Android project preparation installs managed resources and is idempotent',
     assert.deepEqual(new Map(files(project).map(path => [path, hash(path)])), before)
     assert.match(readFileSync(join(res, 'values/strings.xml'), 'utf8'), />知页</)
     assert.equal(hash(activity), hash(join(root, 'src-tauri/android/MainActivity.kt')))
+    assert.match(readFileSync(bridge, 'utf8'), /listOf\("run", "--", "android", "android-studio-script"\)/)
     assert.doesNotMatch(readFileSync(join(project, 'app/src/main/AndroidManifest.xml'), 'utf8'), /REQUEST_INSTALL_PACKAGES/)
     assert.ok(existsSync(join(res, 'mipmap-xxxhdpi/ic_launcher_foreground.png')))
   } finally {

@@ -10,6 +10,7 @@ import { parse } from '@vue/compiler-sfc'
 import { createPinia, defineStore, setActivePinia } from 'pinia'
 import { ref } from 'vue'
 import { isReadingStatus } from '../src/services/readingStatus.ts'
+import { validateAvailability, validateSourceRef } from '../src/storage/sourceFile.ts'
 import { createDebouncedDraftSaver, loadNoteDraft, saveNoteDraft } from '../src/services/noteDrafts.ts'
 import { deleteGlobalNote } from '../src/services/notes.ts'
 
@@ -43,7 +44,7 @@ function nativeStorage(db, fault) {
   const { TauriStorage } = loadActualModule(source, {
     __nativeSql: { default: { load: async () => sqlAdapter(db, fault) } },
     __nativeFs: { BaseDirectory: { AppData: 1 }, exists: async () => true, writeFile: async () => {}, mkdir: async () => {}, remove: async () => {} },
-    BUILTIN_SOURCES: [], getLibraryRoot: () => '', newId: () => `synthetic-${++id}`, isReadingStatus, Uint8Array,
+    BUILTIN_SOURCES: [], getLibraryRoot: () => '', newId: () => `synthetic-${++id}`, isReadingStatus, validateAvailability, validateSourceRef, Uint8Array,
   })
   return new TauriStorage()
 }
@@ -121,6 +122,7 @@ test('native rejects invalid states and missing-book writes without reporting su
 for (const remove of [false, true]) test(`actual batch ${remove ? 'delete' : 'state'} retains and retries only failed IDs`, async () => {
   const calls = []; let fail = true
   const backend = {
+    async getBook(bookId) { return { ...newBook, id: bookId } },
     async updateBook(bookId) { calls.push(bookId); if (fail && bookId === 'bad') throw new Error('synthetic write failure') },
     async deleteBook(bookId) { calls.push(bookId); if (fail && bookId === 'bad') throw new Error('synthetic delete failure') },
   }

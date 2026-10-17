@@ -6,8 +6,10 @@ const KEY = 'pagewise-last-view-v1'
 
 export function restorableView(path: unknown): string | null {
   if (typeof path !== 'string' || path.length > 1024) return null
+  if (path === '/papers') return '/library'
   if (/^\/(library|reading|notes|settings|stats|manual)$/.test(path)) return path
-  return /^\/(book|read|read-paper)\/[^/?#\s]+$/.test(path) ? path : null
+  if (/^\/read-paper\/[^/?#\s]+$/.test(path)) return path.replace('/read-paper/', '/read-pdf/')
+  return /^\/(book|read|read-pdf)\/[^/?#\s]+$/.test(path) ? path : null
 }
 
 export function restoreView(storage: NavigationStorage): string {

@@ -8,6 +8,7 @@ import { FORMAT_LABELS, isSupportedBookFormat } from '../services/format'
 import { readerPath } from '../services/readerRoute'
 import { formatReadingTime } from '../composables/useReadingTimer'
 import { saveLibrarySession } from '../services/librarySession'
+import AppIcon from '../components/AppIcon.vue'
 import { t } from '../i18n'
 
 const router = useRouter()
@@ -130,10 +131,7 @@ function getProgress(book: BookMeta) {
 
     <div v-if="!displayedBooks.length" class="empty card">
       <div class="empty-icon" aria-hidden="true">
-        <svg viewBox="0 0 24 24" width="40" height="40" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round">
-          <path d="M4 19.5A2.5 2.5 0 0 1 6.5 17H20"/>
-          <path d="M6.5 2H20v20H6.5A2.5 2.5 0 0 1 4 19.5v-15A2.5 2.5 0 0 1 6.5 2z"/>
-        </svg>
+        <AppIcon name="reading" :size="48" aria-hidden="true" />
       </div>
       <p class="empty-title">{{ t("uiV02.copy.当前分类暂无书籍") }}</p>
       <p class="empty-hint">{{ t("uiV02.copy.在藏书中打开一本书或将其标为在读，进度将自动汇总在此。") }}</p>
@@ -173,7 +171,16 @@ function getProgress(book: BookMeta) {
               {{ t('uiV02.status.' + (resolveReadingStatus(book).effective!)) }}
             </span>
           </div>
-          <p class="book-author">{{ book.author || t('common.anonymous') }}</p>
+          <p class="book-author">
+            <span>{{ book.author || t('book.unknownAuthor') }}</span>
+            <span class="meta-sep">·</span>
+            <span>{{ book.publisher || t('book.unknownPublisher') }}</span>
+            <span class="meta-sep">·</span>
+            <span>{{ book.publicationDate || t('book.unknownDate') }}</span>
+          </p>
+          <div v-if="book.tags?.length" class="card-tags">
+            <span v-for="tag in book.tags.slice(0, 3)" :key="tag" class="tag-chip-mini">{{ tag }}</span>
+          </div>
 
           <div v-if="getProgress(book) != null" class="progress-container">
             <div class="progress-bar-track" role="progressbar" :aria-valuenow="getProgress(book)!" aria-valuemin="0" aria-valuemax="100">
@@ -395,7 +402,27 @@ function getProgress(book: BookMeta) {
   flex-shrink: 0;
 }
 .btn-continue {
+  min-height: 48px;
+  min-width: 48px;
   white-space: nowrap;
+}
+.meta-sep {
+  opacity: 0.5;
+  margin: 0 4px;
+}
+.card-tags {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px;
+  margin-top: 4px;
+}
+.tag-chip-mini {
+  font-size: 11px;
+  padding: 1px 6px;
+  border-radius: var(--radius-sm);
+  background: var(--surface-2);
+  border: 1px solid var(--border);
+  color: var(--text-2);
 }
 .empty {
   padding: 48px 24px;

@@ -4,6 +4,7 @@ import type { BookMeta } from '../storage'
 import { FORMAT_LABELS, isSupportedBookFormat } from '../services/format'
 import { formatReadingTime } from '../composables/useReadingTimer'
 import { resolveReadingStatus } from '../services/readingStatus'
+import AppIcon from './AppIcon.vue'
 import { t } from '../i18n'
 
 const props = defineProps<{
@@ -12,11 +13,6 @@ const props = defineProps<{
   /** 管理模式: 点击变为选择 */
   selectable?: boolean
   selected?: boolean
-  showBooklists?: boolean
-  /** 可转换为 EPUB (MOBI / TXT / Markdown) */
-  convertible?: boolean
-  /** 正在转换: 按钮禁用 */
-  converting?: boolean
 }>()
 
 const emit = defineEmits<{
@@ -25,8 +21,6 @@ const emit = defineEmits<{
   remove: []
   toggleSelect: []
   togglePin: []
-  addToBooklist: []
-  convert: []
 }>()
 
 const readable = computed(() => isSupportedBookFormat(props.book.format))
@@ -87,13 +81,11 @@ function openMenu() {
   menuOpen.value = true
   setTimeout(() => document.addEventListener('pointerdown', onOutsidePointerDown, true))
 }
-function menuAction(event: 'read' | 'remove' | 'togglePin' | 'addToBooklist' | 'convert') {
+function menuAction(event: 'read' | 'remove' | 'togglePin') {
   closeMenu()
   if (event === 'read') emit('read')
   else if (event === 'remove') emit('remove')
   else if (event === 'togglePin') emit('togglePin')
-  else if (event === 'convert') emit('convert')
-  else emit('addToBooklist')
 }
 /* 触屏长按封面: 与点「更多」一样展开操作 (系统的长按菜单无意义, 拦掉) */
 function onContextMenu(e: Event) {
@@ -123,9 +115,28 @@ function onKeydown(e: KeyboardEvent) {
       </div>
       <div class="book-meta">
         <h2 class="title">{{ book.title }}</h2>
-        <p class="author">{{ book.author || t('common.anonymous') }} · {{ book.language || t('uiV02.languageUnknown') }} · {{ FORMAT_LABELS[book.format] || book.format }}</p>
-        <p class="book-state">{{ statusInfo.effective ? t('uiV02.status.' + statusInfo.effective) : t('uiV02.status.unmarked') }}<span v-if="progress != null"> · {{ progress }}%</span></p>
-        <div v-if="book.tags?.length" class="book-tags"><span v-for="tag in book.tags.slice(0, 2)" :key="tag">{{ tag }}</span></div>
+        <p class="author">
+          <span>{{ book.author || t('book.unknownAuthor') }}</span>
+          <span class="meta-sep">·</span>
+          <span>{{ book.publisher || t('book.unknownPublisher') }}</span>
+          <span class="meta-sep">·</span>
+          <span>{{ book.publicationDate || t('book.unknownDate') }}</span>
+        </p>
+        <p class="book-state">
+          <span>{{ FORMAT_LABELS[book.format] || book.format }}</span>
+          <span class="meta-sep">·</span>
+          <span>{{ statusInfo.effective ? t('uiV02.status.' + statusInfo.effective) : t('uiV02.status.unmarked') }}</span>
+          <span v-if="progress != null"> · {{ progress }}%</span>
+          <span v-if="book.sourceRef" class="source-tag" :title="t('book.sourceManagedHint')">
+            {{ t('book.sourceManaged') }}
+          </span>
+        </p>
+        <div class="book-tags">
+          <template v-if="book.tags?.length">
+            <span v-for="tag in book.tags.slice(0, 3)" :key="tag">{{ tag }}</span>
+          </template>
+          <span v-else class="tag-placeholder">{{ t('book.noTags') }}</span>
+        </div>
         <p v-if="!readable" class="author">{{ t('library.retiredFormat') }}</p>
       </div>
     </div>
@@ -133,12 +144,23 @@ function onKeydown(e: KeyboardEvent) {
       <button v-if="readable" type="button" class="action read-action" @click.stop="menuAction('read')">
         {{ progress != null && progress > 0 ? t('catalog.continueReading') : t('settings.navReading') }}
       </button>
-      <button type="button" class="action more" :aria-label="t('common.moreActions')" :aria-expanded="menuOpen" @click.stop="toggleMenu">{{ t('common.moreActions') }}</button>
+      <button type="button" class="action more" :aria-label="t('common.moreActions')" :aria-expanded="menuOpen" @click.stop="toggleMenu">
+        <AppIcon name="more" :size="20" aria-hidden="true" />
+        <span class="action-text">{{ t('common.more') }}</span>
+      </button>
       <div v-if="menuOpen" class="book-menu">
-        <button type="button" class="action pin" :aria-pressed="!!book.pinnedAt" @click.stop="menuAction('togglePin')">{{ book.pinnedAt ? t('library.unpin') : t('library.pin') }}</button>
-        <button v-if="showBooklists" type="button" class="action booklist-action" @click.stop="menuAction('addToBooklist')">{{ t('library.addToBooklist') }}</button>
-        <button v-if="convertible" type="button" class="action convert" :disabled="converting" @click.stop="menuAction('convert')">{{ t('book.convertToEpub') }}</button>
-        <button type="button" class="action remove" @click.stop="menuAction('remove')">{{ t('book.removeFromLibrary') }}</button>
+        <button type="button" class="action pin" :aria-pressed="!!book.pinnedAt" @click.stop="menuAction('togglePin')">
+          <AppIcon name="pin" :size="16" aria-hidden="true" />
+          <span>{{ book.pinnedAt ? t('library.unpin') : t('library.pin') }}</span>
+        </button>
+        <button v-if="!book.sourceRef" type="button" class="action remove" @click.stop="menuAction('remove')">
+          <AppIcon name="delete" :size="16" aria-hidden="true" />
+          <span>{{ t('book.removeFromLibrary') }}</span>
+        </button>
+        <div v-else class="action-source-notice" :title="t('book.sourceManagedHint')">
+          <AppIcon name="folder" :size="16" aria-hidden="true" />
+          <span>{{ t('book.sourceManaged') }}</span>
+        </div>
       </div>
     </div>
   </article>
@@ -161,7 +183,12 @@ function onKeydown(e: KeyboardEvent) {
 .actions { display: flex; align-items: center; gap: 8px; flex: 0 0 auto; position: relative; }
 .action { background: var(--card); color: var(--text); border: 1px solid var(--text); min-height: 48px; min-width: 48px; padding: 8px 12px; border-radius: 4px; cursor: pointer; font-size: 14px; }
 .read-action { background: var(--text); color: var(--card); }
-.more { border-color: var(--border); }
+.more { border-color: var(--border); display: inline-flex; align-items: center; gap: 4px; }
+.action-text { font-size: 13px; }
+.meta-sep { opacity: 0.5; margin: 0 4px; }
+.source-tag { margin-left: 6px; font-size: 11px; padding: 1px 6px; border-radius: var(--radius-pill); background: var(--surface-2); border: 1px solid var(--border); }
+.tag-placeholder { color: var(--text-3); font-style: italic; border: none !important; }
+.action-source-notice { display: flex; align-items: center; gap: 6px; padding: 8px 12px; font-size: 12px; color: var(--text-2); background: var(--surface-2); border-radius: 4px; }
 .book-menu { z-index: 30; position: absolute; top: 100%; right: 0; width: 180px; display: grid; background: var(--card); padding: 8px; border: 2px solid var(--text); gap: 4px; }
 .book-menu .action { text-align: start; border-color: var(--border); }
 @media (max-width: 520px) { .book-card { gap: 8px; } .book-body { gap: 10px; } .actions { flex-direction: column; gap: 4px; } .action { padding: 6px 8px; } .title { font-size: 16px; } }

@@ -11,6 +11,7 @@ import android.os.Bundle
 import android.view.WindowManager
 import android.webkit.JavascriptInterface
 import android.webkit.WebView
+import androidx.activity.OnBackPressedCallback
 import androidx.activity.SystemBarStyle
 import androidx.activity.enableEdgeToEdge
 import androidx.core.view.ViewCompat
@@ -19,15 +20,47 @@ import androidx.core.view.WindowInsetsCompat
 import androidx.core.view.WindowInsetsControllerCompat
 
 class MainActivity : TauriActivity() {
+    private var nativeBackView: WebView? = null
+    private var nativeBackDispatching = false
+    private val nativeBackCallback: OnBackPressedCallback =
+        object : OnBackPressedCallback(true) {
+            override fun handleOnBackPressed() {
+                if (nativeBackDispatching) return
+                val webView = nativeBackView
+                if (webView == null) {
+                    fallbackNativeBack()
+                    return
+                }
+                nativeBackDispatching = true
+                webView.evaluateJavascript(
+                    "(function(){var handle=window.__pagewiseReaderBack;return typeof handle==='function' && handle();})()",
+                ) { handled ->
+                    nativeBackDispatching = false
+                    if (handled != "true") fallbackNativeBack()
+                }
+            }
+        }
+
+    private fun fallbackNativeBack() {
+        nativeBackCallback.isEnabled = false
+        try {
+            onBackPressedDispatcher.onBackPressed()
+        } finally {
+            nativeBackCallback.isEnabled = true
+        }
+    }
+
     @Volatile
     private var insetsJson = "{\"top\":0,\"right\":0,\"bottom\":0,\"left\":0}"
 
     override fun onCreate(savedInstanceState: Bundle?) {
         enableEdgeToEdge()
         super.onCreate(savedInstanceState)
+        onBackPressedDispatcher.addCallback(this, nativeBackCallback)
     }
 
     override fun onWebViewCreate(webView: WebView) {
+        nativeBackView = webView
         webView.addJavascriptInterface(InsetsBridge(), "LightReadInsets")
 
         ViewCompat.setOnApplyWindowInsetsListener(webView) { view, insets ->

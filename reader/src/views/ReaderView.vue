@@ -50,6 +50,7 @@ import DianjingChapterCard from '../components/DianjingChapterCard.vue'
 import DianjingOutline from '../components/DianjingOutline.vue'
 import DianjingSkim from '../components/DianjingSkim.vue'
 import DianjingStatus from '../components/DianjingStatus.vue'
+import AppIcon from '../components/AppIcon.vue'
 import { useDianjing } from '../composables/useDianjing'
 import { djThemeName } from '../services/dianjing/theme'
 import { useAmbient } from '../services/ambient'
@@ -83,7 +84,7 @@ const currentTocHref = ref<string>()
 const fraction = ref(0)
 const chapterLabel = ref('')
 type PanelName = 'toc' | 'annotations' | 'search' | 'ai'
-type PrimaryPanel = PanelName | 'settings' | 'tts' | 'ambient' | 'none'
+type PrimaryPanel = PanelName | 'settings' | 'tts' | 'ambient' | 'more' | 'none'
 const primaryPanel = ref<PrimaryPanel>('none')
 function setPrimaryPanel(name: PrimaryPanel) {
   if (name !== 'none') {
@@ -96,7 +97,7 @@ const panel = computed<'none' | PanelName>({
   get: () => ['toc', 'annotations', 'search', 'ai'].includes(primaryPanel.value) ? primaryPanel.value as PanelName : 'none',
   set: name => { if (name !== 'none' || panel.value !== 'none') setPrimaryPanel(name) },
 })
-function primaryToggle(name: 'settings' | 'tts' | 'ambient') {
+function primaryToggle(name: 'settings' | 'tts' | 'ambient' | 'more') {
   return computed({
     get: () => primaryPanel.value === name,
     set: (open: boolean) => { if (open) setPrimaryPanel(name); else if (primaryPanel.value === name) primaryPanel.value = 'none' },
@@ -104,13 +105,14 @@ function primaryToggle(name: 'settings' | 'tts' | 'ambient') {
 }
 const panelEl = ref<HTMLElement>()
 const settingsOpen = primaryToggle('settings')
+const readerMoreOpen = primaryToggle('more')
 
 // ---- 沉浸式阅读: 工具栏悬浮, 自动隐藏, 正文占满全窗 ----
 const barsVisible = ref(true)
 let barsTimer: ReturnType<typeof setTimeout> | undefined
 
 const anyOverlayOpen = () =>
-  panel.value !== 'none' || settingsOpen.value || ttsPanel.value || modes.panelOpen.value || ambientPanel.value || !!activeAnnotation.value || jumpOpen.value || dj.overlayOpen.value
+  panel.value !== 'none' || settingsOpen.value || ttsPanel.value || modes.panelOpen.value || ambientPanel.value || !!activeAnnotation.value || jumpOpen.value || dj.overlayOpen.value || readerMoreOpen.value
 
 /** 显示工具栏; autoHide 时若几秒内无交互且无面板打开则自动隐去 */
 function showBars(autoHide = false) {
@@ -132,6 +134,7 @@ const cancelBarsTimer = () => clearTimeout(barsTimer)
 
 // ---- 面板开关: 同一时间只开一个浮层 (手机端它们都是底部抽屉, 叠在一起会互相遮挡) ----
 function closeOverlays() {
+  readerMoreOpen.value = false
   panel.value = 'none'
   settingsOpen.value = false
   ttsPanel.value = false
@@ -153,6 +156,17 @@ function toggleSettings() {
   closeOverlays()
   typoFocus.value = null
   settingsOpen.value = next
+}
+
+function toggleReaderMore() {
+  if (readerMoreOpen.value) {
+    readerMoreOpen.value = false
+    return
+  }
+  closeOverlays()
+  // Dirty editors stay open until the existing draft-safe close path succeeds.
+  if (activeAnnotation.value) return
+  readerMoreOpen.value = true
 }
 
 /** 从「模式」的场景详情跳到排版的对应分区 (docs/reader-panels.md §2) */
@@ -974,6 +988,24 @@ async function readerBack() {
   }
 }
 
+const nativeBackHost = window as Window & { __pagewiseReaderBack?: () => boolean }
+let nativeBackPending = false
+function handleNativeReaderBack(): boolean {
+  if (nativeBackPending) return true
+  nativeBackPending = true
+  void readerBack()
+    .catch(error => {
+      console.error('Pagewise: native Back failed', error)
+      toast(t('reader.progressSaveFailed'), 'error')
+    })
+    .finally(() => { nativeBackPending = false })
+  return true
+}
+onMounted(() => { nativeBackHost.__pagewiseReaderBack = handleNativeReaderBack })
+onBeforeUnmount(() => {
+  if (nativeBackHost.__pagewiseReaderBack === handleNativeReaderBack) delete nativeBackHost.__pagewiseReaderBack
+})
+
 function handleKeydown(e: KeyboardEvent) {
   // 在输入框里打字 (跳页 / 搜索 / AI) 时, 方向键和空格属于输入框
   const el = e.target as HTMLElement | null
@@ -1061,7 +1093,7 @@ let autoCrossing = false
 /** 面板 / 抽屉打开、手指按住正文时暂缓 (不算暂停, 收起后自动继续) */
 function autoHeld() {
   return Date.now() < autoHoldUntil || panel.value !== 'none' || settingsOpen.value || ttsPanel.value
-    || jumpOpen.value || ambientPanel.value || !!activeAnnotation.value || !!selection.value
+    || readerMoreOpen.value || jumpOpen.value || ambientPanel.value || !!activeAnnotation.value || !!selection.value
 }
 
 function holdAutoScroll(ms: number) {
@@ -2862,7 +2894,7 @@ const modes = useReadingModes({
   },
   isAutoReading: () => autoReading.value,
   pauseWhen: () => panel.value !== 'none' || settingsOpen.value || ttsPanel.value || jumpOpen.value || ambientPanel.value
-    || !!activeAnnotation.value || !!lateDj.value?.overlayOpen.value,
+    || readerMoreOpen.value || !!activeAnnotation.value || !!lateDj.value?.overlayOpen.value,
   beforePanelOpen: closeOverlays,
   // 沉浸: 安卓隐藏系统栏 + 常亮 (网页 / 桌面用 Wake Lock), 并收起工具栏
   onImmersiveChange: on => {
@@ -3187,8 +3219,9 @@ onBeforeRouteLeave(async () => {
 
     <!-- 顶栏 -->
     <header class="bar top" :class="{ hidden: !barsVisible }" @mouseenter="cancelBarsTimer">
-      <button class="icon-btn" :title="t('common.back')" :aria-label="t('common.back')" @click="readerBack">
-        <svg viewBox="0 0 24 24" width="18" height="18"><path fill="currentColor" d="M14.7 5.3a1 1 0 0 1 0 1.4L9.42 12l5.3 5.3a1 1 0 0 1-1.42 1.4l-6-6a1 1 0 0 1 0-1.4l6-6a1 1 0 0 1 1.42 0z"/></svg>
+      <button class="icon-btn reader-back-btn" :title="t('common.back')" :aria-label="t('common.back')" @click="readerBack">
+        <AppIcon name="back" :size="20" aria-hidden="true" />
+        <span class="btn-text">{{ t('common.back') }}</span>
       </button>
       <div class="book-title">
         <strong>{{ meta?.title }}</strong>
@@ -3214,58 +3247,86 @@ onBeforeRouteLeave(async () => {
         </button>
       </div>
       <div class="bar-actions">
-        <button class="icon-btn desk-only" :title="t('reader.toc')" @click="togglePanel('toc')">
-          <svg viewBox="0 0 24 24" width="18" height="18"><path fill="currentColor" d="M4 6a1 1 0 0 1 1-1h1a1 1 0 0 1 0 2H5a1 1 0 0 1-1-1zm5 0a1 1 0 0 1 1-1h9a1 1 0 1 1 0 2h-9a1 1 0 0 1-1-1zM4 12a1 1 0 0 1 1-1h1a1 1 0 1 1 0 2H5a1 1 0 0 1-1-1zm5 0a1 1 0 0 1 1-1h9a1 1 0 1 1 0 2h-9a1 1 0 0 1-1-1zM4 18a1 1 0 0 1 1-1h1a1 1 0 1 1 0 2H5a1 1 0 0 1-1-1zm5 0a1 1 0 0 1 1-1h9a1 1 0 1 1 0 2h-9a1 1 0 0 1-1-1z"/></svg>
+        <button class="icon-btn reader-action-btn desk-only" :class="{ 'auto-on': panel === 'toc' }" :title="t('reader.toc')" :aria-label="t('reader.toc')" @click="togglePanel('toc')">
+          <AppIcon name="toc" :size="20" aria-hidden="true" />
+          <span class="btn-text">{{ t('reader.toc') }}</span>
         </button>
-        <button class="icon-btn desk-only" :title="t('reader.annotationsBookmarks')" @click="togglePanel('annotations')">
-          <svg viewBox="0 0 24 24" width="18" height="18"><path fill="currentColor" d="M4 5.5A2.5 2.5 0 0 1 6.5 3H19a1 1 0 0 1 1 1v15a2 2 0 0 1-2 2H6.5A2.5 2.5 0 0 1 4 18.5v-13zM6.5 5a.5.5 0 0 0-.5.5v11.34c.16-.05.33-.08.5-.08H18V5H6.5z"/></svg>
+        <button class="icon-btn reader-action-btn desk-only" :class="{ 'auto-on': settingsOpen }" :title="t('reader.typography')" :aria-label="t('reader.typography')" @click="toggleSettings">
+          <AppIcon name="typography" :size="20" aria-hidden="true" />
+          <span class="btn-text">{{ t('reader.dockTypography') }}</span>
         </button>
-        <button
-          class="icon-btn"
-          :class="{ 'auto-on': isBookmarked }"
-          :title="isBookmarked ? t('reader.removeBookmark') : t('reader.addBookmark')"
-          @click="toggleBookmark"
-        >
-          <svg viewBox="0 0 24 24" width="18" height="18">
-            <path v-if="isBookmarked" fill="currentColor" d="M6 3h12a1 1 0 0 1 1 1v16.2a.8.8 0 0 1-1.24.67L12 17.6l-5.76 3.27A.8.8 0 0 1 5 20.2V4a1 1 0 0 1 1-1z"/>
-            <path v-else fill="currentColor" d="M6 3h12a1 1 0 0 1 1 1v16.2a.8.8 0 0 1-1.24.67L12 17.6l-5.76 3.27A.8.8 0 0 1 5 20.2V4a1 1 0 0 1 1-1zm1 2v13.48l4.5-2.55a1 1 0 0 1 .99 0l4.51 2.55V5H7z"/>
-          </svg>
+        <button class="icon-btn reader-action-btn desk-only" :class="{ 'auto-on': panel === 'annotations' }" :title="t('reader.annotationsBookmarks')" :aria-label="t('reader.annotationsBookmarks')" @click="togglePanel('annotations')">
+          <AppIcon name="notes" :size="20" aria-hidden="true" />
+          <span class="btn-text">{{ t('reader.dockNotes') }}</span>
         </button>
-        <button class="icon-btn desk-only" :class="{ 'auto-on': ttsState !== 'stopped' }" :title="t('tts.title')" @click="openTTSPanel">
-          <svg viewBox="0 0 24 24" width="18" height="18"><path fill="currentColor" d="M12 3a7 7 0 0 0-7 7v1.1A3.5 3.5 0 0 0 3 14.5v2A3.5 3.5 0 0 0 6.5 20H8a1 1 0 0 0 1-1v-7a1 1 0 0 0-1-1h-.9A5 5 0 0 1 12 5a5 5 0 0 1 4.9 6H16a1 1 0 0 0-1 1v7a1 1 0 0 0 1 1h1.5a3.5 3.5 0 0 0 3.5-3.5v-2a3.5 3.5 0 0 0-2-3.16V10a7 7 0 0 0-7-7z"/></svg>
+        <button class="icon-btn reader-action-btn" :class="{ 'auto-on': panel === 'search' }" :title="t('reader.searchInBook')" :aria-label="t('reader.searchInBook')" @click="togglePanel('search')">
+          <AppIcon name="search" :size="20" aria-hidden="true" />
+          <span class="btn-text">{{ t('common.search') }}</span>
         </button>
-        <button class="icon-btn" :class="{ 'auto-on': panel === 'ai' }" :title="t('ai.title')" @click="togglePanel('ai')">
-          <svg viewBox="0 0 24 24" width="18" height="18"><path fill="currentColor" d="M12 2.5a1 1 0 0 1 .95.69l1.4 4.3a3 3 0 0 0 1.92 1.92l4.3 1.4a1 1 0 0 1 0 1.9l-4.3 1.4a3 3 0 0 0-1.92 1.92l-1.4 4.3a1 1 0 0 1-1.9 0l-1.4-4.3a3 3 0 0 0-1.92-1.92l-4.3-1.4a1 1 0 0 1 0-1.9l4.3-1.4a3 3 0 0 0 1.92-1.92l1.4-4.3A1 1 0 0 1 12 2.5zm7.5 12.7a.8.8 0 0 1 .76.55l.42 1.28a1.6 1.6 0 0 0 1.02 1.02l1.28.42a.8.8 0 0 1 0 1.52l-1.28.42a1.6 1.6 0 0 0-1.02 1.02l-.42 1.28a.8.8 0 0 1-1.52 0l-.42-1.28a1.6 1.6 0 0 0-1.02-1.02l-1.28-.42a.8.8 0 0 1 0-1.52l1.28-.42a1.6 1.6 0 0 0 1.02-1.02l.42-1.28a.8.8 0 0 1 .76-.55z"/></svg>
+        <button class="icon-btn reader-action-btn" :class="{ 'auto-on': panel === 'ai' }" :title="t('ai.title')" :aria-label="t('ai.title')" @click="togglePanel('ai')">
+          <AppIcon name="ai" :size="20" aria-hidden="true" />
+          <span class="btn-text">{{ t('ai.title') }}</span>
         </button>
-        <button
-          class="icon-btn ambient-btn"
-          :class="{ 'auto-on': ambientPanel || ambient.state.playing }"
-          :title="t('ambient.title')"
-          :aria-label="t('ambient.title')"
-          @click="toggleAmbientPanel"
-        >
-          <svg viewBox="0 0 24 24" width="18" height="18" aria-hidden="true"><path fill="currentColor" d="M12 3a1 1 0 0 1 1 1v16a1 1 0 1 1-2 0V4a1 1 0 0 1 1-1zM8 7a1 1 0 0 1 1 1v8a1 1 0 1 1-2 0V8a1 1 0 0 1 1-1zm8 0a1 1 0 0 1 1 1v8a1 1 0 1 1-2 0V8a1 1 0 0 1 1-1zM4 10a1 1 0 0 1 1 1v2a1 1 0 1 1-2 0v-2a1 1 0 0 1 1-1zm16 0a1 1 0 0 1 1 1v2a1 1 0 1 1-2 0v-2a1 1 0 0 1 1-1z"/></svg>
-          <span v-if="ambient.state.playing" class="ambient-dot" aria-hidden="true" />
-        </button>
-        <button class="icon-btn" :title="t('reader.searchInBook')" @click="togglePanel('search')">
-          <svg viewBox="0 0 24 24" width="18" height="18"><path fill="currentColor" d="M10.5 3a7.5 7.5 0 1 0 4.55 13.46l3.75 3.75a1 1 0 0 0 1.4-1.42l-3.74-3.74A7.5 7.5 0 0 0 10.5 3zM5 10.5a5.5 5.5 0 1 1 11 0 5.5 5.5 0 0 1-11 0z"/></svg>
-        </button>
-        <button
-          class="icon-btn desk-only"
-          :class="{ 'auto-on': readingModeActive }"
-          :title="t('readingMode.title')"
-          :aria-label="t('readingMode.title')"
-          @click="modes.togglePanel()"
-        >
-          <svg viewBox="0 0 24 24" width="18" height="18"><path fill="currentColor" d="M12 2a10 10 0 1 1 0 20 10 10 0 0 1 0-20zm0 2a8 8 0 1 0 0 16 8 8 0 0 0 0-16zm-1.8 4.4 5.4 3.1a.6.6 0 0 1 0 1l-5.4 3.1a.6.6 0 0 1-.9-.5V8.9a.6.6 0 0 1 .9-.5z"/></svg>
-        </button>
-        <button class="icon-btn desk-only" :title="t('reader.typography')" @click="toggleSettings">
-          <svg viewBox="0 0 24 24" width="18" height="18"><path fill="currentColor" d="M11.1 4.55a1 1 0 0 1 1.8 0l5.6 12.02a1 1 0 1 1-1.81.86L15.3 14.5H8.7l-1.39 2.93a1 1 0 1 1-1.8-.86L11.1 4.55zM9.64 12.5h4.72L12 7.36 9.64 12.5z"/></svg>
-        </button>
-        <button class="icon-btn desk-only" :class="{ 'auto-on': isFullscreen }" :title="isFullscreen ? t('reader.exitFullscreen') : t('reader.fullscreen')" @click="toggleFullscreen">
-          <svg v-if="!isFullscreen" viewBox="0 0 24 24" width="18" height="18"><path fill="currentColor" d="M4 9a1 1 0 0 1-1-1V5a2 2 0 0 1 2-2h3a1 1 0 0 1 0 2H5v3a1 1 0 0 1-1 1zm16 0a1 1 0 0 1-1-1V5h-3a1 1 0 1 1 0-2h3a2 2 0 0 1 2 2v3a1 1 0 0 1-1 1zM4 15a1 1 0 0 1 1 1v3h3a1 1 0 1 1 0 2H5a2 2 0 0 1-2-2v-3a1 1 0 0 1 1-1zm16 0a1 1 0 0 1 1 1v3a2 2 0 0 1-2 2h-3a1 1 0 1 1 0-2h3v-3a1 1 0 0 1 1-1z"/></svg>
-          <svg v-else viewBox="0 0 24 24" width="18" height="18"><path fill="currentColor" d="M8 3a1 1 0 0 1 1 1v3a2 2 0 0 1-2 2H4a1 1 0 0 1 0-2h3V4a1 1 0 0 1 1-1zm8 0a1 1 0 0 1 1 1v3h3a1 1 0 1 1 0 2h-3a2 2 0 0 1-2-2V4a1 1 0 0 1 1-1zM4 15h3a2 2 0 0 1 2 2v3a1 1 0 1 1-2 0v-3H4a1 1 0 0 1 0-2zm13 0h3a1 1 0 1 1 0 2h-3v3a1 1 0 1 1-2 0v-3a2 2 0 0 1 2-2z"/></svg>
-        </button>
+        <div class="reader-more-wrap">
+          <button
+            class="icon-btn reader-action-btn reader-more-btn"
+            :class="{ 'auto-on': readerMoreOpen }"
+            :title="t('common.moreActions')"
+            :aria-label="t('common.moreActions')"
+            :aria-expanded="readerMoreOpen"
+            @click="toggleReaderMore"
+          >
+            <AppIcon name="more" :size="20" aria-hidden="true" />
+            <span class="btn-text">{{ t('common.more') }}</span>
+          </button>
+          <div v-if="readerMoreOpen" class="reader-more-menu card" role="menu">
+            <button
+              role="menuitem"
+              class="reader-more-item"
+              :class="{ 'auto-on': isBookmarked }"
+              @click="toggleBookmark(); readerMoreOpen = false"
+            >
+              <AppIcon :name="isBookmarked ? 'bookmark' : 'bookmarkBorder'" :size="18" aria-hidden="true" />
+              <span>{{ isBookmarked ? t('reader.removeBookmark') : t('reader.addBookmark') }}</span>
+            </button>
+            <button
+              role="menuitem"
+              class="reader-more-item"
+              :class="{ 'auto-on': ttsState !== 'stopped' }"
+              @click="openTTSPanel(); readerMoreOpen = false"
+            >
+              <AppIcon name="audio" :size="18" aria-hidden="true" />
+              <span>{{ t('tts.title') }}</span>
+            </button>
+            <button
+              role="menuitem"
+              class="reader-more-item"
+              :class="{ 'auto-on': ambientPanel || ambient.state.playing }"
+              @click="toggleAmbientPanel(); readerMoreOpen = false"
+            >
+              <AppIcon name="audio" :size="18" aria-hidden="true" />
+              <span>{{ t('ambient.title') }}</span>
+            </button>
+            <button
+              role="menuitem"
+              class="reader-more-item"
+              :class="{ 'auto-on': readingModeActive }"
+              @click="modes.togglePanel(); readerMoreOpen = false"
+            >
+              <AppIcon name="reading" :size="18" aria-hidden="true" />
+              <span>{{ t('readingMode.title') }}</span>
+            </button>
+            <button
+              role="menuitem"
+              class="reader-more-item"
+              :class="{ 'auto-on': isFullscreen }"
+              @click="toggleFullscreen(); readerMoreOpen = false"
+            >
+              <AppIcon :name="isFullscreen ? 'fullscreenExit' : 'fullscreen'" :size="18" aria-hidden="true" />
+              <span>{{ isFullscreen ? t('reader.exitFullscreen') : t('reader.fullscreen') }}</span>
+            </button>
+          </div>
+        </div>
       </div>
     </header>
 
@@ -3291,6 +3352,7 @@ onBeforeRouteLeave(async () => {
       <div class="progress-row">
         <button class="icon-btn chapter-btn" :title="t('reader.prevChapter')" :aria-label="t('reader.prevChapter')" @click="gotoChapter(-1)">
           <svg viewBox="0 0 24 24" width="18" height="18" aria-hidden="true"><path fill="currentColor" d="M18.7 5.3a1 1 0 0 1 0 1.4L13.42 12l5.3 5.3a1 1 0 0 1-1.42 1.4l-6-6a1 1 0 0 1 0-1.4l6-6a1 1 0 0 1 1.42 0zM7 5a1 1 0 0 1 1 1v12a1 1 0 1 1-2 0V6a1 1 0 0 1 1-1z"/></svg>
+          <span class="btn-text">{{ t('reader.prevChapter') }}</span>
         </button>
         <div class="slider-wrap">
           <input
@@ -3318,6 +3380,7 @@ onBeforeRouteLeave(async () => {
         </div>
         <button class="icon-btn chapter-btn" :title="t('reader.nextChapter')" :aria-label="t('reader.nextChapter')" @click="gotoChapter(1)">
           <svg viewBox="0 0 24 24" width="18" height="18" aria-hidden="true"><path fill="currentColor" d="M5.3 5.3a1 1 0 0 1 1.4 0l6 6a1 1 0 0 1 0 1.4l-6 6a1 1 0 0 1-1.4-1.4l5.29-5.3-5.3-5.3a1 1 0 0 1 0-1.4zM17 5a1 1 0 0 1 1 1v12a1 1 0 1 1-2 0V6a1 1 0 0 1 1-1z"/></svg>
+          <span class="btn-text">{{ t('reader.nextChapter') }}</span>
         </button>
         <button
           class="percent progress-label"
@@ -3336,23 +3399,23 @@ onBeforeRouteLeave(async () => {
       </div>
       <nav class="dock" :aria-label="t('reader.readerTools')">
         <button :class="{ active: panel === 'toc' }" @click="togglePanel('toc')">
-          <svg viewBox="0 0 24 24" width="22" height="22" aria-hidden="true"><path fill="currentColor" d="M4 6a1 1 0 0 1 1-1h1a1 1 0 0 1 0 2H5a1 1 0 0 1-1-1zm5 0a1 1 0 0 1 1-1h9a1 1 0 1 1 0 2h-9a1 1 0 0 1-1-1zM4 12a1 1 0 0 1 1-1h1a1 1 0 1 1 0 2H5a1 1 0 0 1-1-1zm5 0a1 1 0 0 1 1-1h9a1 1 0 1 1 0 2h-9a1 1 0 0 1-1-1zM4 18a1 1 0 0 1 1-1h1a1 1 0 1 1 0 2H5a1 1 0 0 1-1-1zm5 0a1 1 0 0 1 1-1h9a1 1 0 1 1 0 2h-9a1 1 0 0 1-1-1z"/></svg>
+          <AppIcon name="toc" :size="22" aria-hidden="true" />
           <span>{{ t('reader.toc') }}</span>
         </button>
         <button :class="{ active: panel === 'annotations' }" @click="togglePanel('annotations')">
-          <svg viewBox="0 0 24 24" width="22" height="22" aria-hidden="true"><path fill="currentColor" d="M4 5.5A2.5 2.5 0 0 1 6.5 3H19a1 1 0 0 1 1 1v15a2 2 0 0 1-2 2H6.5A2.5 2.5 0 0 1 4 18.5v-13zM6.5 5a.5.5 0 0 0-.5.5v11.34c.16-.05.33-.08.5-.08H18V5H6.5z"/></svg>
+          <AppIcon name="notes" :size="22" aria-hidden="true" />
           <span>{{ t('reader.dockNotes') }}</span>
         </button>
         <button :class="{ active: ttsPanel || ttsState !== 'stopped' }" @click="openTTSPanel">
-          <svg viewBox="0 0 24 24" width="22" height="22" aria-hidden="true"><path fill="currentColor" d="M12 3a7 7 0 0 0-7 7v1.1A3.5 3.5 0 0 0 3 14.5v2A3.5 3.5 0 0 0 6.5 20H8a1 1 0 0 0 1-1v-7a1 1 0 0 0-1-1h-.9A5 5 0 0 1 12 5a5 5 0 0 1 4.9 6H16a1 1 0 0 0-1 1v7a1 1 0 0 0 1 1h1.5a3.5 3.5 0 0 0 3.5-3.5v-2a3.5 3.5 0 0 0-2-3.16V10a7 7 0 0 0-7-7z"/></svg>
+          <AppIcon name="audio" :size="22" aria-hidden="true" />
           <span>{{ t('tts.title') }}</span>
         </button>
         <button :class="{ active: readingModeActive }" :aria-label="t('readingMode.title')" @click="modes.togglePanel()">
-          <svg viewBox="0 0 24 24" width="22" height="22" aria-hidden="true"><path fill="currentColor" d="M6 3h9.59L20 7.41V20a1 1 0 0 1-1 1H6a1 1 0 0 1-1-1V4a1 1 0 0 1 1-1zm1 2v14h11V8.24L14.76 5H7zm2 4h6a1 1 0 1 1 0 2H9a1 1 0 1 1 0-2zm0 4h3a1 1 0 1 1 0 2H9a1 1 0 1 1 0-2zm6 0h.5a1 1 0 0 1 1 1v2a1 1 0 1 1-2 0v-2a1 1 0 0 1 .5-1z"/></svg>
+          <AppIcon name="reading" :size="22" aria-hidden="true" />
           <span>{{ t('readingMode.dock') }}</span>
         </button>
         <button :class="{ active: settingsOpen }" @click="toggleSettings">
-          <svg viewBox="0 0 24 24" width="22" height="22" aria-hidden="true"><path fill="currentColor" d="M11.1 4.55a1 1 0 0 1 1.8 0l5.6 12.02a1 1 0 1 1-1.81.86L15.3 14.5H8.7l-1.39 2.93a1 1 0 1 1-1.8-.86L11.1 4.55zM9.64 12.5h4.72L12 7.36 9.64 12.5z"/></svg>
+          <AppIcon name="typography" :size="22" aria-hidden="true" />
           <span>{{ t('reader.dockTypography') }}</span>
         </button>
       </nav>
@@ -3806,7 +3869,7 @@ onBeforeRouteLeave(async () => {
 <style scoped>
 .reader {
   /* 底栏高度: 浮层 (自动阅读 / 听书胶囊) 在工具栏显示时让到它上方 */
-  --footer-h: 50px;
+  --footer-h: 64px;
   --safe-top: var(--lr-safe-top);
   --safe-bottom: var(--lr-safe-bottom);
   position: relative;
@@ -3824,9 +3887,7 @@ onBeforeRouteLeave(async () => {
   align-items: center;
   gap: 10px;
   padding: 8px max(14px, var(--lr-safe-right)) 8px max(14px, var(--lr-safe-left));
-  background: color-mix(in srgb, var(--card) 86%, transparent);
-  backdrop-filter: blur(12px);
-  -webkit-backdrop-filter: blur(12px);
+  background: var(--card);
   border-bottom: 1px solid var(--border);
   transition: transform 0.25s, opacity 0.25s;
   color: var(--text);
@@ -3920,8 +3981,9 @@ onBeforeRouteLeave(async () => {
   gap: 4px;
 }
 .icon-btn {
-  width: 32px;
-  height: 32px;
+  min-height: 48px;
+  min-width: 48px;
+  width: auto;
   border: none;
   background: none;
   border-radius: 6px;
@@ -3929,6 +3991,58 @@ onBeforeRouteLeave(async () => {
   display: inline-flex;
   align-items: center;
   justify-content: center;
+  gap: 6px;
+  padding: 0 10px;
+  font-size: 14px;
+  font-weight: 500;
+  cursor: pointer;
+}
+.btn-text {
+  font-size: 14px;
+  white-space: nowrap;
+}
+.reader-more-wrap {
+  position: relative;
+  display: inline-flex;
+}
+.reader-more-menu {
+  position: absolute;
+  top: calc(100% + 4px);
+  right: 0;
+  min-width: 160px;
+  padding: 4px;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  z-index: 120;
+  border: 1px solid var(--border);
+  box-shadow: var(--shadow-md);
+  border-radius: var(--radius);
+  background: var(--card);
+}
+.reader-more-item {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-height: 48px;
+  padding: 0 12px;
+  border: none;
+  background: none;
+  border-radius: var(--radius-sm);
+  color: var(--text);
+  font-size: 14px;
+  cursor: pointer;
+  text-align: left;
+  width: 100%;
+}
+.reader-more-item:hover, .reader-more-item:focus-visible {
+  background: var(--surface-2);
+  outline: none;
+}
+.reader-more-item:focus-visible { outline: 2px solid var(--brand); outline-offset: -2px; }
+.reader-more-item.auto-on {
+  color: var(--brand);
+  font-weight: 600;
 }
 .icon-btn:hover {
   background: var(--bg);
@@ -4009,14 +4123,14 @@ onBeforeRouteLeave(async () => {
   justify-content: flex-end;
   gap: 3px;
   min-width: 48px;
-  height: 30px;
-  padding: 0 8px;
+  min-height: 48px;
+  padding: 8px;
   border: none;
   border-radius: var(--radius-pill);
   background: none;
   color: var(--text-3);
   font-size: 12px;
-  line-height: 30px;
+  line-height: 1.3;
   font-variant-numeric: tabular-nums;
   white-space: nowrap;
   cursor: pointer;
@@ -4870,6 +4984,15 @@ onBeforeRouteLeave(async () => {
   display: none;
 }
 
+@media (max-width: 1023px) {
+  .bar.top { flex-wrap: wrap; gap: 6px; }
+  .book-title { flex: 1 1 120px; min-width: 0; }
+  .bar-actions { flex: 0 0 100%; width: 100%; gap: 4px; align-items: stretch; }
+  .bar-actions > .reader-action-btn, .reader-more-wrap { flex: 1; min-width: 0; }
+  .bar-actions .reader-action-btn { width: 100%; min-height: 64px; height: auto; flex-direction: column; gap: 4px; padding: 6px 4px; font-size: 13px; line-height: 1.3; white-space: normal; }
+  .bar-actions .btn-text { max-width: 100%; font-size: 13px; white-space: normal; overflow-wrap: anywhere; text-align: center; }
+}
+
 @media (max-width: 600px) {
   /* 手机页眉留白较窄 (见 applyPrefs 的 margin) */
   .tts-mini {
@@ -4886,7 +5009,7 @@ onBeforeRouteLeave(async () => {
     padding: 0 4px;
   }
   .reader {
-    --footer-h: 112px;
+    --footer-h: 148px;
   }
   .chapter,
   .desk-only {
@@ -4901,10 +5024,14 @@ onBeforeRouteLeave(async () => {
     padding-bottom: 6px;
   }
   .icon-btn {
-    width: 40px;
-    height: 40px;
+    width: auto;
+    min-height: 48px;
+    height: auto;
+    padding: 8px 10px;
     border-radius: 10px;
   }
+  .chapter-btn { width: 76px; min-width: 76px; min-height: 60px; flex-direction: column; gap: 2px; padding: 6px 4px; font-size: 12px; line-height: 1.2; white-space: normal; }
+  .chapter-btn .btn-text { max-width: 100%; font-size: 12px; white-space: normal; overflow-wrap: anywhere; text-align: center; }
   .icon-btn:hover {
     background: none;
     color: var(--text-2);
@@ -4945,7 +5072,8 @@ onBeforeRouteLeave(async () => {
   .dock button {
     flex: 1;
     min-width: 0;
-    height: 54px;
+    min-height: 64px;
+    padding: 4px 2px;
     border: none;
     border-radius: 10px;
     background: none;
@@ -4954,9 +5082,11 @@ onBeforeRouteLeave(async () => {
     flex-direction: column;
     align-items: center;
     justify-content: center;
-    gap: 3px;
-    font-size: 11px;
+    gap: 4px;
+    font-size: 13px;
+    line-height: 1.3;
   }
+  .dock button span { max-width: 100%; white-space: normal; overflow-wrap: anywhere; text-align: center; }
   .dock button:active {
     background: var(--surface-2);
   }

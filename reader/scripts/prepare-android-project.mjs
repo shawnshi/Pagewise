@@ -58,6 +58,18 @@ export function prepareAndroidProject(base = root, { replace = renameSync, resto
   if (config.identifier !== 'io.pagewise.reader') throw new Error('Unexpected Android application identity')
   if (typeof config.productName !== 'string' || !config.productName.trim() || /[\x00-\x1f]/.test(config.productName)) throw new Error('Invalid Android product name')
   const project = join(base, 'src-tauri/gen/android')
+  const pkg = JSON.parse(regularFile(join(base, 'package.json')).toString('utf8'))
+  if (pkg.scripts?.android !== 'tauri android') throw new Error('Unsupported Android npm entry')
+  const bridgePath = join(project, 'buildSrc/src/main/java/io/pagewise/reader/kotlin/BuildTask.kt')
+  const bridge = regularFile(bridgePath).toString('utf8')
+  const legacyArgs = 'listOf("run", "--", "tauri", "android", "android-studio-script")'
+  const androidArgs = 'listOf("run", "--", "android", "android-studio-script")'
+  const argLines = [...bridge.matchAll(/^[ \t]*val args = (listOf\([^\r\n]*\));?[ \t]*\r?$/gm)]
+  if (!bridge.includes('val executable = """npm"""') || argLines.length !== 1 || ![legacyArgs, androidArgs].includes(argLines[0][1])) {
+    throw new Error('Unsupported native build bridge')
+  }
+  // Generated Tauri assumes a generic npm script removed by this Android-only fork.
+  const preparedBridge = bridge.replace(legacyArgs, androidArgs)
   const resources = join(project, 'app/src/main/res')
   const activity = join(project, 'app/src/main/java', ...config.identifier.split('.'), 'MainActivity.kt')
   const strings = join(resources, 'values/strings.xml')
@@ -65,6 +77,13 @@ export function prepareAndroidProject(base = root, { replace = renameSync, resto
   const template = regularFile(join(base, 'src-tauri/android/MainActivity.kt'))
   const kotlin = template.toString('utf8')
   if (!/^package io\.pagewise\.reader\s*\r?\n/.test(kotlin) || !/class MainActivity\s*:\s*TauriActivity\(\)/.test(kotlin) || /LightReadUpdater|UpdaterBridge|REQUEST_INSTALL_PACKAGES/.test(kotlin)) throw new Error('Invalid MainActivity template')
+  const nativeFolderTemplates = readdirSync(join(base, 'src-tauri/android')).filter(name => name !== 'MainActivity.kt' && name.endsWith('.kt')).map(name => {
+    if (name !== 'MonitoredFolderPlugin.kt') throw new Error(`Unsupported Android template: ${name}`)
+    const data = regularFile(join(base, 'src-tauri/android', name))
+    const source = data.toString('utf8')
+    if (!/^package io\.pagewise\.reader\s*\r?\n/.test(source) || !/class MonitoredFolderPlugin\b/.test(source) || !/@TauriPlugin\b/.test(source)) throw new Error('Invalid monitored-folder template')
+    return { path: join(dirname(activity), name), data }
+  })
   const currentStrings = regularFile(strings).toString('utf8')
   const currentManifest = regularFile(manifest).toString('utf8')
   validateXml(currentStrings, 'resources')
@@ -84,7 +103,7 @@ export function prepareAndroidProject(base = root, { replace = renameSync, resto
   validateXml(nextManifest, 'manifest')
   const icons = iconFiles(join(base, 'src-tauri/icons/android'), resources)
   if (!icons.length) throw new Error('Android branding resources are missing')
-  const entries = [...icons, { path: activity, data: template }, { path: strings, data: Buffer.from(values) }, { path: manifest, data: Buffer.from(nextManifest) }]
+  const entries = [...icons, { path: activity, data: template }, ...nativeFolderTemplates, { path: strings, data: Buffer.from(values) }, { path: manifest, data: Buffer.from(nextManifest) }, { path: bridgePath, data: Buffer.from(preparedBridge) }]
   // Snapshot and validate every destination before creating directories or staging.
   for (const entry of entries) {
     entry.previous = existsSync(entry.path) ? regularFile(entry.path) : null

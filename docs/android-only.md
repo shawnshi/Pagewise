@@ -1,6 +1,6 @@
 # Android-only 平台收敛（历史阶段记录）
 
-> 以下记录平台收敛当时的范围，不是当前功能清单。后续已移除歌词、BabelDOC、书源/Calibre、账号同步、互传、更新及论文 CLI Agent；当前格式、数据兼容和验收状态以 [实施方案](implementation-plan.md) 为准。没有操作已部署服务或远端数据。
+> 历史快照：以下记录平台收敛当时的范围，不是当前功能或安装指令。当前产品范围见[项目说明](../readme.md)，当前结果见[验证状态](validation-status.md)，安装前遵循[设备准入](device-admission.md)。下文的旧规划或原型 PASS 不代表当前安装包已通过验收。
 
 此阶段支持范围：**只维护 Android 应用**，目标为文石 Note X3 Pro / ARM64。`io.pagewise.reader[.debug]`、知页名称、Logo 原件和 `1.15.0` 版本保留。本轮不等于离线加固、阅读功能重写或 APK 已交付。
 

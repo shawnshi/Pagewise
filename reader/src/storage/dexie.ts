@@ -4,10 +4,11 @@ import type {
   AnnotationRec, BooklistRec, BooklistWantedRec, BookMeta, CatalogSourceRec, LibraryStorage, NewBookMeta,
 } from './types'
 import { BUILTIN_SOURCES, newId } from './types'
+import { readReferencedFile, validateSourceRef, validateAvailability } from './sourceFile'
 
 interface BookRow extends BookMeta {
   /** Safari 的 IndexedDB 存 Blob 会报错, 统一存 ArrayBuffer */
-  file: ArrayBuffer
+  file?: ArrayBuffer
   cover?: ArrayBuffer
 }
 
@@ -87,6 +88,8 @@ export class DexieStorage implements LibraryStorage {
   }
 
   async addBook(meta: NewBookMeta, file: Blob, cover?: Blob) {
+    if (meta.sourceRef) throw new Error('Use addReferencedBook for source documents')
+    validateAvailability(meta.fileAvailability)
     const id = newId()
     await this.db.books.add({
       ...meta,
@@ -98,8 +101,20 @@ export class DexieStorage implements LibraryStorage {
     return id
   }
 
+  async addReferencedBook(meta: NewBookMeta & { sourceRef: NonNullable<BookMeta['sourceRef']> }, cover?: Blob) {
+    const sourceRef = validateSourceRef(meta.sourceRef)
+    validateAvailability(meta.fileAvailability)
+    const id = newId()
+    await this.db.books.add({ ...meta, sourceRef, id, hasCover: !!cover,
+      cover: cover ? await cover.arrayBuffer() : undefined })
+    return id
+  }
+
   async updateBook(id: string, patch: Partial<Omit<BookMeta, 'id'>>) {
-    await this.db.books.update(id, patch)
+    if (patch.sourceRef !== undefined) validateSourceRef(patch.sourceRef)
+    validateAvailability(patch.fileAvailability)
+    const changed = await this.db.books.update(id, patch)
+    if (!changed) throw new Error('Book not found')
   }
 
   async deleteBook(id: string) {
@@ -118,6 +133,8 @@ export class DexieStorage implements LibraryStorage {
   async getBookFile(id: string) {
     const row = await this.db.books.get(id)
     if (!row) throw new Error('书籍不存在')
+    if (row.sourceRef) return readReferencedFile(row.sourceRef)
+    if (!row.file) throw new Error('Book file is missing or corrupt')
     return toBlob(row.file)
   }
 

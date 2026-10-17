@@ -14,11 +14,11 @@ export const router = createRouter({
     { path: '/reading', component: () => import('../views/ReadingView.vue') },
     { path: '/book/:id', component: () => import('../views/BookDetailView.vue') },
     { path: '/notes', component: () => import('../views/NotesView.vue') },
-    { path: '/papers', component: () => import('../views/LibraryView.vue'), meta: { kind: 'paper' } },
-    { path: '/read-paper/:id', component: () => import('../views/PaperReaderView.vue') },
+    // 论文功能已退休, 旧路由重定向至藏书与通用 PDF 阅读
+    { path: '/papers', redirect: '/library' },
+    { path: '/read-paper/:id', redirect: to => ({ path: `/read-pdf/${encodeURIComponent(String(to.params.id))}`, query: to.query, hash: to.hash }) },
+    { path: '/read-pdf/:id', component: () => import('../views/PdfReaderView.vue') },
     { path: '/read/:id', component: () => import('../views/ReaderView.vue') },
-    // 旧版 /read-pdf 已并入论文阅读器 (PDF 统一引擎)
-    { path: '/read-pdf/:id', redirect: to => `/read-paper/${to.params.id}` },
     { path: '/read-djvu/:id', redirect: '/library' },
     { path: '/catalogs', redirect: '/library' },
     { path: '/stats', component: () => import('../views/StatsView.vue') },
@@ -28,7 +28,9 @@ export const router = createRouter({
   ],
 })
 
-router.afterEach(to => {
+router.afterEach((to, _from, failure) => {
+  // A consumed Back or blocked leave did not commit the target route.
+  if (failure) return
   try { rememberView(to.path, localStorage) }
   catch { console.warn('Pagewise: last view could not be persisted') }
 })
@@ -38,7 +40,7 @@ router.beforeEach(async (to) => {
     toast(t('book.unsupportedFormat', { format: 'djvu' }), 'error')
     return '/library'
   }
-  if (to.path.startsWith('/read/') || to.path.startsWith('/read-paper/')) {
+  if (to.path.startsWith('/read/') || to.path.startsWith('/read-pdf/') || to.path.startsWith('/read-paper/')) {
     const id = to.params.id as string
     if (id) {
       try {

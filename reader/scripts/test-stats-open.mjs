@@ -116,7 +116,7 @@ for (const format of ['epub', 'mobi', 'pdf', 'txt', 'md']) test(`stats continues
   const record = book(format)
   const view = statsView([record])
   view.state.openBook(record)
-  assert.deepEqual(view.paths, [`${format === 'pdf' ? '/read-paper/' : '/read/'}${record.id}`])
+  assert.deepEqual(view.paths, [`${format === 'pdf' ? '/read-pdf/' : '/read/'}${record.id}`])
   assert.deepEqual(view.notices, [])
 })
 

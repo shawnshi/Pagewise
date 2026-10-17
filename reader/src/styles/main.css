@@ -78,7 +78,7 @@
   /* 触控 */
   --control-h: 36px;
   --control-h-sm: 30px;
-  --tap-min: 44px;
+  --tap-min: 48px;
 
   --font: -apple-system, BlinkMacSystemFont, 'PingFang SC', 'Segoe UI',
     'Microsoft YaHei', 'Helvetica Neue', Arial, sans-serif;

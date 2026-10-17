@@ -1,5 +1,7 @@
 # UI v0.2 集成与验收
 
+> 历史快照：本文件保留当时的计划或执行记录，不作为当前功能、验收状态或安装指令。当前实现以[项目说明](../readme.md)、[验证状态](validation-status.md)和[设备准入](device-admission.md)为准。
+
 ## 当前结论
 
 主机端代码已集成并通过回归。独立初审的两项 P1 和一项 P2 已修复并完成定向验证；独立复核未发现新问题，代码合并建议为 OK with notes。Android Rust 库已编译，但限时 Gradle 构建尚未产出 APK，NoteX3Pro 实机验收未完成。源码同步不等于 APK 发布或真机验收通过。

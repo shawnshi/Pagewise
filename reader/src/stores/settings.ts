@@ -1,5 +1,6 @@
 import { defineStore } from 'pinia'
 import { watch } from 'vue'
+import { normalizeAiProfiles, providerById, type AiProviderProfile } from '../services/aiProviders.ts'
 import type { TypographyApplyPayload } from '../services/readerTypography.ts'
 import { DIM_MAX } from '../services/readingModes/eyeCare.ts'
 import { isTauri } from '../storage/types.ts'
@@ -440,6 +441,8 @@ interface SettingsState {
   aiBaseUrl: string
   aiApiKey: string
   aiModel: string
+  /** 每个服务商独立保存; 当前表单字段仍是活动配置的唯一来源。 */
+  aiProfiles: Record<string, AiProviderProfile>
   /** 阅读记录: 每日阅读目标 (分钟), 0 表示不设目标 */
   dailyGoalMinutes: number
   /** 点睛阅读 */
@@ -496,6 +499,7 @@ const defaults: SettingsState = {
   aiBaseUrl: 'https://lightread-ai.jiangshu.ai/v1',
   aiApiKey: '',
   aiModel: 'deepseek-ai/DeepSeek-V4-Flash',
+  aiProfiles: {},
   dailyGoalMinutes: 30,
   dianjing: {
     level: 'basic',
@@ -591,6 +595,7 @@ function load(): SettingsState {
     const merged = {
       ...structuredClone(defaults),
       ...saved,
+      aiProfiles: normalizeAiProfiles(saved.aiProfiles),
       reader: { ...defaults.reader, ...saved.reader },
       pdf: { ...defaults.pdf, ...saved.pdf },
       typographyLanguages: normalizeTypographyLanguages(saved.typographyLanguages),
@@ -631,14 +636,7 @@ function load(): SettingsState {
     if ((saved.version ?? 1) < 11 && (saved.edgeVoice ?? 'zh-CN-XiaoxiaoNeural') === 'zh-CN-XiaoxiaoNeural') {
       merged.edgeVoice = 'zh-TW-HsiaoChenNeural'
     }
-    // v12: AI 默认改为内置试用通道 (免配置, 模型 DeepSeek-V4-Flash); 还停在旧默认且没填密钥的 (实际用不了) 一并迁入。
-    // 内置通道迁到 jiangshu 账号 (lightread-ai.jiangshu.ai), 旧地址不认新模型名, 已在用内置通道的一并改地址与模型。
-    const onOldDefault = (saved.aiProvider ?? 'siliconflow') === 'siliconflow' && !(saved.aiApiKey ?? '').trim()
-    if ((saved.version ?? 1) < 12 && (onOldDefault || saved.aiProvider === 'trial')) {
-      merged.aiProvider = 'trial'
-      merged.aiBaseUrl = defaults.aiBaseUrl
-      merged.aiModel = defaults.aiModel
-    }
+    // Preserve saved AI endpoints/models even for pre-v12 settings; switching is explicit.
     // v13: 分明阅读 (原仿生阅读) 默认色改为玫瑰; v1.13.1 写入的旧默认 teal 视为未显式选择, 一并迁入。
     if ((saved.version ?? 1) < 13 && (saved.readingMode?.wordGuide?.color ?? 'teal') === 'teal') {
       merged.readingMode.wordGuide.color = 'rose'
@@ -662,6 +660,23 @@ function load(): SettingsState {
 export const useSettings = defineStore('settings', {
   state: (): SettingsState => load(),
   actions: {
+    selectAiProvider(id: string) {
+      const preset = providerById(id)
+      if (id === this.aiProvider) return
+      const current: AiProviderProfile = {
+        baseUrl: this.aiBaseUrl, apiKey: this.aiApiKey, model: this.aiModel,
+      }
+      const next = this.aiProfiles[id] ?? {
+        baseUrl: preset.baseUrl, apiKey: '', model: preset.defaultModel,
+      }
+      this.$patch({
+        aiProfiles: { ...this.aiProfiles, [this.aiProvider]: current },
+        aiProvider: id,
+        aiBaseUrl: next.baseUrl,
+        aiApiKey: next.apiKey,
+        aiModel: next.model,
+      })
+    },
     persistOnChange() {
       let timer: ReturnType<typeof setTimeout> | undefined
       watch(

@@ -3,6 +3,8 @@ compile_error!("Pagewise supports Android only");
 
 mod edge_tts;
 mod fonts;
+#[cfg(target_os = "android")]
+mod monitored_folder;
 
 use std::{collections::HashSet, path::Path, sync::Mutex};
 use tauri::{Emitter, Manager};
@@ -134,11 +136,17 @@ pub fn run() {
         .invoke_handler(tauri::generate_handler![
             take_open_files,
             read_open_file,
+            monitored_folder::get_monitored_folder,
+            monitored_folder::select_monitored_folder,
+            monitored_folder::list_monitored_files,
+            monitored_folder::read_monitored_file,
+            monitored_folder::watch_monitored_folder,
             edge_tts::edge_tts_synthesize,
             fonts::list_system_fonts
         ])
         .plugin(tauri_plugin_sql::Builder::new().build())
         .plugin(tauri_plugin_fs::init())
+        .plugin(monitored_folder::init())
         .plugin(tauri_plugin_http::init())
         .plugin(tauri_plugin_dialog::init())
         .plugin(tauri_plugin_opener::init())

@@ -1,95 +1,15 @@
 /**
  * 阅读 AI 助手: 统一走 OpenAI 兼容的 chat/completions 接口。
- *  - 预设: 硅基流动 (免费模型) / 智谱 GLM-4-Flash (免费) / 豆包 (火山方舟) /
- *    本地 Ollama / 自定义
+ *  - 预设见 aiProviders.ts (含 Google Gemini), 不在 provider 之间回退
  *  - 桌面端经 Rust HTTP (支持代理, 无 CORS 限制), Web 端直接 fetch
  *  - SSE 流式输出
  */
 import { fetchRemote } from './net'
 import { useSettings } from '../stores/settings'
+import { AI_PROVIDERS, providerById, TRIAL_BASE_URL } from './aiProviders.ts'
 
-export interface AiProviderPreset {
-  id: string
-  /** 展示名 (含免费标注) */
-  label: string
-  baseUrl: string
-  defaultModel: string
-  /** 是否需要 API Key */
-  needsKey: boolean
-  /** 申请 Key 的入口 */
-  docsUrl?: string
-}
-
-/** 内置试用通道 (Cloudflare Worker 中转, 密钥在服务端): 开箱即用, 有限速 */
-export const TRIAL_BASE_URL = 'https://lightread-ai.jiangshu.ai/v1'
-
-export const AI_PROVIDERS: AiProviderPreset[] = [
-  {
-    id: 'trial',
-    label: '内置试用通道',
-    baseUrl: TRIAL_BASE_URL,
-    // 服务端转发到 SiliconFlow DeepSeek-V4-Flash (关思考); 旧客户端的 glm-4.7-flash 由 relay 映射到同一模型
-    defaultModel: 'deepseek-ai/DeepSeek-V4-Flash',
-    needsKey: false,
-  },
-  {
-    id: 'siliconflow',
-    label: '硅基流动 SiliconFlow',
-    baseUrl: 'https://api.siliconflow.cn/v1',
-    defaultModel: 'deepseek-ai/DeepSeek-V4-Flash',
-    needsKey: true,
-    docsUrl: 'https://cloud.siliconflow.cn/i/TxUlXG3u',
-  },
-  {
-    id: 'zhipu',
-    label: '智谱 GLM',
-    baseUrl: 'https://open.bigmodel.cn/api/paas/v4',
-    defaultModel: 'glm-4-flash',
-    needsKey: true,
-    docsUrl: 'https://open.bigmodel.cn/usercenter/apikeys',
-  },
-  {
-    id: 'qwen',
-    label: '阿里云千问 (百炼)',
-    baseUrl: 'https://dashscope.aliyuncs.com/compatible-mode/v1',
-    defaultModel: 'qwen-plus',
-    needsKey: true,
-    docsUrl: 'https://bailian.console.aliyun.com/?apiKey=1',
-  },
-  {
-    id: 'kimi',
-    label: 'Kimi (月之暗面)',
-    baseUrl: 'https://api.moonshot.cn/v1',
-    defaultModel: 'moonshot-v1-8k',
-    needsKey: true,
-    docsUrl: 'https://platform.moonshot.cn/console/api-keys',
-  },
-  {
-    id: 'doubao',
-    label: '豆包 (火山方舟)',
-    baseUrl: 'https://ark.cn-beijing.volces.com/api/v3',
-    defaultModel: '',
-    needsKey: true,
-    docsUrl: 'https://console.volcengine.com/ark',
-  },
-  {
-    id: 'ollama',
-    label: '本地模型 (Ollama)',
-    baseUrl: 'http://127.0.0.1:11434/v1',
-    defaultModel: 'qwen2.5:7b',
-    needsKey: false,
-  },
-  {
-    id: 'custom',
-    label: 'OpenAI 兼容自定义',
-    baseUrl: '',
-    defaultModel: '',
-    needsKey: false,
-  },
-]
-
-export const providerById = (id: string) =>
-  AI_PROVIDERS.find(p => p.id === id) ?? AI_PROVIDERS[0]
+export { AI_PROVIDERS, providerById, TRIAL_BASE_URL } from './aiProviders.ts'
+export type { AiProviderPreset, AiProviderProfile } from './aiProviders.ts'
 
 export interface AiMessage {
   role: 'system' | 'user' | 'assistant'
@@ -118,6 +38,7 @@ function deviceId(): string {
 /** AI 是否已完成必要配置 */
 export function aiConfigured(): boolean {
   const s = useSettings()
+  if (!AI_PROVIDERS.some(p => p.id === s.aiProvider)) return false
   const preset = providerById(s.aiProvider)
   if (!s.aiBaseUrl.trim() || !s.aiModel.trim()) return false
   if (preset.needsKey && !s.aiApiKey.trim()) return false
@@ -132,7 +53,12 @@ export async function* chatStream(
   messages: AiMessage[],
   signal?: AbortSignal,
 ): AsyncGenerator<string> {
+  signal?.throwIfAborted()
   const s = useSettings()
+  const preset = providerById(s.aiProvider)
+  if (!s.aiBaseUrl.trim()) throw new Error('AI configuration: base URL is required')
+  if (!s.aiModel.trim()) throw new Error('AI configuration: model is required')
+  if (preset.needsKey && !s.aiApiKey.trim()) throw new Error('AI configuration: API key is required')
   const url = s.aiBaseUrl.trim().replace(/\/+$/, '') + '/chat/completions'
   const res = await fetchRemote(url, undefined, {
     method: 'POST',
@@ -141,7 +67,7 @@ export async function* chatStream(
       accept: 'text/event-stream, application/json',
       ...(s.aiApiKey.trim() ? { authorization: `Bearer ${s.aiApiKey.trim()}` } : {}),
       // 试用通道: 携带匿名设备标识用于每日配额
-      ...(s.aiBaseUrl.startsWith(TRIAL_BASE_URL) ? { 'x-device-id': deviceId() } : {}),
+      ...(preset.id === 'trial' && s.aiBaseUrl.trim().replace(/\/+$/, '') === TRIAL_BASE_URL ? { 'x-device-id': deviceId() } : {}),
     },
     body: JSON.stringify({
       model: s.aiModel.trim(),
@@ -152,6 +78,7 @@ export async function* chatStream(
     signal,
     raw: true,
   })
+  signal?.throwIfAborted()
   if (!res.ok) {
     const text = (await res.text().catch(() => '')).slice(0, 300)
     throw new Error(`${res.status} ${text || res.statusText}`)
@@ -161,6 +88,7 @@ export async function* chatStream(
   // 服务端不支持流式 (返回整段 JSON)
   if (contentType.includes('application/json')) {
     const data = await res.json()
+    signal?.throwIfAborted()
     const content = data?.choices?.[0]?.message?.content
     if (content) yield String(content)
     return
@@ -168,29 +96,44 @@ export async function* chatStream(
 
   const reader = res.body?.getReader?.()
   if (!reader) {
-    const data = JSON.parse(await res.text())
+    const data = await res.json()
+    signal?.throwIfAborted()
     const content = data?.choices?.[0]?.message?.content
     if (content) yield String(content)
     return
   }
   const decoder = new TextDecoder()
   let buffer = ''
-  for (;;) {
-    const { done, value } = await reader.read()
-    if (done) break
-    buffer += decoder.decode(value, { stream: true })
-    const lines = buffer.split('\n')
-    buffer = lines.pop() ?? ''
-    for (const line of lines) {
-      const trimmed = line.trim()
-      if (!trimmed.startsWith('data:')) continue
-      const payload = trimmed.slice(5).trim()
-      if (payload === '[DONE]') return
-      try {
-        const delta = JSON.parse(payload)?.choices?.[0]?.delta?.content
+  // Cancel pending reads even when a transport does not bind its stream to the signal.
+  const onAbort = () => { void reader.cancel().catch(() => {}) }
+  signal?.addEventListener('abort', onAbort, { once: true })
+  try {
+    for (;;) {
+      signal?.throwIfAborted()
+      const { done, value } = await reader.read()
+      signal?.throwIfAborted()
+      buffer += done ? decoder.decode() : decoder.decode(value, { stream: true })
+      const lines = buffer.split('\n')
+      buffer = done ? '' : (lines.pop() ?? '')
+      for (const line of lines) {
+        signal?.throwIfAborted()
+        const trimmed = line.trim()
+        if (!trimmed.startsWith('data:')) continue
+        const payload = trimmed.slice(5).trim()
+        if (payload === '[DONE]') return
+        let delta: unknown
+        try {
+          delta = JSON.parse(payload)?.choices?.[0]?.delta?.content
+        } catch { continue /* Preserve compatibility with malformed SSE heartbeats. */ }
         if (delta) yield String(delta)
-      } catch { /* 跳过无法解析的行 (注释/心跳) */ }
+      }
+      if (done) break
     }
+  } finally {
+    signal?.removeEventListener('abort', onAbort)
+    // Cleanup errors must not hide the original transport/abort failure.
+    try { await reader.cancel() } catch { /* Already failed or cancelled. */ }
+    reader.releaseLock()
   }
 }
 

@@ -18,7 +18,6 @@ for (const ext of retired) test(`retired extension rejected: ${ext}`, () => {
   assert.equal(format.detectFormat(`book.${ext}`), null)
   assert.equal(format.detectFormat(`BOOK.${ext.toUpperCase()}`), null)
   assert.equal(format.isSupportedBookFormat(ext), false)
-  assert.equal(format.canConvertToEpub(ext), false)
   assert.equal(format.isFoliateNative(ext), false)
   assert.equal(format.isTextLike(ext), false)
   assert.ok(!format.ACCEPT.split(',').includes(`.${ext}`))
@@ -37,7 +36,8 @@ test('supported values reject malformed metadata and unknown extensions', () => 
     assert.equal(format.detectFormat(name), null)
   }
   assert.deepEqual(format.SUPPORTED_EXTS, Object.keys(active))
-  assert.deepEqual(format.EPUB_CONVERTIBLE, ['mobi', 'txt', 'md'])
+  assert.equal('canConvertToEpub' in format, false)
+  assert.equal('EPUB_CONVERTIBLE' in format, false)
 })
 test('legacy metadata has labels but cannot produce reader routes', async () => {
   const { readerPath } = await loadBoundary('../src/services/readerRoute.ts')
@@ -45,7 +45,7 @@ test('legacy metadata has labels but cannot produce reader routes', async () => 
     assert.equal(typeof format.FORMAT_LABELS[value], 'string')
     assert.throws(() => readerPath({ id: 'legacy', format: value }), /Unsupported/)
   }
-  assert.equal(readerPath({ id: 'paper', format: 'pdf' }), '/read-paper/paper')
+  assert.equal(readerPath({ id: 'paper', format: 'pdf' }), '/read-pdf/paper')
   for (const value of ['epub', 'mobi', 'txt', 'md']) {
     assert.equal(readerPath({ id: 'active', format: value }), '/read/active')
   }
@@ -58,12 +58,13 @@ test('native parser rejects retired formats before loading foliate', async () =>
 })
 test('shared XHTML writer and Markdown HTML conversion remain in source', async () => {
   const text = await readFile(new URL('../src/services/textToEpub.ts', import.meta.url), 'utf8')
-  const writer = await readFile(new URL('../src/services/bookToEpub.ts', import.meta.url), 'utf8')
+  const writer = await readFile(new URL('../src/services/epubWriter.ts', import.meta.url), 'utf8')
   assert.match(text, /marked\.parse\(md/)
   assert.match(text, /toWellFormedBody\(html\)/)
   assert.match(text, /application\/xhtml\+xml/)
   assert.match(text, /format !== 'txt' && format !== 'md'/)
   assert.doesNotMatch(text, /htmlTitle|format: 'txt' \| 'md' \| 'html'/)
-  assert.match(writer, /new DOMParser/)
-  assert.match(writer, /parseDoc\(/)
+  assert.match(text, /new DOMParser/)
+  assert.match(writer, /function zipEpub\(/)
+  assert.match(writer, /function buildOpf\(/)
 })

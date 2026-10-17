@@ -8,6 +8,7 @@ import type {
 } from './types'
 import { BUILTIN_SOURCES, getLibraryRoot, newId } from './types'
 import { isReadingStatus } from '../services/readingStatus'
+import { readReferencedFile, validateSourceRef, validateAvailability } from './sourceFile'
 
 type SqlDatabase = {
   execute(sql: string, values?: unknown[]): Promise<{ rowsAffected: number }>
@@ -29,6 +30,10 @@ interface BookRow {
   progress: number | null
   source: string | null
   reading_status: string | null
+  publisher: string | null
+  publication_date: string | null
+  source_ref: string | null
+  file_availability: string | null
   has_cover: number
   reading_seconds: number | null
   pinned_at: number | null
@@ -43,6 +48,10 @@ const rowToMeta = (r: BookRow): BookMeta => ({
   fileName: r.file_name,
   description: r.description ?? undefined,
   language: r.language ?? undefined,
+  publisher: r.publisher ?? undefined,
+  publicationDate: r.publication_date ?? undefined,
+  sourceRef: r.source_ref == null ? undefined : validateSourceRef(JSON.parse(r.source_ref)),
+  fileAvailability: validateAvailability(r.file_availability),
   tags: JSON.parse(r.tags || '[]'),
   addedAt: r.added_at,
   lastReadAt: r.last_read_at ?? undefined,
@@ -64,6 +73,9 @@ const META_COLUMNS: Record<string, string> = {
   fileName: 'file_name',
   description: 'description',
   language: 'language',
+  publisher: 'publisher',
+  publicationDate: 'publication_date',
+  fileAvailability: 'file_availability',
   lastReadAt: 'last_read_at',
   location: 'location',
   progress: 'progress',
@@ -172,24 +184,27 @@ export class TauriStorage implements LibraryStorage {
       }
     }
 
-    // 列迁移: 旧库补充新增字段
-    for (const ddl of [
-      "ALTER TABLE sources ADD COLUMN kind TEXT NOT NULL DEFAULT 'opds'",
-      'ALTER TABLE sources ADD COLUMN username TEXT',
-      'ALTER TABLE sources ADD COLUMN password TEXT',
-      'ALTER TABLE sources ADD COLUMN updated_at INTEGER',
-      "ALTER TABLE annotations ADD COLUMN kind TEXT NOT NULL DEFAULT 'highlight'",
-      'ALTER TABLE books ADD COLUMN reading_seconds INTEGER NOT NULL DEFAULT 0',
-      'ALTER TABLE books ADD COLUMN pinned_at INTEGER',
-      "ALTER TABLE books ADD COLUMN kind TEXT NOT NULL DEFAULT 'book'",
-    ]) {
-      await this.db.execute(ddl).catch(() => { /* 列已存在 */ })
-    }
-
-    // Reading state must not report success if its additive column cannot be established.
-    const columns = await this.db.select<Array<{ name: string }>>('PRAGMA table_info(books)')
-    if (!columns.some(column => column.name === 'reading_status')) {
-      await this.db.execute('ALTER TABLE books ADD COLUMN reading_status TEXT')
+    // Inspect before ALTER: duplicate columns are harmless; other migration failures are not.
+    const migrations = [
+      ['PRAGMA table_info(sources)', [
+        "ALTER TABLE sources ADD COLUMN kind TEXT NOT NULL DEFAULT 'opds'",
+        'ALTER TABLE sources ADD COLUMN username TEXT', 'ALTER TABLE sources ADD COLUMN password TEXT',
+        'ALTER TABLE sources ADD COLUMN updated_at INTEGER',
+      ]],
+      ['PRAGMA table_info(annotations)', ["ALTER TABLE annotations ADD COLUMN kind TEXT NOT NULL DEFAULT 'highlight'"]],
+      ['PRAGMA table_info(books)', [
+        'ALTER TABLE books ADD COLUMN reading_seconds INTEGER NOT NULL DEFAULT 0',
+        'ALTER TABLE books ADD COLUMN pinned_at INTEGER', "ALTER TABLE books ADD COLUMN kind TEXT NOT NULL DEFAULT 'book'",
+        'ALTER TABLE books ADD COLUMN reading_status TEXT', 'ALTER TABLE books ADD COLUMN publisher TEXT',
+        'ALTER TABLE books ADD COLUMN publication_date TEXT', 'ALTER TABLE books ADD COLUMN source_ref TEXT',
+        'ALTER TABLE books ADD COLUMN file_availability TEXT',
+      ]],
+    ] as const
+    for (const [query, statements] of migrations) {
+      const columns = await this.db.select<Array<{ name: string }>>(query)
+      for (const ddl of statements) {
+        if (!columns.some(column => column.name === ddl.split(' ')[5])) await this.db.execute(ddl)
+      }
     }
 
     // 内置书源与代码中的清单同步 (处理内置源的增删调整)
@@ -232,9 +247,20 @@ export class TauriStorage implements LibraryStorage {
   }
 
   async addBook(meta: NewBookMeta, file: Blob, cover?: Blob) {
+    if (meta.sourceRef) throw new Error('Use addReferencedBook for source documents')
+    return this.insertBook(meta, file, cover)
+  }
+
+  async addReferencedBook(meta: NewBookMeta & { sourceRef: NonNullable<BookMeta['sourceRef']> }, cover?: Blob) {
+    validateSourceRef(meta.sourceRef)
+    return this.insertBook(meta, undefined, cover)
+  }
+
+  private async insertBook(meta: NewBookMeta, file?: Blob, cover?: Blob) {
     if (meta.readingStatus !== undefined && !isReadingStatus(meta.readingStatus)) throw new Error('Invalid reading status')
+    validateAvailability(meta.fileAvailability)
     const id = newId()
-    {
+    if (file) {
       const [path, opts] = this.loc(this.bookPath(id, meta.fileName))
       await this.fs.writeFile(path, new Uint8Array(await file.arrayBuffer()), opts)
     }
@@ -245,23 +271,27 @@ export class TauriStorage implements LibraryStorage {
     await this.db.execute(
       `INSERT INTO books (id, title, author, format, file_name, description, language,
         tags, added_at, last_read_at, location, progress, source, has_cover, kind,
-        reading_seconds, pinned_at, reading_status)
-       VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18)`,
+        reading_seconds, pinned_at, reading_status, publisher, publication_date, source_ref, file_availability)
+       VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19,$20,$21,$22)`,
       [id, meta.title, meta.author, meta.format, meta.fileName,
         meta.description ?? null, meta.language ?? null, JSON.stringify(meta.tags),
         meta.addedAt, meta.lastReadAt ?? null, meta.location ?? null,
         meta.progress ?? null, meta.source ?? null, cover ? 1 : 0,
         meta.kind === 'paper' ? 'paper' : 'book',
-        Math.round(meta.readingSeconds ?? 0), meta.pinnedAt || null, meta.readingStatus ?? null])
+        Math.round(meta.readingSeconds ?? 0), meta.pinnedAt || null, meta.readingStatus ?? null,
+        meta.publisher ?? null, meta.publicationDate ?? null,
+        meta.sourceRef ? JSON.stringify(meta.sourceRef) : null, meta.fileAvailability ?? null])
     return id
   }
 
   async updateBook(id: string, patch: Partial<Omit<BookMeta, 'id'>>) {
     if (patch.readingStatus !== undefined && !isReadingStatus(patch.readingStatus)) throw new Error('Invalid reading status')
+    if (patch.sourceRef !== undefined) validateSourceRef(patch.sourceRef)
+    validateAvailability(patch.fileAvailability)
     // 文件路径的扩展名取自 fileName: 同步改了文件名 (扩展名不同) 时把文件挪到新路径
     if (typeof patch.fileName === 'string') {
       const old = await this.getBook(id)
-      const from = old && this.bookPath(id, old.fileName)
+      const from = old && !old.sourceRef && this.bookPath(id, old.fileName)
       const to = this.bookPath(id, patch.fileName)
       if (from && from !== to) {
         const [fromPath, fromOpts] = this.loc(from)
@@ -276,8 +306,8 @@ export class TauriStorage implements LibraryStorage {
     const sets: string[] = []
     const values: unknown[] = []
     for (const [key, value] of Object.entries(patch)) {
-      if (key === 'tags') {
-        sets.push(`tags = $${values.length + 1}`)
+      if (key === 'tags' || key === 'sourceRef') {
+        sets.push(`${key === 'tags' ? 'tags' : 'source_ref'} = $${values.length + 1}`)
         values.push(JSON.stringify(value))
       } else if (Object.prototype.hasOwnProperty.call(META_COLUMNS, key)) {
         sets.push(`${META_COLUMNS[key]} = $${values.length + 1}`)
@@ -297,8 +327,10 @@ export class TauriStorage implements LibraryStorage {
     await this.db.execute('DELETE FROM booklist_items WHERE book_id = $1', [id])
     await this.db.execute('DELETE FROM books WHERE id = $1', [id])
     if (meta) {
-      const [bookPath, bookOpts] = this.loc(this.bookPath(id, meta.fileName))
-      await this.fs.remove(bookPath, bookOpts).catch(() => { /* 文件缺失不阻塞删除 */ })
+      if (!meta.sourceRef) {
+        const [bookPath, bookOpts] = this.loc(this.bookPath(id, meta.fileName))
+        await this.fs.remove(bookPath, bookOpts).catch(() => { /* 文件缺失不阻塞删除 */ })
+      }
       if (meta.hasCover) {
         const [coverPath, coverOpts] = this.loc(this.coverPath(id))
         await this.fs.remove(coverPath, coverOpts).catch(() => { /* 同上 */ })
@@ -309,6 +341,7 @@ export class TauriStorage implements LibraryStorage {
   async getBookFile(id: string) {
     const meta = await this.getBook(id)
     if (!meta) throw new Error('书籍不存在')
+    if (meta.sourceRef) return readReferencedFile(meta.sourceRef)
     const [path, opts] = this.loc(this.bookPath(id, meta.fileName))
     const bytes = await this.fs.readFile(path, opts)
     return new Blob([bytes.buffer as ArrayBuffer])
@@ -316,7 +349,7 @@ export class TauriStorage implements LibraryStorage {
 
   async getBookFileRef(id: string): Promise<LocalFileRef | undefined> {
     const meta = await this.getBook(id)
-    if (!meta) return undefined
+    if (!meta || meta.sourceRef) return undefined
     const rel = this.bookPath(id, meta.fileName)
     return { kind: 'local-file', root: this.root, rel, blob: () => this.getBookFile(id) }
   }

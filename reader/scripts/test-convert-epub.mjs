@@ -1,6 +1,6 @@
 // 格式转换 (→ EPUB) 的纯函数契约: OPF / nav / NCX / container 生成, XML 转义,
 // 资源嗅探与相对路径改写, 文件名清洗, OCF 打包 (mimetype 首位且不压缩).
-// 运行: npm run test:convert-epub
+// 内部 EPUB writer 契约 (TXT/Markdown 阅读适配仍使用打包器), 运行: npm run test:epub-writer
 import assert from 'node:assert/strict'
 import { test } from 'node:test'
 import { unzipSync, strFromU8 } from 'fflate'
@@ -10,7 +10,7 @@ import {
   relativeHref, rewriteCssUrls, sanitizeFileName, sniffMediaType, stripInvalidXmlChars, tocDepth, zipEpub,
   BLOB_URL_RE, ELEMENT_ATTRS, GLOBAL_ATTRS, cssLength, crc32, legacyAttrStyle,
 } from '../src/services/epubWriter.ts'
-import { canConvertToEpub, EPUB_CONVERTIBLE } from '../src/services/format.ts'
+import * as format from '../src/services/format.ts'
 
 /** 极简 XML 良构检查: 标签配对, 属性引号, 文本里没有裸 < 与非法 & */
 function assertWellFormed(xml, label = 'xml') {
@@ -290,10 +290,12 @@ test('zipEpub writes mimetype first, stored and without extra field; media store
   assert.deepEqual(files['OEBPS/Images/r1.jpg'], jpeg)
 })
 
-test('only reflowable non-EPUB formats are offered for conversion', () => {
-  for (const f of ['mobi', 'azw', 'azw3', 'fb2', 'fbz', 'txt', 'md', 'html']) assert.ok(canConvertToEpub(f), f)
-  for (const f of ['epub', 'pdf', 'djvu', 'cbz', 'cbr', null, undefined]) assert.ok(!canConvertToEpub(f), String(f))
-  assert.equal(EPUB_CONVERTIBLE.length, 8)
+test('public conversion capability is retired, internal text reader formats remain', () => {
+  assert.equal('canConvertToEpub' in format, false)
+  assert.equal('EPUB_CONVERTIBLE' in format, false)
+  for (const f of ['txt', 'md']) assert.equal(format.isTextLike(f), true)
+  for (const f of ['epub', 'mobi']) assert.equal(format.isFoliateNative(f), true)
+  assert.equal(format.isSupportedBookFormat('pdf'), true)
 })
 
 test('crc32 matches the zip standard check value and can be chained', () => {

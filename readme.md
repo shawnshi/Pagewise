@@ -6,58 +6,42 @@
 
 面向文石 Note X3 Pro 的个人本地阅读器，基于 [LightRead v1.15.0](https://github.com/yzfly/LightRead/tree/v1.15.0) 开发。Android 桌面名称为“知页”。
 
-**项目处于开发阶段，仅面向 Android；尚无通过目标机验收的知页 APK。** 浏览器预览用于开发，不是桌面、PWA 或 iOS 发行版。
+**目前仅面向 Android，仍处于开发与验收阶段。已有独立合成实机调试包，尚未正式发行；浏览器只用于开发预览和测试。**
 
-## 当前能力
+## 当前功能
 
-- **藏书**：保留 EPUB、MOBI、PDF、TXT、Markdown；组合搜索、标签与格式/语言/阅读状态筛选、分页及有界封面缓存。点击书目查看详情，独立“阅读/继续”按钮直接进入正文。
-- **阅读工作流**：在读、最近阅读、搁置与已读分组；返回时恢复列表查询与页码。显式阅读状态不由进度百分比推断，旧书缺失状态保留未知。
-- **排版**：中英文语言预设与单书覆盖、草稿预览、出版原貌/自动优化/兼容修复。应用后恢复文本锚点；失败回滚并保留草稿。未知语言不自动归为中文。
-- **来源与笔记**：脚注/引用的临时查看与主阅读位置分离；全局笔记可回到原书。未提交的想法作为本机草稿恢复，不能冒充正式保存成功。
-- **墨水屏界面**：高对比列表、底部导航、简化动效；保留普通主题切换。
-- **保留服务**：普通 AI/翻译、系统/Edge 听书、本地书单/标签、批注与阅读统计。部分服务需要联网，不宣称应用完全离线或无外联。
+- **文件夹书库**：通过 Android 系统选择器授权一个书籍目录，启动、返回前台及前台监测时增量扫描。书籍引用源文件，不整本复制进应用；应用不修改或删除源文件。
+- **阅读与元数据**：支持 EPUB、MOBI、PDF、TXT、Markdown。保留 TXT/Markdown 内部阅读适配；显示作者、标签、出版社和原始精度的出版日期，未知信息明确标示。
+- **书库操作**：搜索、标签和组合筛选、分页、独立阅读状态、阅读进度及返回列表后的状态恢复。源文件缺失时保留书目、笔记和手工信息。
+- **阅读与笔记**：中英文排版、目录、搜索、划线和笔记；排版修改、阅读锚点、系统 Back 和草稿恢复均有相应保护。
+- **界面**：所有常规页面统一使用底部五入口——藏书、在读、笔记、阅读记录、设置。图标配常显文字，内容不被导航遮挡，并避让系统安全区；阅读时隐藏主导航。
+- **可选服务**：保留兼容 AI 端点、听书及阅读模式。Gemini 预设默认填写 `gemini-3.8-flash`；模型和端点可用性需自行确认，配置值不代表服务验收。
 
-已移除在线书源、Calibre、账号/同步、设备互传、应用内更新、BabelDOC、歌词和论文 CLI Agent。历史退役格式记录不会自动删除，但不再提供其导入/打开入口。没有原生手写、NeoReader 批注迁移或已完成的 PDF 引擎重构。
+当前不再提供书单、手动导入、显式 EPUB 转换或论文专用工作区。历史数据与旧路由保留必要兼容；普通 PDF 阅读不受论文工作区退役影响。
 
-## 验证状态
+## 使用流程
 
-- 前端生产构建及合成数据回归已通过；新增流程覆盖筛选取消、排版失败回滚、列表恢复、脚注返回、草稿恢复及存储失败保护。
-- 4000 条合成书目的查询与封面池检查已通过；这不等于 Note X3 Pro 的性能、残影或耗电验收。
-- Android Rust 库和 Gradle `buildSrc` 已编译；APK 打包尚未完成，**未安装到目标设备**。
-- 实际浏览器端到端以合成 EPUB/TXT 为主；不将格式入口检查当成全部格式的真机验收。未调用真实 AI、翻译或听书服务完成本轮验收。
+1. 在藏书页或设置中选择“监测文件夹”，只授权计划作为书库的目录。
+2. 等待扫描后阅读；后续添加文件由前台监测发现，也可手动重新扫描。
+3. 目录权限丢失或源文件不可用时，先恢复授权或文件，再扫描。不要通过清数据、卸载或删除书目来绕过错误。
+4. AI、翻译和听书涉及外部服务时，先核对端点、凭据及数据发送范围。合成验收包不应填写真实凭据或接入个人书籍目录。
 
-实现与验收边界见 [UI v0.2 集成记录](docs/ui-v02-implementation.md)、[Android-only 说明](docs/android-only.md)、[设备准入](docs/device-admission.md)。
+监测书籍源目录与应用数据库/备份目录是不同概念。跨设备恢复归档不会自动继承另一台设备的目录授权。
 
-## 项目结构
+## 开发与构建
 
-- `reader/`：Vue、TypeScript、Tauri 应用源码及测试；当前源码版本沿用 `1.15.0`，不表示与上游发行物相同。
-- `docs/`：架构、实施与设备准入文档。
-- `scripts/`、`tests/`：PowerShell 设备/APK 只读准入及合成夹具检查。
-- `Pagewise.png`：品牌原图；生成脚本在 `reader/scripts/`。
-
-`.cache/`、`artifacts/`、`.worktrees/`、构建产物和个人数据不作为源码发布。下载的上游 APK 不是知页安装包。
-
-## 本地开发
-
-建议使用 Node.js 22.18+。在 `reader/` 目录执行：
+建议使用 Node.js 24 或更新版本；当前 Vite 要求 Node.js `^20.19.0 || >=22.12.0`，部分测试还使用 Node.js 原生 TypeScript 支持。在 `reader/` 执行：
 
 ```sh
-npm ci --ignore-scripts
+npm ci
 npm run dev
 npm run build
 npm run test:android-only
 npm run test:library
 npm run test:feature-trim
-node --experimental-strip-types --test scripts/test-ui-v02-navigation.mjs scripts/test-ui-v02-transactions.mjs scripts/test-ui-v02-review-fixes.mjs
 ```
 
-`npm run build` 只生成 Android WebView 共用的前端资源，不生成 APK。更多开发命令见 [应用 README](reader/README.md)。
-
-## Android 构建与准入
-
-需要 JDK 21、Android SDK API 36、兼容的 NDK，以及 Rust `aarch64-linux-android` 目标。本机 Android Studio 附带的 Java 25 与当前 Gradle 8.14.3 不兼容；为构建进程选择 JDK 21，不必修改系统默认 Java。
-
-在 `reader/` 中执行：
+`npm run build` 只生成 Android WebView 共用的前端资源，不生成 APK。Android 构建需要 JDK 21、Android SDK API 36、兼容的 NDK 及 Rust `aarch64-linux-android` 目标：
 
 ```sh
 npm run android:init -- --ci --skip-targets-install
@@ -65,22 +49,18 @@ npm run android:prepare
 npm run android:build
 ```
 
-构建命令使用 ARM64 调试配置。正式包标识为 `io.pagewise.reader`，调试标识为 `io.pagewise.reader.debug`。安装前检查包名、签名、ABI 和权限；不得通过卸载、清数据或覆盖未知签名应用绕过兼容性问题。
+默认命令构建 ARM64 调试包。正式包标识为 `io.pagewise.reader`，常规调试标识为 `io.pagewise.reader.debug`；隔离验收包使用独立标识，不应覆盖原有应用。更多命令见 [应用开发说明](reader/README.md)，安装前遵循 [设备准入](docs/device-admission.md)。
 
-项目根目录的只读检查：
+## 验证与边界
 
-```powershell
-pwsh -NoProfile -File tests/admission.tests.ps1
-pwsh -NoProfile -File tests/fixtures.tests.ps1
-pwsh -NoProfile -File scripts/Test-NoteX3Pro.ps1
-```
+当前底部导航版本已通过生产构建、63 项定向 host 回归、10 个真实页面场景及 3 项目标机检查。不同版本、不同批次的结果不能合并为当前安装包的一次完整验收；4000 书目模拟检查不等于目标机性能证明。
 
-设备元数据检查通过，不代表正文渲染、字体、选区、系统返回、休眠恢复及保存链路通过。发布工作流目前保留在 `reader/.github/workflows/`，尚未接入根仓库的 GitHub Actions；启用发布 CI 和正式发布另行处理。同步源码到 `main` 不会发布安装包。
+实际系统撤权/重授权、物理残影与人工触控体验、长时间稳定性及耗电仍未完成单独验收。真实 AI、翻译和听书服务也未作为本轮测试依据。详见 [验证状态与已知限制](docs/validation-status.md)。
 
-## 源码仓库
+源码同步不发布 APK、标签或 GitHub Release。`reader/.github/workflows/` 中的历史工作流尚未接入根仓库的发布流程。
 
-目标仓库为 [shawnshi/Pagewise](https://github.com/shawnshi/Pagewise)，主分支为 `main`。在项目根目录管理提交；`reader/` 按普通源码目录跟踪，本地保留的上游 Git 元数据不上传，也不作为子模块发布。不要向本地 `reader/origin` 的上游 LightRead 仓库推送。
+## 仓库与许可
 
-## 来源与许可
+源码仓库为 [shawnshi/Pagewise](https://github.com/shawnshi/Pagewise)，主分支为 `main`。在项目根目录管理版本；`reader/` 作为普通源码目录发布，本地保留的上游 Git 元数据不是子模块，不向 `yzfly/LightRead` 推送。
 
-保留目标仓库已有的根 [LICENSE](LICENSE)，不改写其许可文本。`reader/` 衍生应用保留 LightRead（yzfly / 云中江树）署名，遵循其 [AGPL-3.0-or-later](reader/LICENSE)；根许可证不替代该上游授权。不复用上游私有签名材料或账号配置，不修改其已部署服务与历史发行物。
+保留根 [LICENSE](LICENSE)。`reader/` 衍生应用保留 LightRead（yzfly / 云中江树）署名并遵循 [AGPL-3.0-or-later](reader/LICENSE)；根许可证不替代该上游授权。原始设计材料和第三方许可保持原样，不复用上游签名材料或账号配置。

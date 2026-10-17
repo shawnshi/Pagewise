@@ -99,7 +99,7 @@ test('malformed or missing retired snapshots never reset unrelated reader prefer
   for (const value of [null, [], {}, { readingMode: [] }]) assert.doesNotThrow(() => normalizeRetiredLyricSettings(value))
 })
 
-test('actual settings load applies migration before merging defaults using synthetic storage only', () => {
+test('actual settings load applies migration before merging defaults using synthetic storage only', async () => {
   const state = base()
   engage(state, 'lyric', lyricValues)
   let reads = 0
@@ -112,6 +112,7 @@ test('actual settings load applies migration before merging defaults using synth
     '../services/dianjing/level.ts': levels,
     '../services/readingModes/eyeCare.ts': { DIM_MAX },
     '../services/readingModes/retiredSettings.ts': { normalizeRetiredLyricSettings },
+    '../services/aiProviders.ts': await import('../src/services/aiProviders.ts'),
   }
   vm.runInNewContext(output, {
     exports, require: id => { assert.ok(id in imports, `unexpected import ${id}`); return imports[id] },
