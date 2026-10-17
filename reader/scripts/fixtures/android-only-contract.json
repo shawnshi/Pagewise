@@ -1,0 +1,32 @@
+{
+  "provenance": "Immutable pre-feature-trim recovery sources, not the current implementation",
+  "sourceHashes": {
+    "src/services/ai.ts": "b207bd0062d6b91b73f55fd0219309afd1d4d5016e23d080cbae5da8424eaf1e",
+    "src/services/edgeTts.ts": "59d3eae46853c4598b149326fc3048aad3fff4b5d0f3c93e98e50ffc915b193d"
+  },
+  "dexieSchemas": [
+    "version(1).stores({\n      books: 'id, title, author, format, addedAt, lastReadAt',\n      annotations: 'id, bookId, createdAt',\n      sources: 'id, url, addedAt',\n    })",
+    "version(2).stores({\n      books: 'id, title, author, format, addedAt, lastReadAt',\n      annotations: 'id, bookId, createdAt',\n      sources: 'id, url, addedAt',\n      booklists: 'id, name, createdAt, updatedAt',\n      booklistItems: '[booklistId+bookId], booklistId, bookId, addedAt',\n    })",
+    "version(3).stores({\n      books: 'id, title, author, format, addedAt, lastReadAt',\n      annotations: 'id, bookId, createdAt',\n      sources: 'id, url, addedAt',\n      booklists: 'id, name, createdAt, updatedAt',\n      booklistItems: '[booklistId+bookId], booklistId, bookId, addedAt',\n      booklistWanted: 'id, booklistId, addedAt',\n    })"
+  ],
+  "sqliteDDL": [
+    "CREATE TABLE IF NOT EXISTS books ( id TEXT PRIMARY KEY, title TEXT NOT NULL, author TEXT NOT NULL DEFAULT '', format TEXT NOT NULL, file_name TEXT NOT NULL, description TEXT, language TEXT, tags TEXT NOT NULL DEFAULT '[]', added_at INTEGER NOT NULL, last_read_at INTEGER, location TEXT, progress REAL, source TEXT, has_cover INTEGER NOT NULL DEFAULT 0 )",
+    "CREATE TABLE IF NOT EXISTS annotations ( id TEXT PRIMARY KEY, book_id TEXT NOT NULL, cfi TEXT NOT NULL, text TEXT NOT NULL DEFAULT '', note TEXT, color TEXT NOT NULL DEFAULT 'yellow', created_at INTEGER NOT NULL )",
+    "CREATE INDEX IF NOT EXISTS idx_annotations_book ON annotations(book_id)",
+    "CREATE TABLE IF NOT EXISTS sources ( id TEXT PRIMARY KEY, title TEXT NOT NULL, url TEXT NOT NULL, builtin INTEGER NOT NULL DEFAULT 0, added_at INTEGER NOT NULL )",
+    "CREATE TABLE IF NOT EXISTS booklists ( id TEXT PRIMARY KEY, name TEXT NOT NULL, created_at INTEGER NOT NULL, updated_at INTEGER NOT NULL )",
+    "CREATE TABLE IF NOT EXISTS booklist_items ( booklist_id TEXT NOT NULL, book_id TEXT NOT NULL, added_at INTEGER NOT NULL, PRIMARY KEY (booklist_id, book_id) )",
+    "CREATE INDEX IF NOT EXISTS idx_booklist_items_booklist ON booklist_items(booklist_id)",
+    "CREATE INDEX IF NOT EXISTS idx_booklist_items_book ON booklist_items(book_id)",
+    "CREATE TABLE IF NOT EXISTS booklist_wanted ( id TEXT PRIMARY KEY, booklist_id TEXT NOT NULL, title TEXT NOT NULL, author TEXT NOT NULL DEFAULT '', isbn TEXT, year INTEGER, note TEXT, original_title TEXT, original_author TEXT, added_at INTEGER NOT NULL )",
+    "CREATE INDEX IF NOT EXISTS idx_booklist_wanted_booklist ON booklist_wanted(booklist_id)",
+    "ALTER TABLE sources ADD COLUMN kind TEXT NOT NULL DEFAULT 'opds'",
+    "ALTER TABLE sources ADD COLUMN username TEXT",
+    "ALTER TABLE sources ADD COLUMN password TEXT",
+    "ALTER TABLE sources ADD COLUMN updated_at INTEGER",
+    "ALTER TABLE annotations ADD COLUMN kind TEXT NOT NULL DEFAULT 'highlight'",
+    "ALTER TABLE books ADD COLUMN reading_seconds INTEGER NOT NULL DEFAULT 0",
+    "ALTER TABLE books ADD COLUMN pinned_at INTEGER",
+    "ALTER TABLE books ADD COLUMN kind TEXT NOT NULL DEFAULT 'book'"
+  ]
+}

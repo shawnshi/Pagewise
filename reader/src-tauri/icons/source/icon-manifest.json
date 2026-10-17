@@ -1,0 +1,178 @@
+{
+  "default": "app-icon.svg",
+  "bg_color": "#FFFFFF",
+  "android_bg": "android-bg.svg",
+  "android_fg": "android-fg.svg",
+  "android_fg_scale": 100,
+  "android_monochrome": "android-monochrome.svg",
+  "brand": {
+    "package": "pagewise",
+    "display_name": "知页",
+    "full_name": "知页阅读器 · Pagewise",
+    "tagline": "专注阅读，随页理解。",
+    "identifier": "io.pagewise.reader",
+    "source_png": "public/pagewise-logo.png",
+    "source_sha256": "6240730e5ea653bb777afa8750e2abccf0098b26bda24df9f0ab074edd0a7d62"
+  },
+  "derived_icons": [
+    {
+      "path": "src-tauri/icons/android/mipmap-hdpi/ic_launcher.png",
+      "width": 49,
+      "height": 49,
+      "variant": "standard"
+    },
+    {
+      "path": "src-tauri/icons/android/mipmap-hdpi/ic_launcher_background.png",
+      "width": 162,
+      "height": 162,
+      "variant": "background"
+    },
+    {
+      "path": "src-tauri/icons/android/mipmap-hdpi/ic_launcher_foreground.png",
+      "width": 162,
+      "height": 162,
+      "variant": "foreground"
+    },
+    {
+      "path": "src-tauri/icons/android/mipmap-hdpi/ic_launcher_monochrome.png",
+      "width": 162,
+      "height": 162,
+      "variant": "monochrome"
+    },
+    {
+      "path": "src-tauri/icons/android/mipmap-hdpi/ic_launcher_round.png",
+      "width": 49,
+      "height": 49,
+      "variant": "round"
+    },
+    {
+      "path": "src-tauri/icons/android/mipmap-mdpi/ic_launcher.png",
+      "width": 48,
+      "height": 48,
+      "variant": "standard"
+    },
+    {
+      "path": "src-tauri/icons/android/mipmap-mdpi/ic_launcher_background.png",
+      "width": 108,
+      "height": 108,
+      "variant": "background"
+    },
+    {
+      "path": "src-tauri/icons/android/mipmap-mdpi/ic_launcher_foreground.png",
+      "width": 108,
+      "height": 108,
+      "variant": "foreground"
+    },
+    {
+      "path": "src-tauri/icons/android/mipmap-mdpi/ic_launcher_monochrome.png",
+      "width": 108,
+      "height": 108,
+      "variant": "monochrome"
+    },
+    {
+      "path": "src-tauri/icons/android/mipmap-mdpi/ic_launcher_round.png",
+      "width": 48,
+      "height": 48,
+      "variant": "round"
+    },
+    {
+      "path": "src-tauri/icons/android/mipmap-xhdpi/ic_launcher.png",
+      "width": 96,
+      "height": 96,
+      "variant": "standard"
+    },
+    {
+      "path": "src-tauri/icons/android/mipmap-xhdpi/ic_launcher_background.png",
+      "width": 216,
+      "height": 216,
+      "variant": "background"
+    },
+    {
+      "path": "src-tauri/icons/android/mipmap-xhdpi/ic_launcher_foreground.png",
+      "width": 216,
+      "height": 216,
+      "variant": "foreground"
+    },
+    {
+      "path": "src-tauri/icons/android/mipmap-xhdpi/ic_launcher_monochrome.png",
+      "width": 216,
+      "height": 216,
+      "variant": "monochrome"
+    },
+    {
+      "path": "src-tauri/icons/android/mipmap-xhdpi/ic_launcher_round.png",
+      "width": 96,
+      "height": 96,
+      "variant": "round"
+    },
+    {
+      "path": "src-tauri/icons/android/mipmap-xxhdpi/ic_launcher.png",
+      "width": 144,
+      "height": 144,
+      "variant": "standard"
+    },
+    {
+      "path": "src-tauri/icons/android/mipmap-xxhdpi/ic_launcher_background.png",
+      "width": 324,
+      "height": 324,
+      "variant": "background"
+    },
+    {
+      "path": "src-tauri/icons/android/mipmap-xxhdpi/ic_launcher_foreground.png",
+      "width": 324,
+      "height": 324,
+      "variant": "foreground"
+    },
+    {
+      "path": "src-tauri/icons/android/mipmap-xxhdpi/ic_launcher_monochrome.png",
+      "width": 324,
+      "height": 324,
+      "variant": "monochrome"
+    },
+    {
+      "path": "src-tauri/icons/android/mipmap-xxhdpi/ic_launcher_round.png",
+      "width": 144,
+      "height": 144,
+      "variant": "round"
+    },
+    {
+      "path": "src-tauri/icons/android/mipmap-xxxhdpi/ic_launcher.png",
+      "width": 192,
+      "height": 192,
+      "variant": "standard"
+    },
+    {
+      "path": "src-tauri/icons/android/mipmap-xxxhdpi/ic_launcher_background.png",
+      "width": 432,
+      "height": 432,
+      "variant": "background"
+    },
+    {
+      "path": "src-tauri/icons/android/mipmap-xxxhdpi/ic_launcher_foreground.png",
+      "width": 432,
+      "height": 432,
+      "variant": "foreground"
+    },
+    {
+      "path": "src-tauri/icons/android/mipmap-xxxhdpi/ic_launcher_monochrome.png",
+      "width": 432,
+      "height": 432,
+      "variant": "monochrome"
+    },
+    {
+      "path": "src-tauri/icons/android/mipmap-xxxhdpi/ic_launcher_round.png",
+      "width": 192,
+      "height": 192,
+      "variant": "round"
+    },
+    {
+      "path": "src-tauri/icons/icon.png",
+      "width": 512,
+      "height": 512,
+      "variant": "standard"
+    }
+  ],
+  "platforms": [
+    "android"
+  ]
+}

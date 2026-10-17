@@ -1,0 +1,41 @@
+{
+  "id": "science-classics-pd",
+  "title": "科学史与科普经典",
+  "description": "从近代科学革命到相对论的原典与科普名作，均有公版英文本，可在古登堡计划免费阅读。",
+  "en": {
+    "title": "Classics of Science",
+    "description": "Primary works and popular classics from the Scientific Revolution to relativity. All have public-domain English editions free on Project Gutenberg."
+  },
+  "curator": "轻阅编辑部",
+  "tags": [
+    "科学",
+    "科普",
+    "公版"
+  ],
+  "updated": "2026-10-06",
+  "source": {
+    "name": "轻阅编辑部",
+    "url": "https://github.com/yzfly/LightRead",
+    "license": "CC0-1.0"
+  },
+  "books": [
+    {"title":"论磁","author":"威廉·吉尔伯特","year":1600,"note":"以实验研究磁现象，把地球看作一块大磁体","original":{"title":"On the Magnet","author":"William Gilbert"}},
+    {"title":"星际信使","author":"伽利略","year":1610,"note":"第一份望远镜观测报告：月面、银河与木星卫星","original":{"title":"The Sidereal Messenger","author":"Galileo Galilei"}},
+    {"title":"心血运动论","author":"威廉·哈维","year":1628,"note":"以解剖与计算论证血液循环","original":{"title":"On the Motion of the Heart and Blood in Animals","author":"William Harvey"}},
+    {"title":"显微图谱","author":"罗伯特·胡克","year":1665,"note":"显微镜下的跳蚤与软木，「细胞」一词由此而来","original":{"title":"Micrographia","author":"Robert Hooke"}},
+    {"title":"自然哲学的数学原理","author":"牛顿","year":1687,"note":"三大运动定律与万有引力；古登堡收录 Motte 英译","original":{"title":"Newton's Principia","author":"Isaac Newton"}},
+    {"title":"光论","author":"惠更斯","year":1690,"note":"用波动观点解释光的反射与折射","original":{"title":"Treatise on Light","author":"Christiaan Huygens"}},
+    {"title":"光学","author":"牛顿","year":1704,"note":"棱镜分光等实验，书末附一系列开放的「疑问」","original":{"title":"Opticks","author":"Isaac Newton"}},
+    {"title":"化学基础论","author":"拉瓦锡","year":1789,"note":"确立化学元素与质量守恒，近代化学由此开端","original":{"title":"Elements of Chemistry","author":"Antoine Lavoisier"}},
+    {"title":"关于概率的哲学随笔","author":"拉普拉斯","year":1814,"note":"不用公式讲概率论，「拉普拉斯妖」出自此书","original":{"title":"A Philosophical Essay on Probabilities","author":"Pierre-Simon Laplace"}},
+    {"title":"地质学原理","author":"查尔斯·莱尔","year":1830,"note":"用今天仍在起作用的缓慢过程解释地球历史","original":{"title":"Principles of Geology","author":"Charles Lyell"}},
+    {"title":"小猎犬号航海记","author":"达尔文","year":1839,"note":"五年环球考察的见闻，进化思想的起点","original":{"title":"The Voyage of the Beagle","author":"Charles Darwin"}},
+    {"title":"物种起源","author":"达尔文","year":1859,"note":"自然选择学说的完整论证","original":{"title":"On the Origin of Species","author":"Charles Darwin"}},
+    {"title":"蜡烛的化学史","author":"法拉第","year":1861,"note":"由圣诞讲座整理，一支蜡烛讲透燃烧化学","original":{"title":"The Chemical History of a Candle","author":"Michael Faraday"}},
+    {"title":"人类在自然界的位置","author":"赫胥黎","year":1863,"note":"比较解剖学证据下的人与猿","original":{"title":"Evidence as to Man's Place in Nature","author":"Thomas Henry Huxley"}},
+    {"title":"人类的由来","author":"达尔文","year":1871,"note":"把进化论用到人类自身，并提出性选择","original":{"title":"The Descent of Man","author":"Charles Darwin"}},
+    {"title":"平面国","author":"埃德温·A. 艾勃特","year":1884,"note":"二维世界的居民如何理解第三维，数学寓言小说","original":{"title":"Flatland","author":"Edwin Abbott Abbott"}},
+    {"title":"科学与假设","author":"庞加莱","year":1902,"note":"数学家谈几何、力学与物理中的约定","original":{"title":"Science and Hypothesis","author":"Henri Poincaré"}},
+    {"title":"狭义与广义相对论浅说","author":"爱因斯坦","note":"爱因斯坦本人写的相对论通俗读本，Lawson 英译","original":{"title":"Relativity: The Special and General Theory","author":"Albert Einstein"}}
+  ]
+}

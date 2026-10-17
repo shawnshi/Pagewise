@@ -1,0 +1,42 @@
+{
+  "id": "philosophy-intro",
+  "title": "哲学入门经典",
+  "description": "从古希腊到二十世纪初，一条读得下去的西方哲学主线。每本都有公版英译，可在应用内的哲学文库、Standard Ebooks 或古登堡计划免费获取。",
+  "en": {
+    "title": "Philosophy Classics for Beginners",
+    "description": "A readable path through Western philosophy from ancient Greece to the early twentieth century. Every title has a public-domain English edition available free through the in-app philosophy library, Standard Ebooks or Project Gutenberg."
+  },
+  "curator": "轻阅编辑部",
+  "tags": [
+    "哲学",
+    "公版",
+    "入门"
+  ],
+  "updated": "2026-10-06",
+  "source": {
+    "name": "轻阅编辑部",
+    "url": "https://github.com/yzfly/LightRead",
+    "license": "CC0-1.0"
+  },
+  "books": [
+    {"title":"理想国","author":"柏拉图","year":-375,"note":"借对话追问正义，顺带勾勒理想城邦与洞穴之喻","original":{"title":"The Republic","author":"Plato"}},
+    {"title":"尼各马可伦理学","author":"亚里士多德","note":"什么是好的生活：德性、中道与友爱","original":{"title":"Nicomachean Ethics","author":"Aristotle"}},
+    {"title":"沉思录","author":"马可·奥勒留","note":"一位罗马皇帝写给自己的斯多亚式札记","original":{"title":"Meditations","author":"Marcus Aurelius"}},
+    {"title":"哲学的慰藉","author":"波爱修斯","note":"狱中写成，哲学化身女神与作者对谈命运","original":{"title":"The Consolation of Philosophy","author":"Boethius"}},
+    {"title":"君主论","author":"马基雅维利","year":1532,"note":"不谈应当如何，只谈权力实际如何运作","original":{"title":"The Prince","author":"Niccolò Machiavelli"}},
+    {"title":"谈谈方法","author":"笛卡尔","year":1637,"note":"「我思故我在」最早出现在这本小书里","original":{"title":"Discourse on the Method","author":"René Descartes"}},
+    {"title":"第一哲学沉思集","author":"笛卡尔","year":1641,"note":"六个沉思，从普遍怀疑重建确定的知识","original":{"title":"Meditations on First Philosophy","author":"René Descartes"}},
+    {"title":"利维坦","author":"霍布斯","year":1651,"note":"从自然状态推出国家，社会契约论的起点","original":{"title":"Leviathan","author":"Thomas Hobbes"}},
+    {"title":"伦理学","author":"斯宾诺莎","year":1677,"note":"用几何学的公理与证明来写神、心灵与自由","original":{"title":"Ethics","author":"Baruch Spinoza"}},
+    {"title":"政府论","author":"洛克","year":1689,"note":"下篇论证生命、自由、财产与有限政府","original":{"title":"Two Treatises of Government","author":"John Locke"}},
+    {"title":"人类理智研究","author":"休谟","year":1748,"note":"因果、习惯与怀疑，经验论最清楚的表述","original":{"title":"An Enquiry Concerning Human Understanding","author":"David Hume"}},
+    {"title":"社会契约论","author":"卢梭","year":1762,"note":"「人生而自由，却无往不在枷锁之中」","original":{"title":"The Social Contract","author":"Jean-Jacques Rousseau"}},
+    {"title":"道德形而上学奠基","author":"康德","year":1785,"note":"康德伦理学最短的入口，提出定言命令","original":{"title":"Groundwork for the Metaphysic of Morals","author":"Immanuel Kant"}},
+    {"title":"论自由","author":"约翰·斯图亚特·密尔","year":1859,"note":"个人自由的边界在哪里，伤害原则的经典论证","original":{"title":"On Liberty","author":"John Stuart Mill"}},
+    {"title":"功利主义","author":"约翰·斯图亚特·密尔","year":1861,"note":"为「最大幸福原则」做的简明辩护","original":{"title":"Utilitarianism","author":"John Stuart Mill"}},
+    {"title":"查拉图斯特拉如是说","author":"尼采","year":1883,"note":"以先知寓言写成的哲学诗，超人与永恒轮回","original":{"title":"Thus Spake Zarathustra","author":"Friedrich Nietzsche"}},
+    {"title":"善恶的彼岸","author":"尼采","year":1886,"note":"对道德与哲学家偏见的系统清算","original":{"title":"Beyond Good and Evil","author":"Friedrich Nietzsche"}},
+    {"title":"哲学问题","author":"罗素","year":1912,"note":"为普通读者写的知识论入门，篇幅短小","original":{"title":"The Problems of Philosophy","author":"Bertrand Russell"}},
+    {"title":"逻辑哲学论","author":"维特根斯坦","year":1921,"note":"编号命题写成，「凡不可说的，应当沉默」","original":{"title":"Tractatus Logico-Philosophicus","author":"Ludwig Wittgenstein"}}
+  ]
+}

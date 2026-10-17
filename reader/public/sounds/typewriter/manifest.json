@@ -1,0 +1,304 @@
+{
+  "version": 1,
+  "formats": [
+    "ogg",
+    "m4a"
+  ],
+  "note": "One-shots cut from CC0 Freesound recordings; see docs/ambient-sources.md. Loudness: K-weighted energy over 120 ms matched across hits (accent -2..-4 dB); peak <= -6 dBFS. Paths are relative to this file, without extension.",
+  "presets": {
+    "typewriter": {
+      "hits": [
+        "typewriter/1",
+        "typewriter/2",
+        "typewriter/3",
+        "typewriter/4",
+        "typewriter/5",
+        "typewriter/6"
+      ],
+      "accent": "typewriter/accent",
+      "source": {
+        "title": "Typewriter snippet 01 mono [loop]",
+        "author": "cabled_mess",
+        "url": "https://freesound.org/people/cabled_mess/sounds/360603/",
+        "license": "CC0-1.0"
+      },
+      "accentSource": {
+        "title": "Typewriter bell & carriage reset",
+        "author": "knufds",
+        "url": "https://freesound.org/people/knufds/sounds/345955/",
+        "license": "CC0-1.0"
+      },
+      "analysis": [
+        {
+          "file": "typewriter/1",
+          "at": 13.473,
+          "ms": 90,
+          "peakDbfs": -7.2,
+          "centroidHz": 3115,
+          "decay40Ms": 53
+        },
+        {
+          "file": "typewriter/2",
+          "at": 6.767,
+          "ms": 90,
+          "peakDbfs": -7.2,
+          "centroidHz": 3097,
+          "decay40Ms": 51
+        },
+        {
+          "file": "typewriter/3",
+          "at": 6.54,
+          "ms": 90,
+          "peakDbfs": -8.7,
+          "centroidHz": 3493,
+          "decay40Ms": 54
+        },
+        {
+          "file": "typewriter/4",
+          "at": 7.768,
+          "ms": 90,
+          "peakDbfs": -10.1,
+          "centroidHz": 2900,
+          "decay40Ms": 56
+        },
+        {
+          "file": "typewriter/5",
+          "at": 5.633,
+          "ms": 90,
+          "peakDbfs": -7.4,
+          "centroidHz": 3500,
+          "decay40Ms": 57
+        },
+        {
+          "file": "typewriter/6",
+          "at": 14.459,
+          "ms": 90,
+          "peakDbfs": -7.8,
+          "centroidHz": 3056,
+          "decay40Ms": 54
+        },
+        {
+          "file": "typewriter/accent",
+          "at": 2.28,
+          "ms": 340,
+          "peakDbfs": -15.6,
+          "centroidHz": 1482,
+          "decay40Ms": 217
+        }
+      ]
+    },
+    "mechanical": {
+      "hits": [
+        "mechanical/1",
+        "mechanical/2",
+        "mechanical/3",
+        "mechanical/4",
+        "mechanical/5",
+        "mechanical/6"
+      ],
+      "accent": "mechanical/accent",
+      "source": {
+        "title": "Keyboard typing sounds: Unidentified Technics keyboard",
+        "author": "zrrion",
+        "url": "https://freesound.org/people/zrrion/sounds/665075/",
+        "license": "CC0-1.0"
+      },
+      "accentSource": {
+        "title": "Keyboard typing sounds: Unidentified Technics keyboard",
+        "author": "zrrion",
+        "url": "https://freesound.org/people/zrrion/sounds/665075/",
+        "license": "CC0-1.0"
+      },
+      "analysis": [
+        {
+          "file": "mechanical/1",
+          "at": 10.261,
+          "ms": 70,
+          "peakDbfs": -6.0,
+          "centroidHz": 1046,
+          "decay40Ms": 28
+        },
+        {
+          "file": "mechanical/2",
+          "at": 15.594,
+          "ms": 70,
+          "peakDbfs": -8.8,
+          "centroidHz": 1063,
+          "decay40Ms": 38
+        },
+        {
+          "file": "mechanical/3",
+          "at": 17.312,
+          "ms": 70,
+          "peakDbfs": -8.0,
+          "centroidHz": 1459,
+          "decay40Ms": 31
+        },
+        {
+          "file": "mechanical/4",
+          "at": 12.388,
+          "ms": 70,
+          "peakDbfs": -8.5,
+          "centroidHz": 1077,
+          "decay40Ms": 41
+        },
+        {
+          "file": "mechanical/5",
+          "at": 27.442,
+          "ms": 70,
+          "peakDbfs": -9.7,
+          "centroidHz": 1222,
+          "decay40Ms": 39
+        },
+        {
+          "file": "mechanical/6",
+          "at": 36.427,
+          "ms": 70,
+          "peakDbfs": -8.6,
+          "centroidHz": 1500,
+          "decay40Ms": 37
+        },
+        {
+          "file": "mechanical/accent",
+          "at": 30.908,
+          "ms": 120,
+          "peakDbfs": -10.0,
+          "centroidHz": 735,
+          "decay40Ms": 46
+        }
+      ]
+    },
+    "soft": {
+      "hits": [
+        "soft/1",
+        "soft/2",
+        "soft/3",
+        "soft/4",
+        "soft/5",
+        "soft/6"
+      ],
+      "source": {
+        "title": "Laptop Keyboard",
+        "author": "bassboybg",
+        "url": "https://freesound.org/people/bassboybg/sounds/346589/",
+        "license": "CC0-1.0"
+      },
+      "analysis": [
+        {
+          "file": "soft/1",
+          "at": 11.644,
+          "ms": 60,
+          "peakDbfs": -11.4,
+          "centroidHz": 1180,
+          "decay40Ms": 40
+        },
+        {
+          "file": "soft/2",
+          "at": 21.408,
+          "ms": 60,
+          "peakDbfs": -8.0,
+          "centroidHz": 1227,
+          "decay40Ms": 37
+        },
+        {
+          "file": "soft/3",
+          "at": 10.582,
+          "ms": 60,
+          "peakDbfs": -8.0,
+          "centroidHz": 1291,
+          "decay40Ms": 43
+        },
+        {
+          "file": "soft/4",
+          "at": 5.314,
+          "ms": 60,
+          "peakDbfs": -8.4,
+          "centroidHz": 1204,
+          "decay40Ms": 41
+        },
+        {
+          "file": "soft/5",
+          "at": 4.085,
+          "ms": 60,
+          "peakDbfs": -9.0,
+          "centroidHz": 1233,
+          "decay40Ms": 40
+        },
+        {
+          "file": "soft/6",
+          "at": 18.891,
+          "ms": 60,
+          "peakDbfs": -6.6,
+          "centroidHz": 1193,
+          "decay40Ms": 41
+        }
+      ]
+    },
+    "pen": {
+      "hits": [
+        "pen/1",
+        "pen/2",
+        "pen/3",
+        "pen/4",
+        "pen/5",
+        "pen/6"
+      ],
+      "source": {
+        "title": "Fountainpen_Write_1_Texture",
+        "author": "hanasmusic",
+        "url": "https://freesound.org/people/hanasmusic/sounds/841413/",
+        "license": "CC0-1.0"
+      },
+      "analysis": [
+        {
+          "file": "pen/1",
+          "at": 0.248,
+          "ms": 100,
+          "peakDbfs": -16.5,
+          "centroidHz": 1307,
+          "decay40Ms": 94
+        },
+        {
+          "file": "pen/2",
+          "at": 3.642,
+          "ms": 100,
+          "peakDbfs": -16.0,
+          "centroidHz": 1578,
+          "decay40Ms": 90
+        },
+        {
+          "file": "pen/3",
+          "at": 3.1,
+          "ms": 100,
+          "peakDbfs": -17.0,
+          "centroidHz": 1535,
+          "decay40Ms": 96
+        },
+        {
+          "file": "pen/4",
+          "at": 0.669,
+          "ms": 100,
+          "peakDbfs": -15.0,
+          "centroidHz": 1692,
+          "decay40Ms": 94
+        },
+        {
+          "file": "pen/5",
+          "at": 3.983,
+          "ms": 100,
+          "peakDbfs": -17.1,
+          "centroidHz": 1630,
+          "decay40Ms": 93
+        },
+        {
+          "file": "pen/6",
+          "at": 1.527,
+          "ms": 100,
+          "peakDbfs": -15.4,
+          "centroidHz": 1144,
+          "decay40Ms": 90
+        }
+      ]
+    }
+  }
+}

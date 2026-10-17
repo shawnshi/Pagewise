@@ -1,0 +1,159 @@
+---
+name: Android release
+
+'on':
+  push:
+    tags: ['v*']
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: 'Android release tag; empty uses the current ref'
+        required: false
+        type: string
+        default: ''
+
+permissions:
+  contents: write
+
+# Serialize the complete asset/signature/publish transaction for each tag.
+concurrency:
+  group: release-${{ inputs.tag || github.ref_name }}
+  cancel-in-progress: false
+
+jobs:
+  android:
+    runs-on: ubuntu-22.04
+    env:
+      GH_REPO: ${{ github.repository }}
+      RELEASE_TAG: ${{ inputs.tag || github.ref_name }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ inputs.tag || github.ref }}
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: aarch64-linux-android
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '17'
+      - uses: android-actions/setup-android@v3
+        with:
+          packages: platform-tools
+      - name: Install Android build tools
+        run: >-
+          sdkmanager "ndk;26.3.11579264" "build-tools;35.0.0"
+          "platforms;android-36"
+      - uses: swatinem/rust-cache@v2
+        with:
+          workspaces: src-tauri
+          cache-targets: false
+      - run: npm ci --ignore-scripts --no-audit --no-fund
+      - name: Verify frontend and Android-only contracts
+        run: |
+          npm run build
+          npm run test:android-only
+          node --test scripts/test-android-native.mjs
+          node scripts/check-release.mjs --self-test
+          node scripts/check-release.mjs --tag "$RELEASE_TAG"
+      - name: Validate fixed signing configuration
+        env:
+          KEYSTORE_B64: ${{ secrets.ANDROID_KEYSTORE_B64 }}
+          CERT_SHA256: ${{ vars.ANDROID_CERT_SHA256 }}
+        run: |
+          if [ -z "$KEYSTORE_B64" ]; then
+            echo 'Missing fixed Android keystore'
+            exit 1
+          fi
+          [[ "$CERT_SHA256" =~ ^[a-fA-F0-9]{64}$ ]]
+          test -n "$RELEASE_TAG"
+      - name: Initialize Android project
+        env:
+          NDK_HOME: ${{ env.ANDROID_SDK_ROOT }}/ndk/26.3.11579264
+        run: |
+          npx tauri android init --ci --skip-targets-install
+          node scripts/prepare-android-project.mjs
+      - name: Configure fixed signing
+        env:
+          KEYSTORE_B64: ${{ secrets.ANDROID_KEYSTORE_B64 }}
+          CERT_SHA256: ${{ vars.ANDROID_CERT_SHA256 }}
+        run: |
+          export LIGHTREAD_ANDROID_KEYSTORE="$RUNNER_TEMP/pagewise-signing.jks"
+          printf '%s' "$KEYSTORE_B64" | base64 --decode \
+            > "$LIGHTREAD_ANDROID_KEYSTORE"
+          chmod 600 "$LIGHTREAD_ANDROID_KEYSTORE"
+          keytool -exportcert -alias androiddebugkey -storepass android \
+            -keystore "$LIGHTREAD_ANDROID_KEYSTORE" \
+            -file "$RUNNER_TEMP/pagewise-signing.der" >/dev/null
+          DER="$RUNNER_TEMP/pagewise-signing.der"
+          ACTUAL=$(sha256sum "$DER" | cut -d ' ' -f 1)
+          test "$ACTUAL" = "${CERT_SHA256,,}"
+          echo "LIGHTREAD_ANDROID_KEYSTORE=$LIGHTREAD_ANDROID_KEYSTORE" \
+            >> "$GITHUB_ENV"
+          cat >> src-tauri/gen/android/app/build.gradle.kts <<'KOTLIN'
+          // Pagewise Android uses the fixed owner-provided signing identity.
+          android {
+              signingConfigs {
+                  getByName("debug") {
+                      val key = System.getenv("LIGHTREAD_ANDROID_KEYSTORE")
+                      storeFile = file(key)
+                      storePassword = "android"
+                      keyAlias = "androiddebugkey"
+                      keyPassword = "android"
+                  }
+              }
+          }
+          KOTLIN
+      - name: Build Android APK
+        env:
+          NDK_HOME: ${{ env.ANDROID_SDK_ROOT }}/ndk/26.3.11579264
+          CARGO_PROFILE_DEV_DEBUG: 0
+        run: npx tauri android build --apk --target aarch64 --debug
+      - name: Verify APK and publish Android assets
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          AAPT: ${{ env.ANDROID_SDK_ROOT }}/build-tools/35.0.0/aapt
+          APKSIGNER: ${{ env.ANDROID_SDK_ROOT }}/build-tools/35.0.0/apksigner
+          CERT_SHA256: ${{ vars.ANDROID_CERT_SHA256 }}
+        run: |
+          OUTPUT=src-tauri/gen/android/app/build/outputs/apk
+          mapfile -t APKS < <(find "$OUTPUT" -name '*.apk' -type f)
+          test "${#APKS[@]}" -eq 1
+          APK="Pagewise_${RELEASE_TAG}_android_arm64.apk"
+          cp "${APKS[0]}" "$APK"
+          node scripts/check-release.mjs --tag "$RELEASE_TAG" --apk "$APK" \
+            --cert "$CERT_SHA256"
+          sha256sum -c "$APK.sha256"
+          # Establish repository access before interpreting a release 404.
+          gh api "repos/$GH_REPO" --silent
+          RESPONSE="$RUNNER_TEMP/release-query.txt"
+          ERRORS="$RUNNER_TEMP/release-query.err"
+          set +e
+          gh api "repos/$GH_REPO/releases/tags/$RELEASE_TAG" --include \
+            > "$RESPONSE" 2> "$ERRORS"
+          STATUS=$?
+          set -e
+          if [ "$STATUS" -eq 0 ]; then
+            DRAFT=$(gh release view "$RELEASE_TAG" --json isDraft --jq .isDraft)
+            test "$DRAFT" = true
+          elif grep -Eq '^HTTP/[0-9.]+ 404' "$RESPONSE"; then
+            gh release create "$RELEASE_TAG" --verify-tag --draft \
+              --title "知页阅读器 · Pagewise $RELEASE_TAG" --generate-notes
+          else
+            cat "$ERRORS" >&2
+            exit "$STATUS"
+          fi
+          gh release upload "$RELEASE_TAG" "$APK" "$APK.sha256" "$APK.json" \
+            --clobber
+          cp "$APK.sha256" SHA256SUMS
+          gh release upload "$RELEASE_TAG" SHA256SUMS --clobber
+          gh release edit "$RELEASE_TAG" --draft=false
+      - name: Remove temporary signing material
+        if: ${{ always() }}
+        run: |
+          rm -f "$RUNNER_TEMP/pagewise-signing.jks"
+          rm -f "$RUNNER_TEMP/pagewise-signing.der"

@@ -1,0 +1,41 @@
+[package]
+name = "pagewise"
+version = "1.15.0"
+description = "面向文石 Note X3 Pro 的个人 EPUB 阅读器。专注阅读，随页理解。"
+authors = ["云中江树"]
+license = "AGPL-3.0-or-later"
+repository = ""
+edition = "2021"
+rust-version = "1.87.0"
+autobins = false
+
+[lib]
+name = "pagewise_lib"
+crate-type = ["staticlib", "cdylib", "rlib"]
+
+[build-dependencies]
+tauri-build = { version = "2.6.3", features = [] }
+
+[dependencies]
+serde_json = "1.0"
+serde = { version = "1.0", features = ["derive"] }
+log = "0.4"
+tauri = { version = "2.11.3", features = [] }
+tauri-plugin-log = "2"
+tauri-plugin-sql = { version = "2", features = ["sqlite"] }
+tauri-plugin-fs = "2"
+tauri-plugin-http = { version = "2", features = ["socks"] }
+tauri-plugin-dialog = "2"
+tauri-plugin-opener = "2"
+tokio-tungstenite = { version = "0.29.0", features = ["rustls-tls-webpki-roots"] }
+futures-util = "0.3.32"
+sha2 = "0.10.9"
+uuid = { version = "1.20.0", features = ["v4"] }
+tokio = { version = "1.52.3", features = ["macros", "rt", "sync", "time"] }
+fontdb = "0.23"
+
+# cargo_metadata 0.19.2 only raised its manifest MSRV to 1.78; its code still
+# compiles on Tauri's declared 1.77.2 floor. Keep the tiny local patch until
+# upstream Tauri no longer enables this transitive build dependency.
+[patch.crates-io]
+cargo_metadata = { path = "vendor/cargo_metadata" }

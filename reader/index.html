@@ -1,0 +1,38 @@
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="UTF-8" />
+    <link rel="icon" type="image/svg+xml" href="/favicon.svg" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover" />
+    <title>知页阅读器 · Pagewise</title>
+    <meta name="description" content="面向文石 Note X3 Pro 的个人 EPUB 阅读器。专注阅读，随页理解。" />
+    <meta name="keywords" content="知页,Pagewise,Note X3 Pro,文石,EPUB,个人电子书阅读器" />
+    <meta name="author" content="Pagewise contributors; based on LightRead by 云中江树" />
+    <meta property="og:type" content="website" />
+    <meta property="og:title" content="知页阅读器 · Pagewise" />
+    <meta property="og:description" content="面向文石 Note X3 Pro 的个人 EPUB 阅读器。专注阅读，随页理解。" />
+    <meta property="og:site_name" content="知页阅读器 · Pagewise" />
+    <meta name="twitter:card" content="summary" />
+    <meta name="twitter:title" content="知页阅读器 · Pagewise" />
+    <meta name="twitter:description" content="面向文石 Note X3 Pro 的个人 EPUB 阅读器。专注阅读，随页理解。" />
+    <meta name="theme-color" content="#FFFFFF" />
+  </head>
+  <body>
+    <div id="app"></div>
+    <script type="module" src="/src/main.ts"></script>
+    <script>
+      // 系统 WebView / 浏览器过旧 (低于 Chrome 89 / Safari 15) 时模块脚本无法运行, 给出提示而不是白屏
+      window.addEventListener('load', function () {
+        setTimeout(function () {
+          if (window.__lightreadBoot) return
+          var el = document.getElementById('app')
+          if (!el || el.children.length) return
+          el.innerHTML = '<div style="max-width:420px;margin:20vh auto 0;padding:0 16px;font:15px/1.7 system-ui,sans-serif;color:#333;text-align:center">' +
+            '<p style="font-size:18px;font-weight:600">知页无法在当前系统 WebView / 浏览器中运行</p>' +
+            '<p>请在应用商店更新「Android System WebView」或 Chrome（需 89 及以上），或使用新版浏览器后重试。</p>' +
+            '<p style="color:#888">Pagewise needs a newer WebView / browser (Chrome 89+ or Safari 15+). Please update Android System WebView or your browser.</p></div>'
+        }, 3000)
+      })
+    </script>
+  </body>
+</html>

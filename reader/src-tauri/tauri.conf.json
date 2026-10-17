@@ -1,0 +1,86 @@
+{
+  "$schema": "../node_modules/@tauri-apps/cli/config.schema.json",
+  "productName": "知页",
+  "version": "1.15.0",
+  "identifier": "io.pagewise.reader",
+  "build": {
+    "frontendDist": "../dist",
+    "devUrl": "http://localhost:5173",
+    "beforeDevCommand": "npm run dev",
+    "beforeBuildCommand": "npm run build"
+  },
+  "app": {
+    "windows": [
+      {
+        "title": "知页",
+        "fullscreen": false
+      }
+    ],
+    "security": {
+      "csp": null
+    }
+  },
+  "bundle": {
+    "active": true,
+    "targets": [],
+    "shortDescription": "专注阅读，随页理解。",
+    "longDescription": "面向文石 Note X3 Pro 的个人 EPUB 阅读器。专注阅读，随页理解。",
+    "fileAssociations": [
+      {
+        "ext": [
+          "pdf"
+        ],
+        "name": "PDF Document",
+        "description": "PDF 文档",
+        "role": "Viewer",
+        "mimeType": "application/pdf",
+        "rank": "Default"
+      },
+      {
+        "ext": [
+          "epub"
+        ],
+        "name": "EPUB eBook",
+        "description": "EPUB 电子书",
+        "role": "Viewer",
+        "mimeType": "application/epub+zip",
+        "rank": "Default"
+      },
+      {
+        "ext": [
+          "mobi"
+        ],
+        "name": "Mobipocket eBook",
+        "description": "MOBI 电子书",
+        "role": "Viewer",
+        "mimeType": "application/x-mobipocket-ebook",
+        "rank": "Default"
+      },
+      {
+        "ext": [
+          "txt"
+        ],
+        "name": "Plain Text Document",
+        "description": "纯文本文档",
+        "role": "Viewer",
+        "mimeType": "text/plain",
+        "rank": "Default"
+      },
+      {
+        "ext": [
+          "md",
+          "markdown"
+        ],
+        "name": "Markdown Document",
+        "description": "Markdown 文档",
+        "role": "Viewer",
+        "mimeType": "text/markdown",
+        "rank": "Default"
+      }
+    ],
+    "icon": ["icons/icon.png"],
+    "android": {
+      "debugApplicationIdSuffix": ".debug"
+    }
+  }
+}

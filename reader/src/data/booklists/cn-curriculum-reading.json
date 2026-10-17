@@ -1,0 +1,43 @@
+{
+  "id": "cn-curriculum-reading",
+  "title": "义务教育语文课程标准推荐读物",
+  "description": "教育部《义务教育语文课程标准（2022年版）》附录 2「关于课内外读物的建议」中点名举例的书目，按原文分类顺序排列。",
+  "en": {
+    "title": "Recommended Reading in China’s Compulsory-Education Chinese Curriculum",
+    "description": "Titles named as examples in Appendix 2 of the Ministry of Education’s Compulsory Education Chinese Curriculum Standards (2022 edition), in the order the document lists them."
+  },
+  "curator": "轻阅 · 据教育部公开文件整理",
+  "tags": [
+    "课标",
+    "青少年",
+    "整本书阅读"
+  ],
+  "updated": "2026-10-06",
+  "source": {
+    "name": "义务教育语文课程标准（2022年版）· 附录2 关于课内外读物的建议",
+    "url": "http://www.moe.gov.cn/srcsite/A26/s8001/202204/t20220420_619921.html",
+    "license": "教育部公开发布的官方文件；书目为事实信息"
+  },
+  "books": [
+    {"title":"安徒生童话","author":"安徒生","note":"课标「童话」类举例","original":{"title":"Andersen's Fairy Tales","author":"Hans Christian Andersen"}},
+    {"title":"格林童话","author":"格林兄弟","year":1812,"note":"课标「童话」类举例","original":{"title":"Grimms' Fairy Tales","author":"Jacob Grimm, Wilhelm Grimm"}},
+    {"title":"稻草人","author":"叶圣陶","year":1923,"note":"课标「童话」类举例"},
+    {"title":"宝葫芦的秘密","author":"张天翼","year":1958,"note":"课标「童话」类举例"},
+    {"title":"伊索寓言","author":"伊索","note":"课标「寓言」类举例","original":{"title":"Aesop's Fables","author":"Aesop"}},
+    {"title":"朝花夕拾","author":"鲁迅","year":1928,"note":"课标「诗歌散文作品」类举例"},
+    {"title":"繁星·春水","author":"冰心","year":1923,"note":"课标「诗歌散文作品」类举例"},
+    {"title":"艾青诗选","author":"艾青","note":"课标「诗歌散文作品」类举例"},
+    {"title":"可爱的中国","author":"方志敏","note":"课标「诗歌散文作品」类举例"},
+    {"title":"革命烈士诗抄","author":"萧三编","year":1959,"note":"课标「诗歌散文作品」类举例"},
+    {"title":"西游记","author":"吴承恩","note":"课标「长篇名著」类举例"},
+    {"title":"水浒传","author":"施耐庵","note":"课标「长篇名著」类举例"},
+    {"title":"骆驼祥子","author":"老舍","year":1936,"note":"课标「长篇名著」类举例"},
+    {"title":"红岩","author":"罗广斌、杨益言","year":1961,"note":"课标「长篇名著」类举例"},
+    {"title":"红星照耀中国","author":"埃德加·斯诺","year":1937,"note":"课标「长篇名著」类举例","original":{"title":"Red Star Over China","author":"Edgar Snow"}},
+    {"title":"格列佛游记","author":"斯威夫特","year":1726,"note":"课标「长篇名著」类举例","original":{"title":"Gulliver's Travels","author":"Jonathan Swift"}},
+    {"title":"简·爱","author":"夏洛蒂·勃朗特","year":1847,"note":"课标「长篇名著」类举例","original":{"title":"Jane Eyre","author":"Charlotte Brontë"}},
+    {"title":"童年","author":"高尔基","note":"课标「长篇名著」类举例"},
+    {"title":"钢铁是怎样炼成的","author":"奥斯特洛夫斯基","note":"课标「长篇名著」类举例"},
+    {"title":"海底两万里","author":"儒勒·凡尔纳","note":"课标「科普科幻作品」类举例","original":{"title":"Twenty Thousand Leagues Under the Seas","author":"Jules Verne"}}
+  ]
+}

@@ -1,0 +1,1 @@
+tcp_sack 1 tcp_dsack 1 传输 0 协议 1 数据 0 主机 1 操作系统 0 服务器 1 可靠传输 1 Ack 1 校验 1 发送方 1 接收方 1 时间戳 1 定时器 1 server 0 报文 1 排队延迟 1 反码 1 确认 1 拥塞 1 应用程序 0 client 0 丢包 1 Fragment 0 Message 0 确认包 1

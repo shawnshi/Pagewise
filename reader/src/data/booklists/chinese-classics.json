@@ -1,0 +1,42 @@
+{
+  "id": "chinese-classics",
+  "title": "中国古典名著",
+  "description": "从先秦典籍到明清小说，中国人绕不开的古典书目。多数可在古登堡计划找到繁体原文。",
+  "en": {
+    "title": "Chinese Classics",
+    "description": "From pre-Qin classics to Ming and Qing novels: the essential works of classical Chinese literature. Most are available in traditional-character originals on Project Gutenberg."
+  },
+  "curator": "轻阅编辑部",
+  "tags": [
+    "古典",
+    "中国",
+    "公版"
+  ],
+  "updated": "2026-10-06",
+  "source": {
+    "name": "轻阅编辑部",
+    "url": "https://github.com/yzfly/LightRead",
+    "license": "CC0-1.0"
+  },
+  "books": [
+    {"title":"诗经","author":"佚名","note":"中国最早的诗歌总集，风、雅、颂三百余篇","original":{"title":"詩經","author":"Anonymous"}},
+    {"title":"论语","author":"孔子及其弟子","note":"孔子与弟子的言行录，儒家的源头","original":{"title":"論語","author":"Confucius"}},
+    {"title":"道德经","author":"老子","note":"五千言讲道与德，道家的根本经典","original":{"title":"道德經","author":"Laozi"}},
+    {"title":"孙子兵法","author":"孙武","note":"十三篇兵法，讲的远不止打仗","original":{"title":"孫子兵法","author":"Sunzi"}},
+    {"title":"孟子","author":"孟子及其弟子","note":"性善、仁政与浩然之气，文气充沛","original":{"title":"孟子","author":"Mencius"}},
+    {"title":"庄子","author":"庄子","note":"寓言与想象写成的哲学，逍遥与齐物"},
+    {"title":"楚辞","author":"屈原、宋玉等","note":"以屈原作品为主的南方诗歌，西汉刘向辑录"},
+    {"title":"史记","author":"司马迁","note":"从黄帝写到汉武帝，纪传体通史的开端","original":{"title":"史記","author":"Sima Qian"}},
+    {"title":"世说新语","author":"刘义庆","note":"魏晋名士的言谈轶事，短小隽永","original":{"title":"世說新語","author":"Liu Yiqing"}},
+    {"title":"文心雕龙","author":"刘勰","note":"体大思精的文学理论专著","original":{"title":"文心雕龍","author":"Liu Xie"}},
+    {"title":"唐诗三百首","author":"蘅塘退士（孙洙）编","year":1763,"note":"流传最广的唐诗选本"},
+    {"title":"古文观止","author":"吴楚材、吴调侯编","year":1695,"note":"先秦至明代的散文选，历代古文入门读本","original":{"title":"古文觀止","author":"Wu Chengquan, Wu Dazhi"}},
+    {"title":"三国演义","author":"罗贯中","note":"据史书与民间说唱写成的历史演义","original":{"title":"三國志演義","author":"Luo Guanzhong"}},
+    {"title":"水浒传","author":"施耐庵","note":"一百单八将聚义梁山的英雄传奇","original":{"title":"水滸傳","author":"Shi Nai'an"}},
+    {"title":"西游记","author":"吴承恩","note":"师徒四人西天取经，神魔小说的代表","original":{"title":"西遊記","author":"Wu Cheng'en"}},
+    {"title":"红楼梦","author":"曹雪芹","year":1791,"note":"1791 年首次排印出版；后四十回一般认为由高鹗等续补","original":{"title":"紅樓夢","author":"Cao Xueqin"}},
+    {"title":"儒林外史","author":"吴敬梓","note":"冷峻讽刺科举制度下的读书人","original":{"title":"儒林外史","author":"Wu Jingzi"}},
+    {"title":"聊斋志异","author":"蒲松龄","note":"近五百篇文言短篇，借花妖狐鬼写人间","original":{"title":"聊齋志異","author":"Pu Songling"}},
+    {"title":"浮生六记","author":"沈复","note":"清代文人的自传散文，写夫妻日常与闲情","original":{"title":"浮生六記","author":"Shen Fu"}}
+  ]
+}

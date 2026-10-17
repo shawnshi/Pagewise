@@ -1,0 +1,22 @@
+/.cache/
+/artifacts/
+/.worktrees/
+
+# Local-only upstream/agent guidance; not application source.
+/reader/CLAUDE.md
+
+# Credentials, signing material and local databases.
+.env
+.env.*
+!.env.example
+!.env.sample
+keystore.properties
+*.jks
+*.keystore
+*.p12
+*.pfx
+*.pem
+*.key
+*.db
+*.sqlite
+*.sqlite3

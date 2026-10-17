@@ -1,0 +1,38 @@
+{
+  "id": "economics-classics",
+  "title": "经济学经典",
+  "description": "从古典政治经济学到凯恩斯早期名作，均有公版英文本，可在古登堡计划或 Standard Ebooks 免费获取。",
+  "en": {
+    "title": "Classics of Economics",
+    "description": "From classical political economy to early Keynes. Every title has a public-domain English text free on Project Gutenberg or Standard Ebooks."
+  },
+  "curator": "轻阅编辑部",
+  "tags": [
+    "经济学",
+    "公版",
+    "社会科学"
+  ],
+  "updated": "2026-10-06",
+  "source": {
+    "name": "轻阅编辑部",
+    "url": "https://github.com/yzfly/LightRead",
+    "license": "CC0-1.0"
+  },
+  "books": [
+    {"title":"道德情操论","author":"亚当·斯密","year":1759,"note":"同情心与「公正的旁观者」，理解斯密的另一半","original":{"title":"The Theory of Moral Sentiments","author":"Adam Smith"}},
+    {"title":"国富论","author":"亚当·斯密","year":1776,"note":"分工、市场与「看不见的手」，现代经济学的开端","original":{"title":"The Wealth of Nations","author":"Adam Smith"}},
+    {"title":"人口原理","author":"马尔萨斯","year":1798,"note":"人口增长快于食物增长的著名论断","original":{"title":"An Essay on the Principle of Population","author":"Thomas Robert Malthus"}},
+    {"title":"政治经济学及赋税原理","author":"大卫·李嘉图","year":1817,"note":"地租、劳动价值与比较优势","original":{"title":"On the Principles of Political Economy and Taxation","author":"David Ricardo"}},
+    {"title":"什么是所有权","author":"蒲鲁东","year":1840,"note":"「财产就是盗窃」的出处","original":{"title":"What Is Property?","author":"Pierre-Joseph Proudhon"}},
+    {"title":"政治经济学原理","author":"约翰·斯图亚特·密尔","year":1848,"note":"古典经济学的集大成教科书；古登堡收录的是节编本","original":{"title":"Principles of Political Economy","author":"John Stuart Mill"}},
+    {"title":"法律","author":"巴斯夏","year":1850,"note":"为有限政府辩护的短篇檄文","original":{"title":"The Law","author":"Frédéric Bastiat"}},
+    {"title":"致后来者","author":"约翰·罗斯金","year":1862,"note":"批评以财富为唯一尺度的政治经济学","original":{"title":"Unto This Last","author":"John Ruskin"}},
+    {"title":"资本论（第一卷）","author":"马克思","year":1867,"note":"对资本主义生产方式的系统批判","original":{"title":"Capital Vol. I","author":"Karl Marx"}},
+    {"title":"进步与贫困","author":"亨利·乔治","year":1879,"note":"为何繁荣伴随贫困，主张单一地价税","original":{"title":"Progress and Poverty","author":"Henry George"}},
+    {"title":"妇女与经济","author":"夏洛特·珀金斯·吉尔曼","year":1898,"note":"从经济依附角度分析两性关系","original":{"title":"Women and Economics","author":"Charlotte Perkins Gilman"}},
+    {"title":"有闲阶级论","author":"凡勃伦","year":1899,"note":"「炫耀性消费」一词由此而来","original":{"title":"The Theory of the Leisure Class","author":"Thorstein Veblen"}},
+    {"title":"新教伦理与资本主义精神","author":"马克斯·韦伯","note":"宗教观念如何塑造了现代经济行为","original":{"title":"The Protestant Ethic and the Spirit of Capitalism","author":"Max Weber"}},
+    {"title":"和约的经济后果","author":"凯恩斯","year":1919,"note":"预言凡尔赛和约的赔款安排难以为继","original":{"title":"The Economic Consequences of the Peace","author":"John Maynard Keynes"}},
+    {"title":"宗教与资本主义的兴起","author":"托尼","year":1926,"note":"与韦伯对话的英国经济史名作","original":{"title":"Religion and the Rise of Capitalism","author":"R. H. Tawney"}}
+  ]
+}

@@ -1,0 +1,1 @@
+乱序 1 关闭连接 0 数据传送 1 保持定时器 1 可靠性 1 Window 0 close 0 connection 0 tcp状态 0 应答序号 1 窗口 1 数据报 0 窗口缩放 1 Congestion_control 0

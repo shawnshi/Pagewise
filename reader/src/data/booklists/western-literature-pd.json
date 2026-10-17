@@ -1,0 +1,43 @@
+{
+  "id": "western-literature-pd",
+  "title": "西方文学公版经典",
+  "description": "已进入公有领域的西方文学名著，英文原著或公版英译都可在 Standard Ebooks 与古登堡计划免费下载。",
+  "en": {
+    "title": "Public-Domain Western Classics",
+    "description": "Great works of Western literature now in the public domain. The English originals or public-domain English translations are free on Standard Ebooks and Project Gutenberg."
+  },
+  "curator": "轻阅编辑部",
+  "tags": [
+    "文学",
+    "公版",
+    "英文"
+  ],
+  "updated": "2026-10-06",
+  "source": {
+    "name": "轻阅编辑部",
+    "url": "https://github.com/yzfly/LightRead",
+    "license": "CC0-1.0"
+  },
+  "books": [
+    {"title":"The Odyssey","author":"Homer","note":"《奥德赛》：漂泊十年的归乡史诗；公版英译有 Butler、Bryant 等版本"},
+    {"title":"Hamlet","author":"William Shakespeare","year":1603,"note":"《哈姆雷特》：复仇、犹豫与莎剧最著名的独白"},
+    {"title":"Don Quixote","author":"Miguel de Cervantes Saavedra","year":1605,"note":"《堂吉诃德》：上卷 1605、下卷 1615 年，Ormsby 英译"},
+    {"title":"The Life and Adventures of Robinson Crusoe","author":"Daniel Defoe","year":1719,"note":"《鲁滨逊漂流记》：荒岛求生二十八年"},
+    {"title":"Gulliver's Travels","author":"Jonathan Swift","year":1726,"note":"《格列佛游记》：借奇幻游历讽刺人性与政治"},
+    {"title":"Pride and Prejudice","author":"Jane Austen","year":1813,"note":"《傲慢与偏见》：机锋十足的婚恋喜剧"},
+    {"title":"Frankenstein","author":"Mary Shelley","year":1818,"note":"《弗兰肯斯坦》：常被视为第一部科幻小说"},
+    {"title":"Jane Eyre","author":"Charlotte Brontë","year":1847,"note":"《简·爱》：一位女家庭教师的自述与自尊"},
+    {"title":"Wuthering Heights","author":"Emily Brontë","year":1847,"note":"《呼啸山庄》：荒原上两代人的爱与报复"},
+    {"title":"Moby-Dick","author":"Herman Melville","year":1851,"note":"《白鲸》：追猎白鲸的航程，也是百科全书式的奇书"},
+    {"title":"Madame Bovary","author":"Gustave Flaubert","year":1856,"note":"《包法利夫人》：Eleanor Marx-Aveling 英译"},
+    {"title":"Great Expectations","author":"Charles Dickens","year":1861,"note":"《远大前程》：孤儿皮普的成长与幻灭"},
+    {"title":"Les Misérables","author":"Victor Hugo","year":1862,"note":"《悲惨世界》：Isabel F. Hapgood 英译"},
+    {"title":"Crime and Punishment","author":"Fyodor Dostoevsky","year":1866,"note":"《罪与罚》：Constance Garnett 英译"},
+    {"title":"War and Peace","author":"Leo Tolstoy","year":1869,"note":"《战争与和平》：Louise 与 Aylmer Maude 英译"},
+    {"title":"Anna Karenina","author":"Leo Tolstoy","year":1878,"note":"《安娜·卡列尼娜》：Constance Garnett 英译"},
+    {"title":"The Brothers Karamazov","author":"Fyodor Dostoevsky","year":1880,"note":"《卡拉马佐夫兄弟》：Constance Garnett 英译"},
+    {"title":"Adventures of Huckleberry Finn","author":"Mark Twain","year":1884,"note":"《哈克贝利·费恩历险记》：密西西比河上的逃亡"},
+    {"title":"The Picture of Dorian Gray","author":"Oscar Wilde","year":1890,"note":"《道林·格雷的画像》：画像替人变老的唯美寓言"},
+    {"title":"The Great Gatsby","author":"F. Scott Fitzgerald","year":1925,"note":"《了不起的盖茨比》：爵士时代的美国梦，2021 年进入美国公版"}
+  ]
+}
