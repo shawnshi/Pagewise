@@ -13,7 +13,7 @@
 - 全局笔记聚合、原书定位、正式笔记与本机草稿区分；空草稿恢复、立即关闭冲刷、配额/容量失败不丢当前输入、不静默淘汰其他草稿。
 - 墨水屏模式覆盖应用壳与阅读器；关闭后恢复原主题。新增界面文案使用现有中英词典。
 
-未恢复在线书源、账号或同步；未修改依赖版本，未提交或暂存代码。所有任务变更均相对原有脏工作区基线计算，不用 Git HEAD 冒充任务基线。
+未恢复在线书源、账号或同步；本轮未修改依赖版本。UI 任务差异相对原有脏工作区基线计算；后续 GitHub 源码同步与 APK 发布分别处理，不用 Git HEAD 冒充原任务基线。
 
 ## 已执行证据
 
@@ -34,7 +34,7 @@
 
 原初审三项发现均已在代码层闭环。独立复核覆盖 14 个文件增量及修复调用闭包，结论为 OK with notes；不是全项目重审，也不是实机验收。
 
-回执：本地 `.cache/github-sync-20261017-01/independent-recheck.md`。审查源码快照为 `deb1aedf559810ee33b4159d36590776dbf3e94b23b706e88a5034bba1edf85b`。GitHub 同步仍等待目标仓库 URL，未向上游暂存、提交或推送。
+回执：本地 `.cache/github-sync-20261017-01/independent-recheck.md`。审查源码快照为 `deb1aedf559810ee33b4159d36590776dbf3e94b23b706e88a5034bba1edf85b`。GitHub 同步目标为 `shawnshi/Pagewise` 的 `main`；当前源码状态以该仓库提交记录为准，不向上游 LightRead 仓库推送。
 
 ## Android 阻塞与恢复
 
@@ -44,7 +44,7 @@
 - `native-build-01`、`native-build-03`、`native-build-04` 均达到 170 秒限时；已停止自动重试。`native-build-04.log` 记录 Rust 编译完成，`buildSrc.jar` 已生成，但没有 APK。
 - `native-build.py operator-build` 为人工终端恢复入口，要求交互终端；代理不得用它绕过执行预算。它先重新构建前端，再使用同一隔离工具链运行调试 APK 构建。此入口仅做语法检查，尚未实际执行；不保证后续 Gradle/SDK 环节没有其他缺口。
 
-代码冻结并确认无其他构建写者后，可在项目根目录的普通终端执行：
+以下仅是原开发工作区的本地恢复命令，缓存脚本不随仓库分发；新克隆请按根 README 的常规 Android 构建步骤操作。原工作区代码冻结并确认无其他构建写者后，可在普通终端执行：
 
 ```powershell
 python -B .cache/ui-v02-20261017-01/native-build.py operator-build
