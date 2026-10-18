@@ -32,7 +32,7 @@ test('status filter: matches explicit readingStatus correctly', () => {
   ]
 
   const unreadRes = queryLibraryBooks(books, { statuses: ['unread'] })
-  assert.deepEqual(unreadRes.items.map(b => b.id), ['b-unread'])
+  assert.deepEqual(unreadRes.items.map(b => b.id), ['b-legacy-full', 'b-legacy-none', 'b-unread'])
 
   const finishedRes = queryLibraryBooks(books, { statuses: ['finished'] })
   assert.deepEqual(finishedRes.items.map(b => b.id), ['b-finished'])
@@ -55,7 +55,7 @@ test('status filter: legacy books with positive lastReadAt match reading, but pr
 
   // Querying unread: only explicit unread matches, b-legacy-zero-progress must NOT match!
   const unreadRes = queryLibraryBooks(books, { statuses: ['unread'] })
-  assert.deepEqual(unreadRes.items.map(b => b.id), ['b-explicit-unread'])
+  assert.deepEqual(unreadRes.items.map(b => b.id), ['b-explicit-unread', 'b-legacy-full-progress', 'b-legacy-zero-progress'])
 
   // Querying finished: b-legacy-full-progress must NOT match!
   const finishedRes = queryLibraryBooks(books, { statuses: ['finished'] })
@@ -151,7 +151,7 @@ test('transactional filter draft lifecycle in query workflow', () => {
   const committed = commitFilterDraft(draft)
   assert.deepEqual(committed.tagFilter, ['History'])
   assert.equal(committed.formatFilter, 'mobi')
-  assert.equal(committed.statusFilter, 'unread')
+  assert.equal(committed.statusFilter, 'unmarked')
   assert.equal(committed.sortBy, 'title')
 })
 

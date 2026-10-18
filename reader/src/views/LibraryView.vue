@@ -15,6 +15,10 @@ import type { BookMeta } from '../storage'
 import { t } from '../i18n'
 import { useSettings } from '../stores/settings'
 import { useFolderLibrary } from '../services/folderLibrary'
+import { BOOK_CATEGORIES, normalizeTagName } from '../services/bookClassification'
+import { bookFileProblem, type AvailabilityFilter } from '../services/bookAvailability'
+import { mergeLibraryTags, removeLibraryTag, clearBookClassifications } from '../services/bookTagActions'
+import { getStorage } from '../storage'
 import {
   saveLibrarySession,
   loadLibrarySession,
@@ -22,6 +26,7 @@ import {
   commitFilterDraft,
   queryLibrarySession,
   type AdvancedFilterDraft,
+  type LibrarySessionState,
   type LibrarySortBy,
 } from '../services/librarySession'
 import {
@@ -46,6 +51,12 @@ async function onChooseFolder() {
 async function onRescan() {
   try {
     await folderLibrary.value?.rescan()
+    await library.refresh()
+    const status = folderLibrary.value?.status.value
+    if (status && ['partial', 'error', 'permission-denied'].includes(status.state)) {
+      const message = status.state === 'partial' ? [t('folder.status.partial'), status.error].filter(Boolean).join(' · ') : status.error || t('library.filePermission')
+      throw new Error(message)
+    }
     toast(t('common.done'), 'success', 2000)
   } catch (err: any) {
     toast(err?.message || t('common.unknownError'), 'error')
@@ -55,6 +66,22 @@ async function onRescan() {
 const keyword = ref('')
 const sortBy = ref<LibrarySortBy>('recent')
 const statusFilter = ref<ReadingStatus | ''>('')
+const availabilityFilter = ref<AvailabilityFilter>('')
+const unavailableCount = computed(() => allBooks.value.filter(book => bookFileProblem(book)).length)
+const hasFolderIssue = computed(() => ['partial', 'error', 'permission-denied'].includes(folderLibrary.value.status.value.state))
+const folderIssueMessage = computed(() => {
+  const status = folderLibrary.value.status.value
+  if (status.state === 'permission-denied') return t('library.filePermission')
+  if (hasFolderIssue.value) return [t('folder.status.' + status.state), status.error].filter(Boolean).join(' · ')
+  return t('library.unavailableCount', { count: unavailableCount.value })
+})
+const categoryFilter = ref('')
+const classificationStatusFilter = ref<'all' | 'complete' | 'incomplete' | 'unclassified' | ''>('')
+const audienceFilter = ref('')
+const textbookFilter = ref<'all' | 'true' | 'false' | 'unknown' | ''>('')
+const ancientTextFilter = ref<'all' | 'true' | 'false' | 'unknown' | ''>('')
+const workCountryFilter = ref('')
+const workPeriodFilter = ref('')
 
 // 批量管理
 const manageMode = ref(false)
@@ -69,7 +96,9 @@ const restoringSession = ref(true)
 const orderedBookIds = ref<string[]>([])
 const lastViewedBookId = ref<string>()
 const filterDraft = ref<AdvancedFilterDraft | null>(null)
-const filterDialog = ref<HTMLDialogElement>()
+const filterPanel = ref<HTMLElement>()
+const unavailableReturn = ref<LibrarySessionState>()
+const pageJump = ref<number | undefined>()
 const filterTagQuery = ref('')
 const filterTagPage = ref(1)
 const showTagModal = ref(false)
@@ -98,11 +127,44 @@ function saveCurrentSession() {
     formatFilter: formatFilter.value,
     languageFilter: languageFilter.value,
     statusFilter: statusFilter.value,
+    availabilityFilter: availabilityFilter.value,
+    unavailableReturn: unavailableReturn.value,
+    returnedFromReader: false,
+    categoryFilter: categoryFilter.value,
+    classificationStatusFilter: classificationStatusFilter.value,
+    audienceFilter: audienceFilter.value,
+    textbookFilter: textbookFilter.value,
+    ancientTextFilter: ancientTextFilter.value,
+    workCountryFilter: workCountryFilter.value,
+    workPeriodFilter: workPeriodFilter.value,
     page: page.value,
     pageSize: pageSize.value,
     orderedBookIds: orderedBookIds.value,
     lastViewedBookId: lastViewedBookId.value,
   })
+}
+
+function restoreSession(session: LibrarySessionState) {
+  keyword.value = session.keyword ?? ''
+  sortBy.value = session.sortBy ?? 'recent'
+  tagFilter.value = session.tagFilter ?? []
+  tagMode.value = session.tagMode ?? 'and'
+  formatFilter.value = session.formatFilter ?? ''
+  languageFilter.value = session.languageFilter ?? ''
+  statusFilter.value = session.statusFilter ?? ''
+  categoryFilter.value = session.categoryFilter ?? ''
+  classificationStatusFilter.value = session.classificationStatusFilter ?? ''
+  audienceFilter.value = session.audienceFilter ?? ''
+  textbookFilter.value = session.textbookFilter ?? ''
+  ancientTextFilter.value = session.ancientTextFilter ?? ''
+  workCountryFilter.value = session.workCountryFilter ?? ''
+  workPeriodFilter.value = session.workPeriodFilter ?? ''
+  page.value = session.page ?? 1
+  pageSize.value = session.pageSize ?? 12
+  orderedBookIds.value = session.orderedBookIds ?? []
+  lastViewedBookId.value = session.lastViewedBookId
+  availabilityFilter.value = session.availabilityFilter ?? ''
+  unavailableReturn.value = session.unavailableReturn
 }
 
 onMounted(async () => {
@@ -111,22 +173,17 @@ onMounted(async () => {
   window.addEventListener('keydown', onGlobalKeydown)
 
   try {
-    if (!library.loaded) await library.refresh()
     const session = loadLibrarySession()
-    if (session) {
-      keyword.value = session.keyword ?? ''
-      sortBy.value = session.sortBy ?? 'recent'
-      tagFilter.value = session.tagFilter ?? []
-      tagMode.value = session.tagMode ?? 'and'
-      formatFilter.value = session.formatFilter ?? ''
-      languageFilter.value = session.languageFilter ?? ''
-      statusFilter.value = session.statusFilter ?? ''
-      page.value = session.page ?? 1
-      pageSize.value = session.pageSize ?? 12
-      orderedBookIds.value = session.orderedBookIds ?? []
-      lastViewedBookId.value = session.lastViewedBookId
-    }
+    await library.refresh()
+    if (session) restoreSession(session)
+    if (session?.returnedFromReader) {
+      orderedBookIds.value = []
+      rememberResultOrder()
+      const index = orderedBookIds.value.indexOf(lastViewedBookId.value ?? '')
+      if (index >= 0) page.value = Math.floor(index / pageSize.value) + 1
+    } else rememberResultOrder()
     restoringSession.value = false
+    saveCurrentSession()
     await nextTick()
     if (session?.lastViewedBookId) {
       document.getElementById(`book-card-${session.lastViewedBookId}`)?.scrollIntoView({ block: 'nearest', behavior: 'auto' })
@@ -140,7 +197,6 @@ onMounted(async () => {
 onBeforeRouteLeave(() => {
   if (filterDraft.value) {
     closeAdvancedFilter()
-    return false
   }
   saveCurrentSession()
 })
@@ -172,10 +228,14 @@ const totalReadingTime = computed(() => {
   return total >= 60 ? formatReadingTime(total) : ''
 })
 
+const categoryLabels = new Set(BOOK_CATEGORIES.map(c => c.label))
+
 const allTags = computed(() => {
   const tags = new Set<string>()
   for (const book of allBooks.value) {
-    for (const tag of book.tags || []) tags.add(tag)
+    for (const tag of book.tags || []) {
+      if (!categoryLabels.has(tag)) tags.add(tag)
+    }
   }
   return [...tags].sort((a, b) => a.localeCompare(b, 'zh'))
 })
@@ -184,14 +244,24 @@ const queryOptions = computed<LibraryQueryOptions>(() => ({
   search: keyword.value,
   tags: tagFilter.value,
   tagMode: tagMode.value,
+  category: categoryFilter.value || undefined,
+  classificationStatus: classificationStatusFilter.value || undefined,
+  audience: audienceFilter.value || undefined,
+  textbook: textbookFilter.value || undefined,
+  ancientText: ancientTextFilter.value || undefined,
+  workCountry: workCountryFilter.value || undefined,
+  workPeriod: workPeriodFilter.value || undefined,
   formats: formatFilter.value ? [formatFilter.value] : [],
   languages: languageFilter.value ? [languageFilter.value] : [],
   statuses: statusFilter.value ? [statusFilter.value] : undefined,
+  availability: availabilityFilter.value,
   sortBy: sortBy.value === 'recent' ? 'lastRead' : sortBy.value === 'added' ? 'addedAt' : sortBy.value,
   pinnedFirst: true,
   page: page.value,
   pageSize: pageSize.value,
 }))
+
+watch([queryOptions, page, pageSize], saveCurrentSession, { flush: 'post' })
 
 const query = computed(() => queryLibrarySession(allBooks.value, queryOptions.value, orderedBookIds.value))
 const filtered = computed(() => query.value.items)
@@ -214,11 +284,12 @@ watch(() => filtered.value.filter(book => book.hasCover).map(book => book.id), (
 const formats = computed(() => [...new Set(allBooks.value.map(book => book.format))].sort())
 const languages = computed(() => [...new Set(allBooks.value.map(book => book.language).filter((language): language is string => !!language))].sort())
 
-watch([keyword, tagFilter, tagMode, formatFilter, languageFilter, statusFilter, sortBy, pageSize], () => {
+watch([keyword, tagFilter, tagMode, formatFilter, languageFilter, statusFilter, availabilityFilter, categoryFilter, classificationStatusFilter, audienceFilter, textbookFilter, ancientTextFilter, workCountryFilter, workPeriodFilter, sortBy, pageSize], () => {
   if (restoringSession.value) return
   orderedBookIds.value = []
   page.value = 1
   selectedIds.value = new Set()
+  rememberResultOrder()
 }, { flush: 'sync' })
 
 watch(() => query.value.page, value => {
@@ -228,16 +299,29 @@ watch(() => query.value.page, value => {
 watch(() => library.books.map(book => book.id), ids => {
   const existing = new Set(ids)
   selectedIds.value = new Set([...selectedIds.value].filter(id => existing.has(id)))
-})
+  if (restoringSession.value) return
+  const matching = queryLibraryBooks(allBooks.value, {
+    ...queryOptions.value, page: 1, pageSize: Number.MAX_SAFE_INTEGER,
+  }).items.map(book => book.id)
+  const matches = new Set(matching)
+  const remembered = new Set(orderedBookIds.value)
+  orderedBookIds.value = [
+    ...orderedBookIds.value.filter(id => matches.has(id)),
+    ...matching.filter(id => !remembered.has(id)),
+  ]
+}, { flush: 'sync' })
 
 const hasActiveChips = computed(() => {
-  return !!keyword.value.trim() || !!tagFilter.value.length || !!formatFilter.value || !!languageFilter.value || !!statusFilter.value
+  return !!keyword.value.trim() || !!tagFilter.value.length || !!formatFilter.value || !!languageFilter.value || !!statusFilter.value || !!availabilityFilter.value
+    || !!categoryFilter.value || !!classificationStatusFilter.value || !!audienceFilter.value || !!textbookFilter.value || !!ancientTextFilter.value || !!workCountryFilter.value || !!workPeriodFilter.value
 })
 
 const lastReadingBook = computed(() =>
   hasActiveChips.value ? undefined : [...allBooks.value].filter(book => !!book.lastReadAt).sort((a, b) => (b.lastReadAt ?? 0) - (a.lastReadAt ?? 0))[0])
 
-const filterTags = computed(() => allTags.value.filter(tag => tag.toLowerCase().includes(filterTagQuery.value.toLowerCase())))
+const topicTags = computed(() => [...new Set(allBooks.value.flatMap(book => book.classification?.topics.map(tag => tag.value) ?? []))].sort())
+const secondaryTags = computed(() => allTags.value.filter(tag => !topicTags.value.includes(tag)))
+const filterTags = computed(() => topicTags.value.filter(tag => tag.toLowerCase().includes(filterTagQuery.value.toLowerCase())))
 const visibleFilterTags = computed(() => filterTags.value.slice((filterTagPage.value - 1) * 24, filterTagPage.value * 24))
 watch(filterTagQuery, () => { filterTagPage.value = 1 })
 
@@ -248,30 +332,46 @@ const filterPreviewCount = computed(() => {
         ...queryOptions.value,
         tags: draft.tags,
         tagMode: draft.tagMode,
+        category: draft.category,
+        classificationStatus: draft.classificationStatus || undefined,
+        audience: draft.audience,
+        textbook: draft.textbook,
+        ancientText: draft.ancientText,
+        workCountry: draft.workCountry,
+        workPeriod: draft.workPeriod,
         formats: draft.format ? [draft.format] : [],
         languages: draft.language ? [draft.language] : [],
         statuses: draft.status ? [draft.status] : [],
+        availability: draft.availability,
       }).total
     : query.value.total
 })
 
 async function openAdvancedFilter() {
+  if (filterDraft.value) { closeAdvancedFilter(); return }
   filterDraft.value = createFilterDraft({
     tagFilter: tagFilter.value,
     tagMode: tagMode.value,
     formatFilter: formatFilter.value,
     languageFilter: languageFilter.value,
     statusFilter: statusFilter.value,
+    availabilityFilter: availabilityFilter.value,
+    categoryFilter: categoryFilter.value,
+    classificationStatusFilter: classificationStatusFilter.value,
+    audienceFilter: audienceFilter.value,
+    textbookFilter: textbookFilter.value,
+    ancientTextFilter: ancientTextFilter.value,
+    workCountryFilter: workCountryFilter.value,
+    workPeriodFilter: workPeriodFilter.value,
     sortBy: sortBy.value,
   })
   filterTagQuery.value = ''
   filterTagPage.value = 1
   await nextTick()
-  filterDialog.value?.showModal()
+  filterPanel.value?.querySelector<HTMLElement>('select, input')?.focus()
 }
 
 function closeAdvancedFilter() {
-  filterDialog.value?.close()
   filterDraft.value = null
 }
 
@@ -283,6 +383,14 @@ function applyAdvancedFilter() {
   formatFilter.value = committed.formatFilter
   languageFilter.value = committed.languageFilter
   statusFilter.value = committed.statusFilter
+  availabilityFilter.value = committed.availabilityFilter
+  categoryFilter.value = committed.categoryFilter
+  classificationStatusFilter.value = committed.classificationStatusFilter
+  audienceFilter.value = committed.audienceFilter
+  textbookFilter.value = committed.textbookFilter
+  ancientTextFilter.value = committed.ancientTextFilter
+  workCountryFilter.value = committed.workCountryFilter
+  workPeriodFilter.value = committed.workPeriodFilter
   sortBy.value = committed.sortBy
   page.value = 1
   closeAdvancedFilter()
@@ -296,14 +404,17 @@ function resetFilterDraft() {
       format: '',
       language: '',
       status: '',
+      availability: '',
+      category: '',
+      classificationStatus: '',
+      audience: '',
+      textbook: '',
+      ancientText: '',
+      workCountry: '',
+      workPeriod: '',
       sortBy: 'recent',
     })
   }
-}
-
-function refreshResultOrder() {
-  orderedBookIds.value = []
-  page.value = 1
 }
 
 function toggleTag(tag: string) {
@@ -318,6 +429,14 @@ function clearFilters() {
   formatFilter.value = ''
   languageFilter.value = ''
   statusFilter.value = ''
+  availabilityFilter.value = ''
+  categoryFilter.value = ''
+  classificationStatusFilter.value = ''
+  audienceFilter.value = ''
+  textbookFilter.value = ''
+  ancientTextFilter.value = ''
+  workCountryFilter.value = ''
+  workPeriodFilter.value = ''
 }
 
 function toggleManage() {
@@ -402,17 +521,24 @@ async function batchDelete() {
 
 async function batchTag() {
   const tags = tagDraft.value.split(/[,，、]/).map(t => t.trim()).filter(Boolean)
-  const storage = await (await import('../storage')).getStorage()
-  for (const id of selectedIds.value) {
-    const book = library.books.find(b => b.id === id)
-    if (!book) continue
-    const merged = [...new Set([...book.tags, ...tags])]
-    await storage.updateBook(id, { tags: merged })
-    book.tags = merged
+  if (!tags.length) return
+  const books = library.books.filter(book => selectedIds.value.has(book.id))
+  if (books.some(book => book.classification)) {
+    toast('自由标签仅可批量添加到未分类书籍；请在详情页编辑已有分类。', 'info')
+    return
   }
-  showTagModal.value = false
-  tagDraft.value = ''
-  toast(t('library.tagsAdded', { count: selectedIds.value.size }), 'success')
+  try {
+    const storage = await getStorage()
+    await storage.updateBookClassifications([], books.map(book => ({
+      id: book.id, expectedTags: book.tags, tags: [...new Set([...book.tags, ...tags])],
+    })))
+    showTagModal.value = false
+    tagDraft.value = ''
+    await library.refresh()
+    toast(t('library.tagsAdded', { count: books.length }), 'success')
+  } catch (err: any) {
+    toast(err?.message || t('common.saveFailed'), 'error')
+  }
 }
 
 async function togglePin(book: BookMeta) {
@@ -420,6 +546,8 @@ async function togglePin(book: BookMeta) {
   const pinnedAt = book.pinnedAt ? 0 : Date.now()
   await storage.updateBook(book.id, { pinnedAt })
   book.pinnedAt = pinnedAt || undefined
+  orderedBookIds.value = []
+  rememberResultOrder()
   toast(pinnedAt ? t('library.pinned') : t('library.unpinned'), 'success')
 }
 
@@ -433,6 +561,8 @@ async function batchPin(pin: boolean) {
     await storage.updateBook(id, { pinnedAt })
     book.pinnedAt = pinnedAt || undefined
   }
+  orderedBookIds.value = []
+  rememberResultOrder()
   toast(pin ? t('library.pinned') : t('library.unpinned'), 'success')
 }
 
@@ -451,11 +581,41 @@ function openDetail(book: BookMeta) {
   router.push(`/book/${book.id}`)
 }
 
+function showUnavailable() {
+  if (!unavailableReturn.value) {
+    saveCurrentSession()
+    unavailableReturn.value = loadLibrarySession() ?? undefined
+  }
+  clearFilters()
+  availabilityFilter.value = 'unavailable'
+  closeAdvancedFilter()
+}
+
+async function restoreUnavailableFilters() {
+  const previous = unavailableReturn.value
+  if (!previous) return
+  restoringSession.value = true
+  restoreSession(previous)
+  unavailableReturn.value = undefined
+  restoringSession.value = false
+  saveCurrentSession()
+  await nextTick()
+  if (lastViewedBookId.value) document.getElementById(`book-card-${lastViewedBookId.value}`)?.scrollIntoView({ block: 'nearest' })
+}
+
+function jumpToPage() {
+  if (!Number.isInteger(pageJump.value) || !pageJump.value) return
+  page.value = Math.max(1, Math.min(query.value.totalPages, pageJump.value))
+  pageJump.value = undefined
+}
+
 function openReader(book: BookMeta) {
   rememberResultOrder()
   lastViewedBookId.value = book.id
   saveCurrentSession()
-  router.push(readerPath(book))
+  const problem = bookFileProblem(book)
+  router.push(problem === 'permission-denied' ? '/settings?section=folder'
+    : problem ? `/book/${book.id}?recover=1` : readerPath(book))
 }
 
 async function removeBook(book: BookMeta) {
@@ -476,58 +636,92 @@ async function removeBook(book: BookMeta) {
 const showTagManage = ref(false)
 const tagManageEditing = ref<string | null>(null)
 const tagManageRename = ref('')
+const tagManageRole = ref<'topic' | 'feature' | 'legacy'>('topic')
 
 function openTagManage() {
   tagManageEditing.value = null
   tagManageRename.value = ''
+  tagManageRole.value = 'topic'
   showTagManage.value = true
 }
 
+function roleTags(book: BookMeta) {
+  const tags = tagManageRole.value === 'legacy'
+    ? (book.classification?.legacyTags ?? book.tags).map(value => ({ value, locked: false }))
+    : tagManageRole.value === 'topic'
+      ? book.classification?.topics ?? []
+      : book.classification?.feature ? [book.classification.feature] : []
+  return tags.map(tag => ({ ...tag, value: normalizeTagName(tag.value) }))
+}
+const managedTags = computed(() => [...new Set(library.books.flatMap(book => roleTags(book).map(tag => tag.value)))].sort())
 function tagCount(tag: string) {
-  return allBooks.value.filter(b => b.tags.includes(tag)).length
+  return library.books.filter(book => roleTags(book).some(item => item.value === tag)).length
 }
 
 async function renameTag(oldTag: string) {
-  const newTag = tagManageRename.value.trim()
+  const newTag = normalizeTagName(tagManageRename.value)
   if (!newTag || newTag === oldTag) {
     tagManageEditing.value = null
     return
   }
-  const storage = await (await import('../storage')).getStorage()
-  for (const book of allBooks.value) {
-    if (!book.tags.includes(oldTag)) continue
-    const next = [...new Set(book.tags.map(t => (t === oldTag ? newTag : t)))]
-    await storage.updateBook(book.id, { tags: next })
-    book.tags = next
+  const affectedBooks = library.books.filter(book => roleTags(book).some(tag => tag.value === oldTag))
+  const lockedCount = affectedBooks.filter(book => roleTags(book).some(tag => tag.value === oldTag && tag.locked)).length
+
+  const msg = t('classification.mergePreview', {
+    from: oldTag,
+    to: newTag,
+    affected: affectedBooks.length,
+    locked: lockedCount,
+  })
+  if (!confirm(msg)) return
+
+  try {
+    const storage = await getStorage()
+    await mergeLibraryTags(storage, tagManageRole.value, oldTag, newTag)
+    await library.refresh()
+    tagFilter.value = tagFilter.value.map(t => (t === oldTag ? newTag : t))
+    tagManageEditing.value = null
+    toast(t('library.tagRenamed', { old: oldTag, new: newTag }), 'success')
+  } catch (err: any) {
+    toast(err?.message || '合并标签失败', 'error')
   }
-  tagFilter.value = tagFilter.value.map(t => (t === oldTag ? newTag : t))
-  tagManageEditing.value = null
-  toast(t('library.tagRenamed', { old: oldTag, new: newTag }), 'success')
 }
 
 async function deleteTag(tag: string) {
-  if (!confirm(t('library.deleteTagConfirm', { tag }))) return
-  const storage = await (await import('../storage')).getStorage()
-  for (const book of allBooks.value) {
-    if (!book.tags.includes(tag)) continue
-    const next = book.tags.filter(t => t !== tag)
-    await storage.updateBook(book.id, { tags: next })
-    book.tags = next
+  const affectedBooks = library.books.filter(book => roleTags(book).some(item => item.value === tag))
+  const lockedCount = affectedBooks.filter(book => roleTags(book).some(item => item.value === tag && item.locked)).length
+  const role = tagManageRole.value
+
+  const msg = t('classification.deleteGlobalConfirm', {
+    tag,
+    role,
+    affected: affectedBooks.length,
+    locked: lockedCount,
+  })
+  if (!confirm(msg)) return
+
+  try {
+    const storage = await getStorage()
+    await removeLibraryTag(storage, role, tag)
+    await library.refresh()
+    tagFilter.value = tagFilter.value.filter(t => t !== tag)
+    toast(t('library.tagDeleted', { tag }), 'success')
+  } catch (err: any) {
+    toast(err?.message || '删除标签失败', 'error')
   }
-  tagFilter.value = tagFilter.value.filter(t => t !== tag)
-  toast(t('library.tagDeleted', { tag }), 'success')
 }
 
 async function clearSelectedTags() {
-  const storage = await (await import('../storage')).getStorage()
-  for (const id of selectedIds.value) {
-    const book = library.books.find(b => b.id === id)
-    if (!book) continue
-    await storage.updateBook(id, { tags: [] })
-    book.tags = []
+  if (!confirm('清空所选书籍的分类标签（含锁定标签）？历史标签保留，书籍源文件不变。')) return
+  try {
+    const storage = await getStorage()
+    await clearBookClassifications(storage, [...selectedIds.value])
+    showTagModal.value = false
+    await library.refresh()
+    toast(t('library.tagsCleared'), 'success')
+  } catch (err: any) {
+    toast(err?.message || t('common.saveFailed'), 'error')
   }
-  showTagModal.value = false
-  toast(t('library.tagsCleared'), 'success')
 }
 </script>
 
@@ -590,99 +784,58 @@ async function clearSelectedTags() {
       <span class="row-break" aria-hidden="true" />
     </header>
 
-    <!-- 监测文件夹横幅状态 -->
-    <section class="monitored-folder-banner card" role="region" :aria-label="t('folder.monitoredTitle')">
-      <div class="folder-banner-main">
-        <div class="folder-banner-icon-col">
-          <AppIcon name="folder" :size="24" aria-hidden="true" />
-        </div>
-        <div class="folder-banner-text">
-          <div class="folder-banner-title-row">
-            <span class="folder-banner-label">
-              {{ folderLibrary?.status?.value?.folderLabel || t('folder.status.unconfigured') }}
-            </span>
-            <span class="badge" :class="folderLibrary?.status?.value?.state || 'unconfigured'">
-              {{ t('folder.status.' + (folderLibrary?.status?.value?.state === 'permission-denied' ? 'permissionDenied' : (folderLibrary?.status?.value?.state || 'unconfigured'))) }}
-            </span>
+    <section v-if="unavailableCount || hasFolderIssue" class="library-notice" role="status">
+      <span>{{ folderIssueMessage }}</span>
+      <button v-if="unavailableCount && !hasFolderIssue" type="button" class="btn" @click="showUnavailable">{{ t('library.viewUnavailable') }}</button>
+      <RouterLink v-if="hasFolderIssue" class="btn" to="/settings?section=folder">{{ t('library.folderSettings') }}</RouterLink>
+    </section>
+
+    <section v-if="lastReadingBook && !manageMode" class="resume-card" :aria-label="t('catalog.continueReading')">
+      <strong>{{ lastReadingBook.title }}</strong>
+      <span>{{ Math.round((lastReadingBook.progress ?? 0) * 100) }}%</span>
+      <button type="button" class="btn btn-primary" @click="openReader(lastReadingBook)">{{ bookFileProblem(lastReadingBook) ? t(bookFileProblem(lastReadingBook) === 'missing' ? 'library.relink' : 'library.reauthorize') : t('catalog.continueReading') }}</button>
+    </section>
+
+    <section v-if="allBooks.length" class="library-filters" :aria-label="t('library.filters')">
+      <div class="filter-toolbar">
+        <button type="button" class="btn open-filter" :aria-expanded="!!filterDraft" aria-controls="library-filters" @click="openAdvancedFilter">{{ t('library.filters') }}{{ hasActiveChips ? ' · ' + query.total : '' }}</button>
+        <button v-if="unavailableReturn" type="button" class="btn" @click="restoreUnavailableFilters">{{ t('library.restoreFilters') }}</button>
+        <button type="button" class="btn tag-manage" @click="openTagManage">{{ t('library.manageTags') }}</button>
+      </div>
+      <div v-if="filterDraft" id="library-filters" ref="filterPanel" class="filter-panel">
+        <fieldset>
+          <legend>{{ t('library.primaryCategory') }}</legend>
+          <select v-model="filterDraft.category" class="input" :aria-label="t('classification.category')"><option value="">{{ t('library.allCategories') }}</option><option v-for="cat in BOOK_CATEGORIES" :key="cat.id" :value="cat.id">{{ cat.label }}</option></select>
+        </fieldset>
+        <fieldset class="topic-group">
+          <legend>{{ t('library.topicTags') }}</legend>
+          <div class="topic-tools">
+            <input v-model="filterTagQuery" class="input" :placeholder="t('uiV02.searchCategories')" :aria-label="t('uiV02.searchCategories')">
+            <select v-model="filterDraft.tagMode" class="input" :aria-label="t('library.tagMode')"><option value="and">{{ t('library.allTopics') }}</option><option value="or">{{ t('library.anyTopic') }}</option></select>
           </div>
-          <p v-if="!folderLibrary?.status?.value?.folderLabel || folderLibrary?.status?.value?.state === 'unconfigured'" class="folder-banner-hint">
-            {{ t('folder.status.unconfiguredHint') }}
-          </p>
-          <p v-else class="folder-banner-stats">
-            <span>{{ t('folder.indexedCount', { n: folderLibrary?.status?.value?.indexed ?? 0 }) }}</span>
-            <span v-if="folderLibrary?.status?.value?.unavailable" class="unavailable-hint"> · {{ t('folder.unavailableCount', { n: folderLibrary.status.value.unavailable }) }}</span>
-            <span class="readonly-hint"> · {{ t('folder.sourceFilesReadOnly') }}</span>
-          </p>
-          <p v-if="folderLibrary?.status?.value?.error" class="folder-banner-error" role="alert">
-            {{ folderLibrary.status.value.error }}
-          </p>
-        </div>
-      </div>
-      <div class="folder-banner-actions">
-        <button
-          class="btn btn-primary"
-          :disabled="folderLibrary?.status?.value?.state === 'scanning'"
-          @click="onChooseFolder"
-        >
-          <AppIcon name="folder" :size="16" aria-hidden="true" />
-          <span>{{ (!folderLibrary?.status?.value?.folderLabel || folderLibrary?.status?.value?.state === 'unconfigured') ? t('folder.choose') : t('folder.change') }}</span>
-        </button>
-        <button
-          v-if="folderLibrary?.status?.value?.folderLabel && folderLibrary?.status?.value?.state !== 'unconfigured'"
-          class="btn"
-          :disabled="folderLibrary?.status?.value?.state === 'scanning'"
-          @click="onRescan"
-        >
-          <AppIcon name="refresh" :size="16" aria-hidden="true" />
-          <span>{{ t('folder.rescan') }}</span>
-        </button>
+          <div class="filter-topics"><label v-for="tag in visibleFilterTags" :key="tag"><input v-model="filterDraft.tags" type="checkbox" :value="tag">{{ tag }} <span>{{ allBooks.filter(book => book.tags.includes(tag)).length }}</span></label></div>
+          <div v-if="filterTags.length > 24" class="filter-topic-pages"><button class="btn" :disabled="filterTagPage <= 1" @click="filterTagPage--">{{ t('common.prev') }}</button><span>{{ filterTagPage }} / {{ Math.ceil(filterTags.length / 24) }}</span><button class="btn" :disabled="filterTagPage * 24 >= filterTags.length" @click="filterTagPage++">{{ t('common.next') }}</button></div>
+        </fieldset>
+        <fieldset>
+          <legend>{{ t('library.readingState') }} / {{ t('library.fileState') }}</legend>
+          <label>{{ t('uiV02.readingStatus') }}<select v-model="filterDraft.status" class="input" :aria-label="t('uiV02.readingStatus')"><option value="">{{ t('uiV02.allStatuses') }}</option><option v-for="status in READING_STATUSES" :key="status" :value="status">{{ t('uiV02.status.' + status) }}</option></select></label>
+          <label>{{ t('library.fileState') }}<select v-model="filterDraft.availability" class="input" :aria-label="t('library.fileState')"><option value="">{{ t('library.allFileStates') }}</option><option value="available">{{ t('library.availableOnly') }}</option><option value="unavailable">{{ t('library.unavailableOnly') }}</option><option value="missing">{{ t('library.fileMissing') }}</option><option value="permission-denied">{{ t('library.filePermission') }}</option></select></label>
+        </fieldset>
+        <fieldset><legend>{{ t('library.filterLanguage') }}</legend><label>{{ t('library.filterLanguage') }}<select v-model="filterDraft.language" class="input" :aria-label="t('library.filterLanguage')"><option value="">{{ t('library.allLanguages') }}</option><option v-for="language in languages" :key="language" :value="language">{{ language }}</option></select></label></fieldset>
+        <fieldset><legend>{{ t('library.filterFormat') }}</legend><label>{{ t('library.filterFormat') }}<select v-model="filterDraft.format" class="input" :aria-label="t('library.filterFormat')"><option value="">{{ t('library.allFormats') }}</option><option v-for="format in formats" :key="format" :value="format">{{ FORMAT_LABELS[format] || format }}</option></select></label></fieldset>
+        <details class="more-filters">
+          <summary>{{ t('library.moreConditions') }}</summary>
+          <div class="advanced-fields"><label>{{ t('classification.status') }}<select v-model="filterDraft.classificationStatus" class="input" :aria-label="t('classification.status')"><option value="">{{ t('common.all') }}</option><option value="complete">{{ t('classification.statusComplete') }}</option><option value="incomplete">{{ t('classification.statusIncomplete') }}</option><option value="unclassified">{{ t('classification.statusUnclassified') }}</option></select></label>
+<label>{{ t('classification.audience') }}<input v-model="filterDraft.audience" class="input" :placeholder="t('classification.audiencePlaceholder')" :aria-label="t('classification.audience')" /></label>
+<label>{{ t('classification.textbook') }}<select v-model="filterDraft.textbook" class="input" :aria-label="t('classification.textbook')"><option value="">{{ t('classification.facetAny') }}</option><option value="true">{{ t('classification.textbookYes') }}</option><option value="false">{{ t('classification.textbookNo') }}</option><option value="unknown">{{ t('classification.facetUnknown') }}</option></select></label>
+<label>{{ t('classification.ancientText') }}<select v-model="filterDraft.ancientText" class="input" :aria-label="t('classification.ancientText')"><option value="">{{ t('classification.facetAny') }}</option><option value="true">{{ t('classification.ancientYes') }}</option><option value="false">{{ t('classification.ancientNo') }}</option><option value="unknown">{{ t('classification.facetUnknown') }}</option></select></label>
+<label>{{ t('classification.workCountry') }}<input v-model="filterDraft.workCountry" class="input" :placeholder="t('classification.countryPlaceholder')" :aria-label="t('classification.workCountry')" /></label>
+<label>{{ t('classification.workPeriod') }}<input v-model="filterDraft.workPeriod" class="input" :placeholder="t('classification.periodPlaceholder')" :aria-label="t('classification.workPeriod')" /></label></div>
+          <div v-if="secondaryTags.length" class="filter-topics"><label v-for="tag in secondaryTags" :key="tag"><input v-model="filterDraft.tags" type="checkbox" :value="tag">{{ tag }}</label></div>
+        </details>
+        <footer><button type="button" class="btn" @click="closeAdvancedFilter">{{ t('common.cancel') }}</button><button type="button" class="btn" @click="resetFilterDraft">{{ t('uiV02.resetDraft') }}</button><button type="button" class="btn btn-primary apply-filter" @click="applyAdvancedFilter">{{ t('uiV02.applyFilter', { count: filterPreviewCount }) }}</button></footer>
       </div>
     </section>
-
-    <!-- 标签筛选行 -->
-    <div v-if="allTags.length" class="tag-row">
-      <button class="tag-chip" :class="{ active: !tagFilter.length }" :aria-pressed="!tagFilter.length" @click="tagFilter = []">{{ t('library.filterAll') }}</button>
-      <select v-model="tagMode" class="input" :aria-label="t('library.tagMode')">
-        <option value="and">{{ t('library.tagsAnd') }}</option>
-        <option value="or">{{ t('library.tagsOr') }}</option>
-      </select>
-      <button
-        v-for="tag in allTags.slice(0, 5)"
-        :key="tag"
-        class="tag-chip"
-        :class="{ active: tagFilter.includes(tag) }"
-        :aria-pressed="tagFilter.includes(tag)"
-        @click="toggleTag(tag)"
-      >{{ tag }}</button>
-      <button class="tag-chip tag-manage" :title="t('library.manageTags')" @click="openTagManage">
-        <AppIcon name="more" :size="12" aria-hidden="true" />
-        {{ t('library.manageTags') }}
-      </button>
-    </div>
-
-    <div class="advanced-filter-entry">
-      <button type="button" class="btn open-filter" @click="openAdvancedFilter">{{ t('uiV02.filters') }}</button>
-      <button v-if="orderedBookIds.length" type="button" class="btn" @click="refreshResultOrder">{{ t('uiV02.refreshOrder') }}</button>
-    </div>
-
-    <!-- 最近阅读卡片 -->
-    <section v-if="lastReadingBook && !manageMode" class="resume-card">
-      <div><strong>{{ lastReadingBook.title }}</strong><p>{{ t('uiV02.resumePosition') }} · {{ Math.round((lastReadingBook.progress ?? 0) * 100) }}%</p></div>
-      <button type="button" class="btn btn-primary" @click="openReader(lastReadingBook)">{{ t('catalog.continueReading') }}</button>
-    </section>
-
-    <!-- 高级筛选模态框 -->
-    <dialog v-if="filterDraft" ref="filterDialog" class="advanced-filter-dialog" :aria-label="t('uiV02.filters')" @cancel.prevent="closeAdvancedFilter">
-      <header><h2>{{ t('uiV02.filters') }}</h2><button autofocus type="button" class="btn filter-close" @click="closeAdvancedFilter">{{ t('common.close') }}</button></header>
-      <label>{{ t('uiV02.searchCategories') }}<input v-model="filterTagQuery" class="input" :aria-label="t('uiV02.searchCategories')" /></label>
-      <div class="filter-topics"><label v-for="tag in visibleFilterTags" :key="tag"><input v-model="filterDraft.tags" type="checkbox" :value="tag" />{{ tag }} <span>{{ tagCount(tag) }}</span></label></div>
-      <div v-if="filterTags.length > 24" class="filter-topic-pages"><button class="btn" :disabled="filterTagPage <= 1" @click="filterTagPage--">{{ t('common.prev') }}</button><span>{{ filterTagPage }} / {{ Math.ceil(filterTags.length / 24) }}</span><button class="btn" :disabled="filterTagPage * 24 >= filterTags.length" @click="filterTagPage++">{{ t('common.next') }}</button></div>
-      <label>{{ t('library.tagMode') }}<select v-model="filterDraft.tagMode" class="input"><option value="or">{{ t('library.tagsOr') }}</option><option value="and">{{ t('library.tagsAnd') }}</option></select></label>
-      <label>{{ t('library.filterFormat') }}<select v-model="filterDraft.format" class="input" :aria-label="t('library.filterFormat')"><option value="">{{ t('library.allFormats') }}</option><option v-for="format in formats" :key="format" :value="format">{{ FORMAT_LABELS[format] || format }}</option></select></label>
-      <label>{{ t('library.filterLanguage') }}<select v-model="filterDraft.language" class="input" :aria-label="t('library.filterLanguage')"><option value="">{{ t('library.allLanguages') }}</option><option v-for="language in languages" :key="language" :value="language">{{ language }}</option></select></label>
-      <label>{{ t('uiV02.readingStatus') }}<select v-model="filterDraft.status" class="input" :aria-label="t('uiV02.readingStatus')"><option value="">{{ t('uiV02.allStatuses') }}</option><option v-for="status in READING_STATUSES" :key="status" :value="status">{{ t('uiV02.status.' + status) }}</option></select></label>
-      <footer><button class="btn" @click="resetFilterDraft">{{ t('uiV02.resetDraft') }}</button><button class="btn btn-primary apply-filter" @click="applyAdvancedFilter">{{ t('uiV02.applyFilter', { count: filterPreviewCount }) }}</button></footer>
-    </dialog>
 
     <!-- 激活的筛选胶囊 -->
     <div v-if="hasActiveChips" class="active-chips" role="region" :aria-label="t('uiV02.copy.已应用筛选条件')">
@@ -702,9 +855,41 @@ async function clearSelectedTags() {
         {{ t("uiV02.copy.语言:") }} {{ languageFilter }}
         <button type="button" class="chip-remove" :aria-label="t('uiV02.copy.清除语言筛选')" @click="languageFilter = ''">×</button>
       </span>
+      <span v-if="availabilityFilter" class="chip">
+        {{ t('library.fileState') }}: {{ t(availabilityFilter === 'available' ? 'library.availableOnly' : availabilityFilter === 'missing' ? 'library.fileMissing' : availabilityFilter === 'permission-denied' ? 'library.filePermission' : 'library.unavailableOnly') }}
+        <button type="button" class="chip-remove" :aria-label="t('common.clear')" @click="availabilityFilter = ''">×</button>
+      </span>
       <span v-if="statusFilter" class="chip">
         {{ t("uiV02.copy.状态:") }} {{ t('uiV02.status.' + statusFilter) }}
         <button type="button" class="chip-remove" :aria-label="t('uiV02.copy.清除状态筛选')" @click="statusFilter = ''">×</button>
+      </span>
+      <span v-if="categoryFilter" class="chip">
+        {{ t('classification.category') }}: {{ BOOK_CATEGORIES.find(c => c.id === categoryFilter)?.label || categoryFilter }}
+        <button type="button" class="chip-remove" aria-label="清除类别筛选" @click="categoryFilter = ''">×</button>
+      </span>
+      <span v-if="classificationStatusFilter" class="chip">
+        {{ t('classification.status') }}: {{ classificationStatusFilter === 'complete' ? t('classification.statusComplete') : classificationStatusFilter === 'incomplete' ? t('classification.statusIncomplete') : t('classification.statusUnclassified') }}
+        <button type="button" class="chip-remove" aria-label="清除分类状态筛选" @click="classificationStatusFilter = ''">×</button>
+      </span>
+      <span v-if="audienceFilter" class="chip">
+        {{ t('classification.audience') }}: {{ audienceFilter }}
+        <button type="button" class="chip-remove" aria-label="清除受众筛选" @click="audienceFilter = ''">×</button>
+      </span>
+      <span v-if="textbookFilter" class="chip">
+        {{ t('classification.textbook') }}: {{ textbookFilter === 'true' ? t('classification.textbookYes') : textbookFilter === 'false' ? t('classification.textbookNo') : t('classification.facetUnknown') }}
+        <button type="button" class="chip-remove" aria-label="清除教材筛选" @click="textbookFilter = ''">×</button>
+      </span>
+      <span v-if="ancientTextFilter" class="chip">
+        {{ t('classification.ancientText') }}: {{ ancientTextFilter === 'true' ? t('classification.ancientYes') : ancientTextFilter === 'false' ? t('classification.ancientNo') : t('classification.facetUnknown') }}
+        <button type="button" class="chip-remove" aria-label="清除古籍筛选" @click="ancientTextFilter = ''">×</button>
+      </span>
+      <span v-if="workCountryFilter" class="chip">
+        {{ t('classification.workCountry') }}: {{ workCountryFilter }}
+        <button type="button" class="chip-remove" aria-label="清除原作国别筛选" @click="workCountryFilter = ''">×</button>
+      </span>
+      <span v-if="workPeriodFilter" class="chip">
+        {{ t('classification.workPeriod') }}: {{ workPeriodFilter }}
+        <button type="button" class="chip-remove" aria-label="清除创作年代筛选" @click="workPeriodFilter = ''">×</button>
       </span>
       <button type="button" class="btn btn-sm btn-clear-chips" @click="clearFilters">{{ t("uiV02.copy.清空全部") }}</button>
     </div>
@@ -761,20 +946,22 @@ async function clearSelectedTags() {
         @remove="removeBook(book)"
         @toggle-select="toggleSelect(book.id)"
         @toggle-pin="togglePin(book)"
+        @rescan="onRescan"
       />
     </div>
 
-    <!-- 分页器 -->
-    <div v-if="library.loaded && filtered.length" class="pagination">
-      <span role="status">{{ t('library.pageSummary', { total: query.total, page: query.page, pages: query.totalPages }) }}</span>
-      <label>{{ t('library.pageSize') }}
-        <select v-model.number="pageSize" class="input">
-          <option :value="12">12</option><option :value="24">24</option>
-        </select>
-      </label>
-      <button class="btn btn-sm" :disabled="query.page <= 1" @click="page--">{{ t('library.previousPage') }}</button>
-      <button class="btn btn-sm" :disabled="query.page >= query.totalPages" @click="page++">{{ t('library.nextPage') }}</button>
-    </div>
+    <nav v-if="library.loaded && filtered.length" class="pagination" :aria-label="t('library.pageSummary', { total: query.total, page: query.page, pages: query.totalPages })">
+      <span role="status">{{ query.totalPages > 1 ? t('library.pageSummary', { total: query.total, page: query.page, pages: query.totalPages }) : t('library.bookCount', { count: query.total }) }}</span>
+      <template v-if="query.totalPages > 1">
+        <button type="button" class="btn" :disabled="query.page <= 1" @click="page--">{{ t('library.previousPage') }}</button>
+        <button type="button" class="btn" :disabled="query.page >= query.totalPages" @click="page++">{{ t('library.nextPage') }}</button>
+        <form class="page-jump" @submit.prevent="jumpToPage">
+          <input v-model.number="pageJump" class="input" type="number" min="1" :max="query.totalPages" :aria-label="t('library.jumpPage')">
+          <button type="submit" class="btn">{{ t('library.goPage') }}</button>
+        </form>
+      </template>
+      <RouterLink to="/settings?section=library-display">{{ t('library.displaySettings') }}</RouterLink>
+    </nav>
 
     <!-- 批量管理操作栏 -->
     <div v-if="manageMode" class="batch-bar card" role="toolbar" :aria-label="t('library.manage')">
@@ -794,10 +981,7 @@ async function clearSelectedTags() {
         @change="batchSetStatus(($event.target as HTMLSelectElement).value as ReadingStatus); ($event.target as HTMLSelectElement).value = ''"
       >
         <option value="" disabled selected>{{ t("uiV02.copy.标为状态…") }}</option>
-        <option value="reading">{{ t("uiV02.copy.标为在读") }}</option>
-        <option value="finished">{{ t("uiV02.copy.标为已读") }}</option>
-        <option value="unread">{{ t("uiV02.copy.标为未读") }}</option>
-        <option value="paused">{{ t("uiV02.copy.标为搁置") }}</option>
+        <option v-for="status in READING_STATUSES" :key="status" :value="status">{{ t('uiV02.status.' + status) }}</option>
       </select>
       <button class="btn btn-sm" :disabled="!selectedIds.size" @click="batchPin(true)">{{ t('library.pin') }}</button>
       <button class="btn btn-sm" :disabled="!selectedIds.size" @click="batchPin(false)">{{ t('library.unpin') }}</button>
@@ -831,8 +1015,13 @@ async function clearSelectedTags() {
     <div v-if="showTagManage" class="modal-mask" @click.self="showTagManage = false">
       <div class="modal tag-manage-modal" role="dialog" aria-modal="true" aria-labelledby="tag-manage-title">
         <h3 id="tag-manage-title">{{ t('library.manageTags') }}</h3>
-        <ul v-if="allTags.length" class="tag-manage-list">
-          <li v-for="tag in allTags" :key="tag" class="tag-manage-item">
+        <select v-model="tagManageRole" class="input input-sm tag-role-select" :aria-label="t('classification.mergeRole')" @change="tagManageEditing = null">
+          <option value="topic">{{ t('classification.topics') }}</option>
+          <option value="feature">{{ t('classification.feature') }}</option>
+          <option value="legacy">{{ t('classification.legacyTags') }}</option>
+        </select>
+        <ul v-if="managedTags.length" class="tag-manage-list">
+          <li v-for="tag in managedTags" :key="tag" class="tag-manage-item">
             <template v-if="tagManageEditing === tag">
               <input
                 v-model="tagManageRename"
@@ -939,101 +1128,32 @@ async function clearSelectedTags() {
   gap: 6px;
 }
 
-/* 监测文件夹横幅 */
-.monitored-folder-banner {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  flex-wrap: wrap;
-  gap: 16px;
-  padding: 14px 18px;
-  margin-bottom: 18px;
-  background: var(--surface-2);
-  border: 1px solid var(--border);
-  border-radius: var(--radius);
-}
-.folder-banner-main {
-  display: flex;
-  align-items: center;
-  gap: 14px;
-  flex: 1;
-  min-width: 240px;
-}
-.folder-banner-icon-col {
-  color: var(--text-2);
-  flex-shrink: 0;
-}
-.folder-banner-title-row {
-  display: flex;
-  align-items: center;
-  gap: 8px;
-  flex-wrap: wrap;
-}
-.folder-banner-label {
-  font-size: 15px;
-  font-weight: 600;
-  color: var(--text);
-}
-.folder-banner-hint,
-.folder-banner-stats {
-  margin: 4px 0 0;
-  font-size: 12.5px;
-  color: var(--text-2);
-}
-.readonly-hint {
-  color: var(--text-3);
-}
-.folder-banner-error {
-  margin: 4px 0 0;
-  font-size: 12.5px;
-  color: var(--danger);
-}
-.folder-banner-actions {
-  display: flex;
-  align-items: center;
-  gap: 8px;
-  flex-shrink: 0;
-}
-.badge {
-  font-size: 11px;
-  font-weight: 600;
-  padding: 2px 7px;
-  border-radius: var(--radius-pill);
-}
-.badge.unconfigured { background: var(--surface-3); color: var(--text-2); }
-.badge.idle { background: var(--brand-light); color: var(--brand); }
-.badge.scanning { background: color-mix(in srgb, var(--brand) 20%, transparent); color: var(--brand); }
-.badge.partial, .badge.permissionDenied, .badge.permission-denied { background: color-mix(in srgb, var(--warning) 20%, transparent); color: var(--warning); }
-.badge.error { background: color-mix(in srgb, var(--danger) 20%, transparent); color: var(--danger); }
+.library-notice, .filter-toolbar { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; margin-bottom: 12px; }
+.library-notice { padding: 8px 12px; border: 1px solid var(--text); }
+.library-notice > span { flex: 1; min-width: 160px; font-weight: 600; }
+.library-filters { margin-bottom: 12px; }
+.filter-panel { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 16px; padding: 16px; border: 1px solid var(--text); background: var(--card); }
+.filter-panel fieldset { min-width: 0; margin: 0; padding: 12px; border: 1px solid var(--border); }
+.filter-panel legend { padding: 0 6px; font-weight: 700; }
+.filter-panel label { display: grid; gap: 6px; margin-bottom: 8px; }
+.filter-panel .input { width: 100%; min-width: 0; }
+.topic-group, .more-filters, .filter-panel footer { grid-column: 1 / -1; }
+.topic-tools, .filter-topic-pages, .filter-panel footer { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; }
+.topic-tools > .input { flex: 1; min-width: 140px; }
+.filter-topics { display: flex; flex-wrap: wrap; gap: 8px 16px; margin-top: 12px; }
+.filter-topics label { display: inline-flex; align-items: center; gap: 6px; min-height: 44px; margin: 0; }
+.filter-topics input, .more-filters input[type="checkbox"] { width: 20px; height: 20px; accent-color: var(--text); }
+.filter-topics label:has(input:checked) { font-weight: 700; text-decoration: underline; text-underline-offset: 5px; }
+.more-filters summary { cursor: pointer; padding-block: 12px; font-weight: 600; }
+.advanced-fields { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 12px; }
+.filter-panel footer { justify-content: flex-end; }
+.resume-card { display: flex; align-items: center; gap: 12px; padding: 6px 0; margin-bottom: 12px; border-bottom: 1px solid var(--border); }
+.resume-card strong { flex: 1; min-width: 0; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.resume-card > span { white-space: nowrap; }
+.page-jump { display: flex; gap: 6px; }
+.page-jump .input { width: 76px; min-height: 44px; }
+@media (max-width: 600px) { .filter-panel, .advanced-fields { grid-template-columns: 1fr; } .filter-panel { padding: 10px; } }
 
-/* 标签行 */
-.tag-row {
-  display: flex;
-  align-items: center;
-  flex-wrap: wrap;
-  gap: 8px;
-  margin-bottom: 14px;
-}
-.tag-chip {
-  padding: 6px 12px;
-  border-radius: var(--radius-pill);
-  border: 1px solid var(--border);
-  background: var(--card);
-  color: var(--text-2);
-  font-size: 13px;
-  cursor: pointer;
-  min-height: 36px;
-}
-.tag-chip.active {
-  background: var(--text);
-  color: var(--card);
-  border-color: var(--text);
-}
-.advanced-filter-entry {
-  display: flex;
-  gap: 8px;
-  margin-bottom: 14px;
-}
 .active-chips {
   display: flex;
   flex-wrap: wrap;
@@ -1058,22 +1178,6 @@ async function clearSelectedTags() {
   font-size: 14px;
   color: var(--text-3);
 }
-.resume-card {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  padding: 14px 18px;
-  margin-bottom: 18px;
-  border-radius: var(--radius);
-  background: var(--card);
-  border: 1px solid var(--border);
-}
-.resume-card p {
-  margin: 4px 0 0;
-  font-size: 12px;
-  color: var(--text-2);
-}
-
 /* 网格与卡片 */
 .grid {
   display: flex;
@@ -1193,10 +1297,10 @@ async function clearSelectedTags() {
   .library {
     padding: 14px 12px calc(48px + var(--lr-safe-bottom));
   }
-  .toolbar {
-    flex-direction: column;
-    align-items: stretch;
-  }
+  .toolbar { flex-direction: row; align-items: center; }
+  .heading, .search-field { flex: 1 1 100%; }
+  .toolbar .spacer { display: none; }
+  .toolbar .sort { flex: 1; width: auto; }
   .search {
     width: 100%;
   }

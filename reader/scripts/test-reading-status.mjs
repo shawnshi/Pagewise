@@ -2,6 +2,8 @@ import assert from 'node:assert/strict'
 import { test } from 'node:test'
 import {
   isReadingStatus,
+  normalizeReadingStatus,
+  READING_STATUSES,
   resolveReadingStatus,
   READING_STATUS_LABELS,
   createNewBookReadingStatus,
@@ -49,7 +51,7 @@ test('positive valid lastReadAt supports reading state for unmarked legacy recor
 })
 
 test('explicit readingStatus takes precedence over progress and lastReadAt', () => {
-  for (const status of ['unread', 'reading', 'finished', 'paused']) {
+  for (const status of READING_STATUSES) {
     const book = {
       title: `Explicit ${status}`,
       readingStatus: status,
@@ -78,17 +80,17 @@ test('corrupted or invalid readingStatus is ignored and treated as unmarked lega
   }
 })
 
-test('new imports can explicitly initialize with unread status', () => {
-  const initial = createNewBookReadingStatus('unread')
-  assert.equal(initial, 'unread')
-  const res = resolveReadingStatus({ readingStatus: initial })
-  assert.equal(res.explicit, 'unread')
-  assert.equal(res.effective, 'unread')
-  assert.equal(res.isLegacy, false)
+test('new imports default to unmarked; legacy unread never invents wanted intent', () => {
+  assert.equal(createNewBookReadingStatus(), 'unmarked')
+  for (const status of READING_STATUSES) assert.equal(createNewBookReadingStatus(status), status)
+  assert.throws(() => createNewBookReadingStatus('unread'), /Invalid/)
+  assert.equal(normalizeReadingStatus('unread'), 'unmarked')
+  assert.deepEqual(resolveReadingStatus({ readingStatus: 'unread', lastReadAt: 100 }), { explicit: 'unmarked', effective: 'unmarked', isLegacy: false })
 })
 
 test('isReadingStatus type guard and labels', () => {
-  assert.equal(isReadingStatus('unread'), true)
+  assert.equal(isReadingStatus('unread'), false)
+  for (const status of READING_STATUSES) assert.equal(isReadingStatus(status), true)
   assert.equal(isReadingStatus('reading'), true)
   assert.equal(isReadingStatus('finished'), true)
   assert.equal(isReadingStatus('paused'), true)
@@ -96,8 +98,6 @@ test('isReadingStatus type guard and labels', () => {
   assert.equal(isReadingStatus(undefined), false)
   assert.equal(isReadingStatus(null), false)
 
-  assert.equal(READING_STATUS_LABELS.unread, '未读')
-  assert.equal(READING_STATUS_LABELS.reading, '在读')
-  assert.equal(READING_STATUS_LABELS.finished, '已读完')
-  assert.equal(READING_STATUS_LABELS.paused, '搁置')
+  assert.deepEqual(READING_STATUSES, ['unmarked', 'wanted', 'reading', 'paused', 'finished', 'abandoned'])
+  assert.deepEqual(READING_STATUSES.map(status => READING_STATUS_LABELS[status]), ['未标记', '想读', '在读', '暂缓', '已读', '弃读'])
 })

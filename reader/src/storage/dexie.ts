@@ -1,10 +1,12 @@
 /** Web 端存储实现: IndexedDB (Dexie), 书籍与封面以 Blob 存库 */
 import Dexie, { type Table } from 'dexie'
 import type {
-  AnnotationRec, BooklistRec, BooklistWantedRec, BookMeta, CatalogSourceRec, LibraryStorage, NewBookMeta,
+  AnnotationRec, BookClassificationUpdate, LegacyBookTagsUpdate, BooklistRec, BooklistWantedRec, BookMeta, CatalogSourceRec, LibraryStorage, NewBookMeta,
 } from './types'
 import { BUILTIN_SOURCES, newId } from './types'
+import { isReadingStatus, normalizeReadingStatus } from '../services/readingStatus'
 import { readReferencedFile, validateSourceRef, validateAvailability } from './sourceFile'
+import { classificationMetadataMatches, prepareClassificationUpdates, rejectClassificationPatch, validatedBookClassification } from '../services/bookTagActions'
 
 interface BookRow extends BookMeta {
   /** Safari 的 IndexedDB 存 Blob 会报错, 统一存 ArrayBuffer */
@@ -56,7 +58,10 @@ class LightReadDB extends Dexie {
   }
 }
 
-const stripBlobs = ({ file, cover, ...meta }: BookRow): BookMeta => meta
+const stripBlobs = ({ file, cover, ...meta }: BookRow): BookMeta => {
+  const book = validatedBookClassification(meta)
+  return { ...book, readingStatus: normalizeReadingStatus(book.readingStatus) }
+}
 
 export class DexieStorage implements LibraryStorage {
   readonly kind = 'indexeddb' as const
@@ -88,6 +93,8 @@ export class DexieStorage implements LibraryStorage {
   }
 
   async addBook(meta: NewBookMeta, file: Blob, cover?: Blob) {
+    if (meta.readingStatus !== undefined && !isReadingStatus(meta.readingStatus)) throw new Error('Invalid readingStatus')
+    meta = validatedBookClassification(meta)
     if (meta.sourceRef) throw new Error('Use addReferencedBook for source documents')
     validateAvailability(meta.fileAvailability)
     const id = newId()
@@ -102,6 +109,8 @@ export class DexieStorage implements LibraryStorage {
   }
 
   async addReferencedBook(meta: NewBookMeta & { sourceRef: NonNullable<BookMeta['sourceRef']> }, cover?: Blob) {
+    if (meta.readingStatus !== undefined && !isReadingStatus(meta.readingStatus)) throw new Error('Invalid readingStatus')
+    meta = validatedBookClassification(meta)
     const sourceRef = validateSourceRef(meta.sourceRef)
     validateAvailability(meta.fileAvailability)
     const id = newId()
@@ -111,10 +120,35 @@ export class DexieStorage implements LibraryStorage {
   }
 
   async updateBook(id: string, patch: Partial<Omit<BookMeta, 'id'>>) {
+    if (patch.readingStatus !== undefined && !isReadingStatus(patch.readingStatus)) throw new Error('Invalid readingStatus')
     if (patch.sourceRef !== undefined) validateSourceRef(patch.sourceRef)
     validateAvailability(patch.fileAvailability)
-    const changed = await this.db.books.update(id, patch)
-    if (!changed) throw new Error('Book not found')
+    rejectClassificationPatch(patch)
+    await this.db.transaction('rw', this.db.books, async () => {
+      const book = await this.db.books.get(id)
+      if (!book) throw new Error('Book not found')
+      if (book.classification !== undefined && Object.prototype.hasOwnProperty.call(patch, 'tags')) throw new Error('Use updateBookClassifications')
+      await this.db.books.update(id, patch)
+    })
+  }
+
+  async updateBookClassifications(updates: readonly BookClassificationUpdate[], legacyUpdates: readonly LegacyBookTagsUpdate[] = []) {
+    const prepared = prepareClassificationUpdates(updates, legacyUpdates)
+    if (!prepared.length) return
+    await this.db.transaction('rw', this.db.books, async () => {
+      for (const update of prepared) {
+        const book = await this.db.books.get(update.id)
+        if (!book
+          || (update.classification !== null && (book.classification?.revision ?? 0) !== update.expectedRevision)
+          || (update.expectedTags !== undefined && (book.classification !== undefined || JSON.stringify(book.tags) !== JSON.stringify(update.expectedTags)))
+          || (update.expectedMetadata && !classificationMetadataMatches(book, update.expectedMetadata))) throw new Error('Book classification conflict')
+      }
+      for (const update of prepared) {
+        await this.db.books.update(update.id, update.classification === null
+          ? { tags: update.tags }
+          : { classification: update.classification, tags: update.tags })
+      }
+    })
   }
 
   async deleteBook(id: string) {

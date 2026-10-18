@@ -9,6 +9,7 @@ import { fetchRemote } from '../services/net'
 import { toast } from '../services/toast'
 import { CURRENT_VERSION } from '../services/appVersion'
 import { t } from '../i18n'
+import { loadLibrarySession, saveLibrarySession } from '../services/librarySession'
 import { providerById, chatStream } from '../services/ai'
 import AppIcon from '../components/AppIcon.vue'
 import AiProviderSelector from '../components/AiProviderSelector.vue'
@@ -33,6 +34,11 @@ async function onChooseMonitoredFolder() {
 async function onRescanMonitoredFolder() {
   try {
     await folderLibrary.value?.rescan()
+    const status = folderLibrary.value?.status.value
+    if (status && ['partial', 'error', 'permission-denied'].includes(status.state)) {
+      const message = status.state === 'partial' ? [t('folder.status.partial'), status.error].filter(Boolean).join(' · ') : status.error || t('library.filePermission')
+      throw new Error(message)
+    }
     toast(t('common.done'), 'success', 2000)
   } catch (err: any) {
     toast(err?.message || t('common.unknownError'), 'error')
@@ -42,12 +48,15 @@ async function onRescanMonitoredFolder() {
 const navSections = computed(() => [
   { id: 'general', label: t('settings.general') },
   { id: 'folder', label: t('folder.monitoredTitle') },
+  { id: 'library-display', label: t('library.libraryDisplay') },
   { id: 'reading', label: t('settings.navReading') },
   { id: 'ai', label: t('settings.aiTitle') },
   { id: 'data', label: t('settings.data') },
   { id: 'network', label: t('settings.network') },
   { id: 'about', label: t('settings.about') },
 ])
+const libraryPageSize = ref(loadLibrarySession()?.pageSize ?? 12)
+watch(libraryPageSize, value => { saveLibrarySession({ pageSize: value, page: 1 }) })
 const activeSection = ref('general')
 const rootEl = ref<HTMLElement>()
 const navEl = ref<HTMLElement>()
@@ -361,6 +370,16 @@ const APPEARANCE_OPTIONS = [
         <p class="folder-notice">
           {{ t('settings.monitoredFolderNotice') }}
         </p>
+      </div>
+    </section>
+
+    <section id="settings-library-display" class="card section" aria-labelledby="settings-library-display-heading">
+      <h2 id="settings-library-display-heading" tabindex="-1">{{ t('library.libraryDisplay') }}</h2>
+      <div class="row">
+        <label for="library-page-size" class="row-title">{{ t('library.pageSize') }}</label>
+        <select id="library-page-size" v-model.number="libraryPageSize" class="input">
+          <option :value="12">12</option><option :value="24">24</option>
+        </select>
       </div>
     </section>
 

@@ -1,12 +1,12 @@
 import assert from 'node:assert/strict'
 import { test, before, after } from 'node:test'
 import { resolve } from 'node:path'
-import { createServer } from 'vite'
+import { createServer } from './vite-isolated.mjs'
 import { chromium } from 'playwright'
 
 let server, browser, base
 before(async () => {
-  server = await createServer({ root: resolve(import.meta.dirname, '..'), server: { host: '127.0.0.1', port: 0 }, logLevel: 'error' })
+  server = await createServer({ root: resolve(import.meta.dirname, '..'), server: { host: '127.0.0.1', port: 0, strictPort: false }, logLevel: 'error' })
   await server.listen()
   base = `http://127.0.0.1:${server.httpServer.address().port}`
   browser = await chromium.launch({ headless: true, channel: process.platform === 'win32' ? 'msedge' : undefined, args: ['--disable-background-networking'] })
@@ -18,7 +18,7 @@ async function isolated(run, width = 992) {
   const page = await context.newPage()
   try {
     await page.goto(base + '/#/library', { waitUntil: 'networkidle' })
-    await page.locator('.monitored-folder-banner').waitFor()
+    await page.locator('.library').waitFor()
     return await run(page)
   } finally { await context.close() }
 }
@@ -103,7 +103,7 @@ for (const width of [992, 390]) test(`actual Vue app ${width}px: folder status, 
     })
     await page.locator('.book-card').waitFor()
     assert.equal(await page.locator('input[type=file]').count(), 0, 'no manual library import')
-    assert.match(await page.locator('.monitored-folder-banner').innerText(), /监测|文件夹/)
+    assert.equal(await page.locator('.monitored-folder-banner').count(), 0, 'folder management is settings-only')
     await page.locator('.book-card').click()
     await page.waitForURL(`**/#/book/${bookId}`)
     const order = await page.evaluate(async () => (await import('/src/services/librarySession.ts')).loadLibrarySession().orderedBookIds)

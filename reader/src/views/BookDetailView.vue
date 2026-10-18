@@ -9,9 +9,14 @@ import { resolveReadingStatus, READING_STATUSES } from '../services/readingStatu
 import { formatReadingTime } from '../composables/useReadingTimer'
 import { loadLibrarySession } from '../services/librarySession'
 import AppIcon from '../components/AppIcon.vue'
+import BookClassificationPanel from '../components/BookClassificationPanel.vue'
+import BookRelinkDialog from '../components/BookRelinkDialog.vue'
+import { bookFileProblem } from '../services/bookAvailability'
+import { useFolderLibrary } from '../services/folderLibrary'
 import { toast } from '../services/toast'
 import { t } from '../i18n'
 
+const folderLibrary = useFolderLibrary()
 const route = useRoute()
 const router = useRouter()
 const library = useLibrary()
@@ -25,6 +30,8 @@ const book = computed<BookMeta | null>(() => {
 })
 
 const readable = computed(() => book.value ? isSupportedBookFormat(book.value.format) : false)
+const fileProblem = computed(() => book.value ? bookFileProblem(book.value) : undefined)
+const showRelink = ref(false)
 
 const progress = computed(() => {
   if (!book.value || book.value.progress == null) return null
@@ -36,19 +43,24 @@ const statusInfo = computed(() => {
 })
 
 // 阅读状态选择
-const selectedStatus = ref<string>('')
+const selectedStatus = ref<ReadingStatus>('unmarked')
+const statusSaving = ref(false)
 
 async function changeReadingStatus(newStatus: string) {
-  if (!book.value) return
-  selectedStatus.value = newStatus
-  const statusToSave = (newStatus && (READING_STATUSES as readonly string[]).includes(newStatus as ReadingStatus))
-    ? (newStatus as ReadingStatus)
-    : undefined
+  if (!book.value || statusSaving.value) return
+  if (!(READING_STATUSES as readonly string[]).includes(newStatus)) return
+  const previous = selectedStatus.value
+  const statusToSave = newStatus as ReadingStatus
+  selectedStatus.value = statusToSave
+  statusSaving.value = true
   try {
     await library.setReadingStatus(book.value.id, statusToSave)
     toast(t('common.saved'), 'success', 2000)
   } catch (err: any) {
+    selectedStatus.value = previous
     toast(err?.message || t('common.saveFailed'), 'error')
+  } finally {
+    statusSaving.value = false
   }
 }
 
@@ -115,7 +127,8 @@ onMounted(async () => {
     if (fetched) rawBook.value = fetched
   }
   if (book.value) {
-    selectedStatus.value = book.value.readingStatus || ''
+    selectedStatus.value = resolveReadingStatus(book.value).effective ?? 'unmarked'
+    showRelink.value = route.query.recover === '1' && fileProblem.value === 'missing'
     coverUrl.value = await storage.getCoverUrl(book.value.id) || null
     void loadAnnotations()
   }
@@ -135,7 +148,35 @@ function openReader() {
     toast(t('library.retiredFormat'), 'info')
     return
   }
+  if (fileProblem.value === 'permission-denied') { router.push('/settings?section=folder'); return }
+  if (fileProblem.value) { showRelink.value = true; return }
   router.push(readerPath(book.value))
+}
+
+async function onFileRecovered() {
+  showRelink.value = false
+  try {
+    await library.refresh()
+    rawBook.value = await (await getStorage()).getBook(bookId.value) ?? null
+    if (route.query.recover) await router.replace({ query: { ...route.query, recover: undefined } })
+  } catch (err) {
+    toast(t('library.operationFailed', { message: err instanceof Error ? err.message : String(err) }), 'error')
+  }
+}
+
+async function rescanFile() {
+  try {
+    await folderLibrary.rescan()
+    await library.refresh()
+    const status = folderLibrary.status.value
+    if (['partial', 'error', 'permission-denied'].includes(status.state)) {
+      const message = status.state === 'partial' ? [t('folder.status.partial'), status.error].filter(Boolean).join(' · ') : status.error || t('library.filePermission')
+      throw new Error(message)
+    }
+    await onFileRecovered()
+  } catch (err) {
+    toast(t('library.operationFailed', { message: err instanceof Error ? err.message : String(err) }), 'error')
+  }
 }
 
 async function togglePin() {
@@ -145,6 +186,15 @@ async function togglePin() {
   await storage.updateBook(book.value.id, { pinnedAt: nextPinned })
   book.value.pinnedAt = nextPinned
   toast(t(nextPinned ? 'library.pinned' : 'library.unpinned'), 'success')
+}
+
+async function onClassificationUpdated() {
+  await library.refresh().catch(() => {})
+  if (bookId.value) {
+    const storage = await getStorage()
+    const fetched = await storage.getBook(bookId.value)
+    if (fetched) rawBook.value = fetched
+  }
 }
 
 async function removeBook() {
@@ -196,27 +246,18 @@ const activeTab = ref<'overview' | 'toc' | 'records'>('overview')
 
         <div class="meta-section">
           <h1 class="book-title">{{ book.title }}</h1>
-          <p class="book-author">
-            <span>{{ book.author || t('book.unknownAuthor') }}</span>
-            <span class="meta-sep">·</span>
-            <span>{{ book.publisher || t('book.unknownPublisher') }}</span>
-            <span class="meta-sep">·</span>
-            <span>{{ book.publicationDate || t('book.unknownDate') }}</span>
-          </p>
+          <p v-if="book.author || book.publisher || book.publicationDate" class="book-author">{{ [book.author, book.publisher, book.publicationDate].filter(Boolean).join(' · ') }}</p>
 
           <div class="status-row">
             <span class="label">{{ t("uiV02.copy.阅读状态：") }}</span>
             <select
               :value="selectedStatus"
+              :disabled="statusSaving"
               class="input input-sm status-select"
               :aria-label="t('uiV02.copy.设置阅读状态')"
               @change="changeReadingStatus(($event.target as HTMLSelectElement).value)"
             >
-              <option value="">{{ statusInfo.isLegacy ? t("uiV02.copy.\u672A\u6807\u8BB0 (\u65E7\u7248\u672A\u77E5)") : t("uiV02.copy.\u6E05\u9664\u72B6\u6001") }}</option>
-              <option value="unread">{{ t('uiV02.status.unread') }}</option>
-              <option value="reading">{{ t('uiV02.status.reading') }}</option>
-              <option value="finished">{{ t('uiV02.status.finished') }}</option>
-              <option value="paused">{{ t('uiV02.status.paused') }}</option>
+              <option v-for="status in READING_STATUSES" :key="status" :value="status">{{ t('uiV02.status.' + status) }}</option>
             </select>
             <span v-if="statusInfo.effective" class="badge" :class="statusInfo.effective">
               {{ t('uiV02.status.' + (statusInfo.effective)) }}
@@ -237,7 +278,7 @@ const activeTab = ref<'overview' | 'toc' | 'records'>('overview')
               :disabled="!readable"
               @click="openReader"
             >
-              {{ progress && progress > 0 ? t('catalog.continueReading') : t('settings.navReading') }}
+              {{ fileProblem ? t(fileProblem === 'missing' ? 'library.relink' : 'library.reauthorize') : progress && progress > 0 ? t('catalog.continueReading') : t('settings.navReading') }}
             </button>
             <button type="button" class="btn" @click="togglePin">
               <AppIcon name="pin" :size="16" aria-hidden="true" />
@@ -254,6 +295,14 @@ const activeTab = ref<'overview' | 'toc' | 'records'>('overview')
           </div>
         </div>
       </section>
+
+      <section v-if="fileProblem" class="file-recovery card" role="status">
+        <strong>{{ t(fileProblem === 'missing' ? 'library.fileMissing' : 'library.filePermission') }}</strong>
+        <p>{{ t('library.recoverHint') }}</p>
+        <button type="button" class="btn" :disabled="folderLibrary.status.value.state === 'scanning'" @click="rescanFile">{{ t('folder.rescan') }}</button>
+        <RouterLink class="btn" to="/settings?section=folder">{{ t('library.folderSettings') }}</RouterLink>
+      </section>
+      <BookRelinkDialog v-if="showRelink && book" :book="book" @close="showRelink = false" @recovered="onFileRecovered" />
 
       <!-- 选项卡导航 -->
       <nav class="tabs-nav" role="tablist">
@@ -350,6 +399,9 @@ const activeTab = ref<'overview' | 'toc' | 'records'>('overview')
             <dd class="description-text">{{ book.description }}</dd>
           </div>
         </dl>
+
+        <!-- 结构化分类与标签编辑面板 -->
+        <BookClassificationPanel :book="book" @updated="onClassificationUpdated" />
       </section>
 
       <!-- 目录面板 -->

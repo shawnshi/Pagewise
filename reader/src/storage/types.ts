@@ -1,11 +1,12 @@
 /** 存储抽象层: Web 走 IndexedDB, 桌面 (Tauri) 走文件系统 + SQLite 索引 */
+import type { BookClassification, BookTaggingMetadata } from '../services/bookClassification'
 
 /** Includes retired formats solely to preserve existing stored books and archives. */
 export type BookFormat =
   | 'epub' | 'mobi' | 'azw3' | 'azw' | 'fb2' | 'fbz'
   | 'cbz' | 'cbr' | 'djvu' | 'pdf' | 'txt' | 'html' | 'md'
 
-export type ReadingStatus = 'unread' | 'reading' | 'finished' | 'paused'
+export type ReadingStatus = 'unmarked' | 'wanted' | 'reading' | 'paused' | 'finished' | 'abandoned'
 
 export interface BookSourceRef {
   folderId: string
@@ -31,6 +32,7 @@ export interface BookMeta {
   sourceRef?: BookSourceRef
   fileAvailability?: FileAvailability
   tags: string[]
+  classification?: BookClassification
   addedAt: number
   lastReadAt?: number
   /** 阅读位置: EPUB 系为 CFI, PDF 为页码字符串 */
@@ -46,11 +48,26 @@ export interface BookMeta {
   pinnedAt?: number
   /** 归属: 藏书 (缺省) / 论文 */
   kind?: 'book' | 'paper'
-  /** 明确阅读状态; 缺省为未标记 (legacy unknown), 绝不可仅凭 progress 推断为 unread/finished */
+  /** Explicit intent; missing is legacy unknown. Never infer wanted/finished/abandoned from progress. */
   readingStatus?: ReadingStatus
 }
 
 export type NewBookMeta = Omit<BookMeta, 'id' | 'hasCover'>
+
+export interface BookClassificationUpdate {
+  id: string
+  expectedRevision: number
+  expectedMetadata?: BookTaggingMetadata
+  /** CAS for first structuring: legacy tags must not have changed meanwhile. */
+  expectedTags?: readonly string[]
+  classification: BookClassification
+}
+
+export interface LegacyBookTagsUpdate {
+  id: string
+  expectedTags: readonly string[]
+  tags: readonly string[]
+}
 
 export interface AnnotationRec {
   id: string
@@ -140,6 +157,7 @@ export interface LibraryStorage {
   /** Registers a read-only source document without copying its contents. */
   addReferencedBook(meta: NewBookMeta & { sourceRef: BookSourceRef }, cover?: Blob): Promise<string>
   updateBook(id: string, patch: Partial<Omit<BookMeta, 'id'>>): Promise<void>
+  updateBookClassifications(updates: readonly BookClassificationUpdate[], legacyUpdates?: readonly LegacyBookTagsUpdate[]): Promise<void>
   deleteBook(id: string): Promise<void>
   getBookFile(id: string): Promise<Blob>
   /** 书籍文件的本地路径引用 (仅文件系统后端); 不支持时为 undefined */

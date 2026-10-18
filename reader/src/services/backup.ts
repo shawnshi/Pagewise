@@ -16,7 +16,9 @@ import {
   type CatalogSourceRec,
 } from '../storage'
 import { importReadingLogRows, listReadingLog, normalizeRow, rowKey, type ReadingLogRow } from './readingLog.ts'
-import { isReadingStatus } from './readingStatus.ts'
+import { normalizeReadingStatus } from './readingStatus.ts'
+
+import { parseClassification, classificationTags } from './bookClassification'
 
 const LEGACY_JSON_FORMAT = 'org.lightread.library'
 /** 每日阅读记录, 放在包根目录 (OKF 解析只看 .md, 不受影响); 旧包没有此文件 */
@@ -41,7 +43,7 @@ interface AssetDescriptor {
 /** Optional producer cache beside the authoritative OKF index.md. */
 interface CompatibilityManifest {
   format: typeof LEGACY_JSON_FORMAT
-  version: typeof LEGACY_JSON_VERSION
+  version: 2 | 3
   exportedAt: string
   generator: { name: 'LightRead'; version: string }
   books: Array<BookMeta & {
@@ -66,7 +68,7 @@ interface RestorableBook {
 }
 
 interface RestorableManifest {
-  version: 1 | 2 | 'okf-0.1'
+  version: 1 | 2 | 3 | 'okf-0.1'
   books: RestorableBook[]
   annotations: AnnotationRec[]
   sources: CatalogSourceRec[]
@@ -271,8 +273,9 @@ function markdownLabel(value: string): string {
 
 function optionalReadingStatus(value: unknown) {
   if (value == null) return undefined
-  if (!isReadingStatus(value)) archiveError('readingStatus 无效')
-  return value
+  const normalized = normalizeReadingStatus(value)
+  if (normalized === undefined) archiveError('readingStatus 无效')
+  return normalized
 }
 
 /** 只接受存储层明确支持的字段，避免把包中的任意键写入数据库。 */
@@ -308,7 +311,8 @@ function parseBookMeta(value: unknown, index: number): BookMeta {
     publisher: optionalString(value.publisher),
     publicationDate: optionalString(value.publicationDate),
     readingStatus: optionalReadingStatus(value.readingStatus),
-    tags: [...value.tags] as string[],
+    tags: value.classification === undefined ? [...value.tags] as string[] : classificationTags(parseClassification(value.classification)),
+    classification: value.classification === undefined ? undefined : parseClassification(value.classification),
     addedAt: value.addedAt,
     lastReadAt: optionalNumber(value.lastReadAt),
     location: optionalString(value.location),
@@ -403,7 +407,7 @@ function parseManifest(raw: Uint8Array): RestorableManifest {
   if (!isRecord(value)) archiveError('manifest.json 顶层必须是对象')
 
   if (value.format === LEGACY_JSON_FORMAT) {
-    if (value.version !== LEGACY_JSON_VERSION) {
+    if (value.version !== LEGACY_JSON_VERSION && value.version !== 3) {
       archiveError(`不支持的格式版本 ${String(value.version)}`)
     }
     if (!Array.isArray(value.books)) archiveError('books 必须是数组')
@@ -419,7 +423,7 @@ function parseManifest(raw: Uint8Array): RestorableManifest {
       }
     })
     return {
-      version: 2,
+      version: value.version,
       books,
       annotations: parseAnnotations(value.annotations),
       sources: parseSources(value.sources, false),
@@ -537,7 +541,8 @@ function parseOkfBundle(entries: Record<string, Uint8Array>): RestorableManifest
         publisher: optionalString(frontmatter.publisher),
         publicationDate: optionalString(frontmatter.publication_date),
         readingStatus: optionalReadingStatus(reading.status),
-        tags: stringList(frontmatter.tags),
+        tags: frontmatter.classification === undefined ? stringList(frontmatter.tags) : classificationTags(parseClassification(frontmatter.classification)),
+        classification: frontmatter.classification === undefined ? undefined : parseClassification(frontmatter.classification),
         addedAt,
         lastReadAt: reading.last_read_at == null
           ? undefined
@@ -611,7 +616,7 @@ export async function exportBackup(onProgress?: (msg: string) => void): Promise<
   const exportedAt = new Date().toISOString()
   const compatibilityManifest: CompatibilityManifest = {
     format: LEGACY_JSON_FORMAT,
-    version: LEGACY_JSON_VERSION,
+    version: books.some(book => book.classification !== undefined) ? 3 : LEGACY_JSON_VERSION,
     exportedAt,
     generator: { name: 'LightRead', version: __APP_VERSION__ },
     books: [],
@@ -660,6 +665,7 @@ export async function exportBackup(onProgress?: (msg: string) => void): Promise<
       description: book.description ? oneLine(book.description) : undefined,
       resource: `../${contentPath}`,
       tags: book.tags,
+      classification: book.classification === undefined ? undefined : parseClassification(book.classification),
       timestamp: toIso(timestamp),
       profile: LIBRARY_OKF_PROFILE,
       entity: 'book',

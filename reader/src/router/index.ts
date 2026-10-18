@@ -1,4 +1,6 @@
 import { createRouter, createWebHashHistory } from 'vue-router'
+import { bookFileProblem } from '../services/bookAvailability'
+import { saveLibrarySession } from '../services/librarySession'
 import { isSupportedBookFormat } from '../services/format'
 import { getStorage } from '../storage'
 import { toast } from '../services/toast'
@@ -28,9 +30,12 @@ export const router = createRouter({
   ],
 })
 
-router.afterEach((to, _from, failure) => {
+router.afterEach((to, from, failure) => {
   // A consumed Back or blocked leave did not commit the target route.
   if (failure) return
+  if ((from.path.startsWith('/read/') || from.path.startsWith('/read-pdf/')) && from.params.id) {
+    saveLibrarySession({ returnedFromReader: true, lastViewedBookId: String(from.params.id) })
+  }
   try { rememberView(to.path, localStorage) }
   catch { console.warn('Pagewise: last view could not be persisted') }
 })
@@ -50,6 +55,8 @@ router.beforeEach(async (to) => {
           toast(t('book.unsupportedFormat', { format: book.format }), 'error')
           return '/library'
         }
+        const problem = book && bookFileProblem(book)
+        if (problem) return problem === 'permission-denied' ? '/settings?section=folder' : `/book/${id}?recover=1`
       } catch {
         // storage or book error handled by view
       }

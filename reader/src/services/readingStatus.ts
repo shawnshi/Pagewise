@@ -2,17 +2,25 @@ import type { ReadingStatus } from '../storage/types.ts'
 
 export type { ReadingStatus }
 
-export const READING_STATUSES: readonly ReadingStatus[] = ['unread', 'reading', 'finished', 'paused'] as const
+export const READING_STATUSES: readonly ReadingStatus[] = ['unmarked', 'wanted', 'reading', 'paused', 'finished', 'abandoned'] as const
 
 export const READING_STATUS_LABELS: Record<ReadingStatus, string> = {
-  unread: '未读',
+  unmarked: '未标记',
+  wanted: '想读',
   reading: '在读',
-  finished: '已读完',
-  paused: '搁置',
+  paused: '暂缓',
+  finished: '已读',
+  abandoned: '弃读',
 }
 
 export function isReadingStatus(value: unknown): value is ReadingStatus {
   return typeof value === 'string' && (READING_STATUSES as readonly string[]).includes(value)
+}
+
+/** Legacy unread records carry no evidence of reading intent. */
+export function normalizeReadingStatus(value: unknown): ReadingStatus | undefined {
+  if (value === 'unread') return 'unmarked'
+  return isReadingStatus(value) ? value : undefined
 }
 
 export interface ReadingStatusInfo {
@@ -44,12 +52,9 @@ export function resolveReadingStatus(book: {
   readonly lastReadAt?: unknown
   readonly progress?: unknown
 }): ReadingStatusInfo {
-  if (isReadingStatus(book.readingStatus)) {
-    return {
-      explicit: book.readingStatus,
-      effective: book.readingStatus,
-      isLegacy: false,
-    }
+  const explicit = normalizeReadingStatus(book.readingStatus)
+  if (explicit !== undefined) {
+    return { explicit, effective: explicit, isLegacy: false }
   }
 
   const rawLastRead = book.lastReadAt
@@ -64,8 +69,9 @@ export function resolveReadingStatus(book: {
 
 /**
  * 新导入书籍的显式初始化状态辅助函数。
- * 允许在导入时显式赋予 'unread'，避免历史书籍被批量误标。
+ * 新书默认未标记，不将“尚未阅读”推断成“想读”。
  */
-export function createNewBookReadingStatus(initial: ReadingStatus = 'unread'): ReadingStatus {
+export function createNewBookReadingStatus(initial: ReadingStatus = 'unmarked'): ReadingStatus {
+  if (!isReadingStatus(initial)) throw new TypeError('Invalid readingStatus')
   return initial
 }

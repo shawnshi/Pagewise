@@ -103,8 +103,11 @@ export function createFolderLibrary(deps: FolderLibraryDependencies) {
       const errors = listing.errors.map(error => error.message || error.code)
       if (!listing.complete) errors.push('Folder enumeration incomplete')
       if (listing.files.length > MAX_FILES) errors.push(`Folder exceeds ${MAX_FILES} files`)
-      const known = new Map(books.filter(book => book.sourceRef?.folderId === folder!.id)
-        .map(book => [book.sourceRef!.documentId, book]))
+      const known = new Map<string, BookMeta[]>()
+      for (const book of books.filter(book => book.sourceRef?.folderId === folder!.id)) {
+        const id = book.sourceRef!.documentId
+        known.set(id, [...(known.get(id) ?? []), book])
+      }
       const seen = new Set<string>()
       for (const file of listing.files.slice(0, MAX_FILES)) {
         if (!current()) return
@@ -112,7 +115,8 @@ export function createFolderLibrary(deps: FolderLibraryDependencies) {
         seen.add(file.documentId)
         const format = detectFormat(file.name)
         if (!format) continue
-        const book = known.get(file.documentId)
+        const linked = known.get(file.documentId) ?? []
+        const book = linked[0]
         if (file.size !== null && (!Number.isFinite(file.size) || file.size <= 0 || file.size > MAX_FILE_BYTES)) {
           errors.push(`${file.name}: unsupported source size`)
           continue
@@ -123,7 +127,7 @@ export function createFolderLibrary(deps: FolderLibraryDependencies) {
         }
         const sourceRef = { folderId: folder.id, documentId: file.documentId,
           relativePath: file.relativePath, version: JSON.stringify([file.size, file.modifiedAt]) }
-        const mustParse = !book || book.sourceRef?.version !== sourceRef.version
+        const mustParse = !book || linked.some(item => item.sourceRef?.version !== sourceRef.version)
           || file.size === null || file.modifiedAt === null
         let parsed: Awaited<ReturnType<typeof prepareBookImport>> | undefined
         if (mustParse) {
@@ -136,18 +140,20 @@ export function createFolderLibrary(deps: FolderLibraryDependencies) {
             if (!current()) return
             errors.push(`${file.name}: ${errorMessage(error)}`)
             const code = errorCode(error)
-            if (book && (code === 'not_found' || code === 'permission_denied')) {
-              await update(book, { fileAvailability: code === 'not_found' ? 'missing' : 'permission-denied' })
+            if (code === 'not_found' || code === 'permission_denied') {
+              for (const item of linked) await update(item, { fileAvailability: code === 'not_found' ? 'missing' : 'permission-denied' })
             }
             continue
           }
         }
         if (!current()) return
         if (book) {
-          if (mustParse || book.fileName !== file.name || book.sourceRef?.relativePath !== file.relativePath
-            || book.fileAvailability !== 'available') {
-            // Existing bibliography, corrections, reading state and positions belong to the user.
-            await update(book, { sourceRef, fileName: file.name, format, fileAvailability: 'available' })
+          for (const item of linked) {
+            if (mustParse || item.fileName !== file.name || item.sourceRef?.relativePath !== file.relativePath
+              || item.fileAvailability !== 'available') {
+              // A user-confirmed relink may share a file; each record retains its own history.
+              await update(item, { sourceRef, fileName: file.name, format, fileAvailability: 'available' })
+            }
           }
         } else if (parsed) {
           if (!await ensureActive() || !current()) return
@@ -158,7 +164,7 @@ export function createFolderLibrary(deps: FolderLibraryDependencies) {
       }
       // Partial/truncated/error results cannot prove that an unseen document disappeared.
       if (listing.complete && !errors.length) {
-        for (const book of known.values()) {
+        for (const book of [...known.values()].flat()) {
           if (!current()) return
           if (!seen.has(book.sourceRef!.documentId) && book.fileAvailability !== 'missing') {
             await update(book, { fileAvailability: 'missing' })
@@ -233,7 +239,61 @@ export function createFolderLibrary(deps: FolderLibraryDependencies) {
     }
   }
 
-  return { status: readonly(status), chooseFolder, rescan, start }
+  async function relinkCandidates(bookId: string) {
+    const folder = await deps.getMonitoredFolder()
+    if (!folder || folder.permission !== 'granted') throw new Error('Folder permission unavailable')
+    const book = await (await deps.getStorage()).getBook(bookId)
+    if (!book?.sourceRef) throw new Error('Referenced book required')
+    const listing = await deps.listMonitoredFiles(folder.id)
+    if (!listing.complete || listing.errors.length || listing.files.length > MAX_FILES) {
+      throw new Error(listing.errors.map(item => item.message || item.code).join('; ') || 'Folder enumeration incomplete')
+    }
+    const ids = new Set<string>()
+    for (const file of listing.files) {
+      if (!file.documentId || ids.has(file.documentId)) throw new Error('Invalid or duplicate source identity')
+      ids.add(file.documentId)
+    }
+    return { folderId: folder.id, files: listing.files.filter(file => detectFormat(file.name) === book.format
+      && (file.size === null || (Number.isFinite(file.size) && file.size > 0 && file.size <= MAX_FILE_BYTES))) }
+  }
+
+  async function relink(bookId: string, folderId: string, documentId: string, confirmedSameEdition: boolean) {
+    if (!confirmedSameEdition) throw new Error('Same-edition confirmation required')
+    if (running) throw new Error('Folder operation in progress; try again after scanning')
+    const token = epoch
+    const operation = async () => {
+      const storage = await deps.getStorage()
+      const book = await storage.getBook(bookId)
+      if (!book?.sourceRef) throw new Error('Referenced book required')
+      const original = JSON.stringify(book.sourceRef)
+      const candidates = await relinkCandidates(bookId)
+      if (candidates.folderId !== folderId) throw new Error('Monitored folder changed')
+      const file = candidates.files.find(item => item.documentId === documentId)
+      if (!file) throw new Error('Candidate file unavailable')
+      const bytes = await deps.readMonitoredFile(folderId, documentId)
+      if (!bytes.byteLength || bytes.byteLength > MAX_FILE_BYTES) throw new Error('Unsupported source size')
+      const parsed = await deps.prepareBookImport(new File([new Uint8Array(bytes)], file.name))
+      if (parsed.meta.format !== book.format) throw new Error('Book format mismatch')
+      const fresh = await relinkCandidates(bookId)
+      const verified = fresh.files.find(item => item.documentId === documentId)
+      const current = await storage.getBook(bookId)
+      if (token !== epoch || fresh.folderId !== folderId || !verified
+        || verified.size !== file.size || verified.modifiedAt !== file.modifiedAt
+        || verified.relativePath !== file.relativePath || verified.name !== file.name
+        || JSON.stringify(current?.sourceRef) !== original) throw new Error('Source changed; select the file again')
+      // Only the source pointer is replaced; bibliography, classifications and reading data are untouched.
+      await storage.updateBook(bookId, { sourceRef: { folderId, documentId, relativePath: file.relativePath,
+        version: JSON.stringify([file.size, file.modifiedAt]) }, fileName: file.name, fileAvailability: 'available' })
+      status.value = { ...status.value, generation: status.value.generation + 1 }
+    }
+    running = operation()
+    try { await running } finally {
+      running = undefined
+      if (pending) void rescan()
+    }
+  }
+
+  return { status: readonly(status), chooseFolder, rescan, start, relinkCandidates, relink }
 }
 
 let singleton: ReturnType<typeof createFolderLibrary> | undefined

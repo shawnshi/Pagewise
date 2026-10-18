@@ -1,10 +1,14 @@
 import type { ReadingStatus } from '../storage/types.ts'
-import { isReadingStatus } from './readingStatus.ts'
+import { normalizeReadingStatus } from './readingStatus.ts'
+import { normalizeAvailability, type AvailabilityFilter } from './bookAvailability.ts'
 import { queryLibraryBooks, type LibraryQueryBook, type LibraryQueryOptions, type LibraryQueryResult } from './libraryQuery.ts'
 
 export type LibrarySortBy = 'recent' | 'added' | 'title' | 'author' | 'progress'
 
 export interface LibrarySessionState {
+  availabilityFilter: AvailabilityFilter
+  returnedFromReader?: boolean
+  unavailableReturn?: Omit<LibrarySessionState, 'unavailableReturn'>
   keyword: string
   sortBy: LibrarySortBy
   tagFilter: string[]
@@ -12,6 +16,13 @@ export interface LibrarySessionState {
   formatFilter: string
   languageFilter: string
   statusFilter: ReadingStatus | ''
+  categoryFilter: string
+  classificationStatusFilter: 'all' | 'complete' | 'incomplete' | 'unclassified' | ''
+  audienceFilter: string
+  textbookFilter: 'all' | 'true' | 'false' | 'unknown' | ''
+  ancientTextFilter: 'all' | 'true' | 'false' | 'unknown' | ''
+  workCountryFilter: string
+  workPeriodFilter: string
   page: number
   pageSize: number
   activeBooklistId: string
@@ -25,6 +36,14 @@ export interface AdvancedFilterDraft {
   format: string
   language: string
   status: ReadingStatus | ''
+  availability?: AvailabilityFilter
+  category: string
+  classificationStatus: 'all' | 'complete' | 'incomplete' | 'unclassified' | ''
+  audience: string
+  textbook: 'all' | 'true' | 'false' | 'unknown' | ''
+  ancientText: 'all' | 'true' | 'false' | 'unknown' | ''
+  workCountry: string
+  workPeriod: string
   sortBy: LibrarySortBy
 }
 
@@ -36,6 +55,15 @@ export const DEFAULT_LIBRARY_SESSION: Readonly<LibrarySessionState> = Object.fre
   formatFilter: '',
   languageFilter: '',
   statusFilter: '',
+  availabilityFilter: '',
+  returnedFromReader: false,
+  categoryFilter: '',
+  classificationStatusFilter: '',
+  audienceFilter: '',
+  textbookFilter: '',
+  ancientTextFilter: '',
+  workCountryFilter: '',
+  workPeriodFilter: '',
   page: 1,
   pageSize: 12,
   activeBooklistId: '',
@@ -56,7 +84,7 @@ export const SORT_LABELS: Record<LibrarySortBy, string> = {
  * 校验并净化恢复的会话数据。
  * 处理坏数据、非法类型或格式损坏（如负数页码、非数组标签、未知排序），平滑回退安全默认值。
  */
-export function sanitizeSessionState(raw: unknown): LibrarySessionState {
+export function sanitizeSessionState(raw: unknown, allowReturn = true): LibrarySessionState {
   if (!raw || typeof raw !== 'object') {
     return { ...DEFAULT_LIBRARY_SESSION, tagFilter: [] }
   }
@@ -76,9 +104,24 @@ export function sanitizeSessionState(raw: unknown): LibrarySessionState {
   const formatFilter = typeof obj.formatFilter === 'string' ? obj.formatFilter.trim().toLowerCase() : ''
   const languageFilter = typeof obj.languageFilter === 'string' ? obj.languageFilter.trim().toLowerCase() : ''
 
-  const statusFilter: ReadingStatus | '' = isReadingStatus(obj.statusFilter)
-    ? obj.statusFilter
-    : ''
+  const statusFilter: ReadingStatus | '' = normalizeReadingStatus(obj.statusFilter) ?? ''
+
+  const categoryFilter = typeof obj.categoryFilter === 'string' ? obj.categoryFilter.trim() : ''
+  const classificationStatusFilter: 'all' | 'complete' | 'incomplete' | 'unclassified' | '' =
+    ['all', 'complete', 'incomplete', 'unclassified'].includes(String(obj.classificationStatusFilter))
+      ? (obj.classificationStatusFilter as 'all' | 'complete' | 'incomplete' | 'unclassified')
+      : ''
+  const audienceFilter = typeof obj.audienceFilter === 'string' ? obj.audienceFilter.trim() : ''
+  const textbookFilter: 'all' | 'true' | 'false' | 'unknown' | '' =
+    ['all', 'true', 'false', 'unknown'].includes(String(obj.textbookFilter))
+      ? (obj.textbookFilter as 'all' | 'true' | 'false' | 'unknown')
+      : ''
+  const ancientTextFilter: 'all' | 'true' | 'false' | 'unknown' | '' =
+    ['all', 'true', 'false', 'unknown'].includes(String(obj.ancientTextFilter))
+      ? (obj.ancientTextFilter as 'all' | 'true' | 'false' | 'unknown')
+      : ''
+  const workCountryFilter = typeof obj.workCountryFilter === 'string' ? obj.workCountryFilter.trim() : ''
+  const workPeriodFilter = typeof obj.workPeriodFilter === 'string' ? obj.workPeriodFilter.trim() : ''
 
   const rawPage = typeof obj.page === 'number' ? obj.page : Number(obj.page)
   const page = Number.isFinite(rawPage) && rawPage >= 1 ? Math.floor(rawPage) : 1
@@ -99,6 +142,17 @@ export function sanitizeSessionState(raw: unknown): LibrarySessionState {
     formatFilter,
     languageFilter,
     statusFilter,
+    availabilityFilter: normalizeAvailability(obj.availabilityFilter),
+    returnedFromReader: obj.returnedFromReader === true,
+    ...(allowReturn && obj.unavailableReturn && typeof obj.unavailableReturn === 'object'
+      ? { unavailableReturn: sanitizeSessionState(obj.unavailableReturn, false) } : {}),
+    categoryFilter,
+    classificationStatusFilter,
+    audienceFilter,
+    textbookFilter,
+    ancientTextFilter,
+    workCountryFilter,
+    workPeriodFilter,
     page,
     pageSize,
     activeBooklistId,
@@ -129,6 +183,14 @@ export function createFilterDraft(current: {
   formatFilter: string
   languageFilter: string
   statusFilter: ReadingStatus | ''
+  availabilityFilter?: AvailabilityFilter
+  categoryFilter?: string
+  classificationStatusFilter?: 'all' | 'complete' | 'incomplete' | 'unclassified' | ''
+  audienceFilter?: string
+  textbookFilter?: 'all' | 'true' | 'false' | 'unknown' | ''
+  ancientTextFilter?: 'all' | 'true' | 'false' | 'unknown' | ''
+  workCountryFilter?: string
+  workPeriodFilter?: string
   sortBy: LibrarySortBy
 }): AdvancedFilterDraft {
   return {
@@ -136,7 +198,15 @@ export function createFilterDraft(current: {
     tagMode: current.tagMode,
     format: current.formatFilter,
     language: current.languageFilter,
-    status: current.statusFilter,
+    status: normalizeReadingStatus(current.statusFilter) ?? '',
+    availability: normalizeAvailability(current.availabilityFilter),
+    category: current.categoryFilter ?? '',
+    classificationStatus: current.classificationStatusFilter ?? '',
+    audience: current.audienceFilter ?? '',
+    textbook: current.textbookFilter ?? '',
+    ancientText: current.ancientTextFilter ?? '',
+    workCountry: current.workCountryFilter ?? '',
+    workPeriod: current.workPeriodFilter ?? '',
     sortBy: current.sortBy,
   }
 }
@@ -145,11 +215,19 @@ export function createFilterDraft(current: {
  * 事务性筛选草稿提交：将草稿应用为正式筛选状态。
  */
 export function commitFilterDraft(draft: AdvancedFilterDraft): {
+  availabilityFilter: AvailabilityFilter
   tagFilter: string[]
   tagMode: 'and' | 'or'
   formatFilter: string
   languageFilter: string
   statusFilter: ReadingStatus | ''
+  categoryFilter: string
+  classificationStatusFilter: 'all' | 'complete' | 'incomplete' | 'unclassified' | ''
+  audienceFilter: string
+  textbookFilter: 'all' | 'true' | 'false' | 'unknown' | ''
+  ancientTextFilter: 'all' | 'true' | 'false' | 'unknown' | ''
+  workCountryFilter: string
+  workPeriodFilter: string
   sortBy: LibrarySortBy
 } {
   return {
@@ -157,7 +235,15 @@ export function commitFilterDraft(draft: AdvancedFilterDraft): {
     tagMode: draft.tagMode,
     formatFilter: draft.format,
     languageFilter: draft.language,
-    statusFilter: draft.status,
+    statusFilter: normalizeReadingStatus(draft.status) ?? '',
+    availabilityFilter: normalizeAvailability(draft.availability),
+    categoryFilter: draft.category,
+    classificationStatusFilter: draft.classificationStatus,
+    audienceFilter: draft.audience,
+    textbookFilter: draft.textbook,
+    ancientTextFilter: draft.ancientText,
+    workCountryFilter: draft.workCountry,
+    workPeriodFilter: draft.workPeriod,
     sortBy: draft.sortBy,
   }
 }

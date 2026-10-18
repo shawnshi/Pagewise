@@ -4,7 +4,7 @@ import { mkdtemp, rm } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join, resolve } from 'node:path'
 import { DatabaseSync } from 'node:sqlite'
-import { createServer } from 'vite'
+import { createServer } from './vite-isolated.mjs'
 import { chromium } from 'playwright'
 import { zipSync, strToU8 } from 'fflate'
 
@@ -36,7 +36,7 @@ before(async () => {
   server = await createServer({
     root, configFile: false, logLevel: 'error', cacheDir: resolve(root, '../.cache/v03/vite'),
     optimizeDeps: { noDiscovery: true, include: ['vue', 'dexie'] },
-    server: { host: '127.0.0.1', port: 0 },
+    server: { host: '127.0.0.1', port: 0, strictPort: false },
     plugins: [{ name: 'synthetic-metadata-contract', enforce: 'pre',
       resolveId(source) {
         if (/(?:^|\/)monitoredFolder(?:\.ts)?$/.test(source)) return '\0metadata-native'
@@ -205,6 +205,84 @@ test('host SQLite migrates legacy paper rows idempotently and surfaces migration
     assert.deepEqual(result.bytes, [1, 2, 3]); assert.deepEqual(result.updated.tags, ['manual'])
   }, { legacy: true })
 })
+
+for (const backend of ['DexieStorage', 'TauriStorage']) {
+  test(`${backend}: explicit relink preserves both records, notes and progress through rescan/reopen`, () => isolated(async page => {
+    const result = await page.evaluate(async backend => {
+      const { createFolderLibrary, prepareBookImport } = window.__modules
+      const storage = new window.__modules[backend](); await storage.init()
+      const content = new TextEncoder().encode('The same edition, restored from a new source path.\nChapter one.').buffer
+      let files = [{ documentId: 'new-document', name: 'restored.txt', relativePath: 'moved/restored.txt', size: content.byteLength, modifiedAt: 20 }]
+      const base = { kind: 'book', title: 'Manual title', author: 'Manual author', format: 'txt', tags: ['Keep'], addedAt: 1, progress: .42, readingSeconds: 600, readingStatus: 'paused', location: 'chapter-1', lastReadAt: 12 }
+      const originalId = await storage.addReferencedBook({ ...base, fileName: 'old.txt', sourceRef: { folderId: 'old-folder', documentId: 'old-document', relativePath: 'old.txt', version: 'old' } })
+      await storage.updateBook(originalId, { fileAvailability: 'missing' })
+      const indexedId = await storage.addReferencedBook({ ...base, title: 'Existing entry', progress: .1, fileName: 'restored.txt', sourceRef: { folderId: 'folder', documentId: 'new-document', relativePath: 'moved/restored.txt', version: JSON.stringify([content.byteLength, 20]) } })
+      for (const id of [originalId, indexedId]) await storage.addAnnotation({ id: `note-${id}`, bookId: id, kind: 'highlight', cfi: 'chapter-1', text: 'Quote', note: `Keep ${id}`, color: '#000000', createdAt: 1 })
+      const controller = createFolderLibrary({ getStorage: async () => storage, prepareBookImport,
+        getMonitoredFolder: async () => ({ id: 'folder', name: 'Books', permission: 'granted' }), selectMonitoredFolder: async () => null,
+        listMonitoredFiles: async () => ({ files, complete: true, errors: [] }), readMonitoredFile: async () => content,
+        subscribeMonitoredFolderChanges: () => () => {} })
+      const before = await storage.getBook(originalId)
+      let unconfirmed = ''; try { await controller.relink(originalId, 'folder', 'new-document', false) } catch (e) { unconfirmed = e.message }
+      const rejected = await storage.getBook(originalId)
+      await controller.relink(originalId, 'folder', 'new-document', true)
+      const linked = await storage.getBook(originalId)
+      await controller.rescan()
+      const count = (await storage.listBooks()).length
+      files = []; await controller.rescan()
+      const missing = (await storage.listBooks()).map(x => x.fileAvailability)
+      files = [{ documentId: 'new-document', name: 'restored.txt', relativePath: 'moved/restored.txt', size: content.byteLength, modifiedAt: 21 }]
+      await controller.rescan()
+      const reopened = new window.__modules[backend](); await reopened.init()
+      const books = await reopened.listBooks()
+      return { originalId, indexedId, before, rejected, unconfirmed, linked, count, missing, books,
+        originalNotes: await reopened.listAnnotations(originalId), otherNotes: await reopened.listAnnotations(indexedId) }
+    }, backend)
+    assert.match(result.unconfirmed, /confirmation/)
+    assert.deepEqual(result.rejected, result.before)
+    assert.equal(result.linked.id, result.originalId); assert.equal(result.linked.title, 'Manual title')
+    assert.equal(result.linked.progress, .42); assert.equal(result.linked.location, 'chapter-1')
+    assert.equal(result.linked.readingStatus, 'paused'); assert.deepEqual(result.linked.tags, ['Keep'])
+    assert.equal(result.linked.sourceRef.documentId, 'new-document'); assert.equal(result.count, 2)
+    assert.deepEqual(result.missing, ['missing', 'missing'])
+    assert.ok(result.books.every(x => x.fileAvailability === 'available'))
+    assert.ok(result.books.every(x => x.sourceRef.version.endsWith(',21]')))
+    assert.equal(result.originalNotes[0].note, `Keep ${result.originalId}`); assert.equal(result.otherNotes[0].note, `Keep ${result.indexedId}`)
+  }))
+
+  test(`${backend}: partial listing, stale file/folder and parser failure cannot replace the old source`, () => isolated(async page => {
+    const results = await page.evaluate(async backend => {
+      const { createFolderLibrary, prepareBookImport } = window.__modules
+      const storage = new window.__modules[backend](); await storage.init()
+      const content = new TextEncoder().encode('A restored text file.').buffer
+      const initial = { id: 'protected', kind: 'book', title: 'Protected', author: '', format: 'txt', tags: [], addedAt: 1, fileName: 'old.txt', sourceRef: { folderId: 'folder', documentId: 'old', relativePath: 'old.txt', version: 'old' } }
+      const protectedId = await storage.addReferencedBook(initial)
+      const before = await storage.getBook(protectedId)
+      const outcomes = []
+      for (const mode of ['incomplete', 'duplicate', 'stale-file', 'stale-folder', 'parser', 'scan-error']) {
+        let folderId = 'folder', modifiedAt = 1
+        const file = () => ({ documentId: 'new', name: 'new.txt', relativePath: 'new.txt', size: content.byteLength, modifiedAt })
+        const controller = createFolderLibrary({ getStorage: async () => storage,
+          prepareBookImport: async file => { if (mode === 'parser') throw new Error('injected parse failure'); return prepareBookImport(file) },
+          getMonitoredFolder: async () => ({ id: folderId, name: 'Books', permission: 'granted' }), selectMonitoredFolder: async () => null,
+          listMonitoredFiles: async () => { if (mode === 'scan-error') throw new Error('injected enumeration failure'); return { files: mode === 'duplicate' ? [file(), file()] : [file()], complete: mode !== 'incomplete', errors: [] } },
+          readMonitoredFile: async () => { if (mode === 'stale-file') modifiedAt++; if (mode === 'stale-folder') folderId = 'changed'; return content },
+          subscribeMonitoredFolderChanges: () => () => {} })
+        let error = ''; try {
+          if (mode === 'scan-error') { await controller.rescan(); error = controller.status.value.error }
+          else await controller.relink(protectedId, 'folder', 'new', true)
+        } catch (e) { error = e.message }
+        outcomes.push({ mode, error, after: await storage.getBook(protectedId) })
+      }
+      return { before, outcomes }
+    }, backend)
+    assert.ok(results.before, 'baseline book must exist')
+    for (const outcome of results.outcomes) {
+      assert.ok(outcome.error, outcome.mode)
+      assert.deepEqual(outcome.after, results.before, outcome.mode)
+    }
+  }))
+}
 
 async function setupController(page) {
   await page.evaluate(async () => {

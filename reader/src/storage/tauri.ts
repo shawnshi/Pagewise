@@ -4,10 +4,12 @@
  *  - 元数据用 SQLite 索引 (tauri-plugin-sql)
  */
 import type {
-  AnnotationRec, BooklistRec, BooklistWantedRec, BookMeta, CatalogSourceRec, LibraryStorage, LocalFileRef, NewBookMeta,
+  AnnotationRec, BookClassificationUpdate, LegacyBookTagsUpdate, BooklistRec, BooklistWantedRec, BookMeta, CatalogSourceRec, LibraryStorage, LocalFileRef, NewBookMeta,
 } from './types'
 import { BUILTIN_SOURCES, getLibraryRoot, newId } from './types'
-import { isReadingStatus } from '../services/readingStatus'
+import { isReadingStatus, normalizeReadingStatus } from '../services/readingStatus'
+import { prepareClassificationUpdates, rejectClassificationPatch, validatedBookClassification } from '../services/bookTagActions'
+import { parseClassification } from '../services/bookClassification'
 import { readReferencedFile, validateSourceRef, validateAvailability } from './sourceFile'
 
 type SqlDatabase = {
@@ -24,6 +26,7 @@ interface BookRow {
   description: string | null
   language: string | null
   tags: string
+  classification: string | null
   added_at: number
   last_read_at: number | null
   location: string | null
@@ -40,7 +43,7 @@ interface BookRow {
   kind: string | null
 }
 
-const rowToMeta = (r: BookRow): BookMeta => ({
+const rowToMeta = (r: BookRow): BookMeta => validatedBookClassification({
   id: r.id,
   title: r.title,
   author: r.author,
@@ -53,12 +56,13 @@ const rowToMeta = (r: BookRow): BookMeta => ({
   sourceRef: r.source_ref == null ? undefined : validateSourceRef(JSON.parse(r.source_ref)),
   fileAvailability: validateAvailability(r.file_availability),
   tags: JSON.parse(r.tags || '[]'),
+  classification: r.classification == null ? undefined : parseClassification(JSON.parse(r.classification)),
   addedAt: r.added_at,
   lastReadAt: r.last_read_at ?? undefined,
   location: r.location ?? undefined,
   progress: r.progress ?? undefined,
   source: r.source ?? undefined,
-  readingStatus: isReadingStatus(r.reading_status) ? r.reading_status : undefined,
+  readingStatus: normalizeReadingStatus(r.reading_status),
   hasCover: !!r.has_cover,
   readingSeconds: r.reading_seconds ?? 0,
   pinnedAt: r.pinned_at ?? undefined,
@@ -198,6 +202,7 @@ export class TauriStorage implements LibraryStorage {
         'ALTER TABLE books ADD COLUMN reading_status TEXT', 'ALTER TABLE books ADD COLUMN publisher TEXT',
         'ALTER TABLE books ADD COLUMN publication_date TEXT', 'ALTER TABLE books ADD COLUMN source_ref TEXT',
         'ALTER TABLE books ADD COLUMN file_availability TEXT',
+        'ALTER TABLE books ADD COLUMN classification TEXT',
       ]],
     ] as const
     for (const [query, statements] of migrations) {
@@ -206,6 +211,9 @@ export class TauriStorage implements LibraryStorage {
         if (!columns.some(column => column.name === ddl.split(' ')[5])) await this.db.execute(ddl)
       }
     }
+
+    // Classification commits require JSON1 on the actual connected SQLite engine.
+    await this.db.select("SELECT json_extract('{\"version\":1}', '$.version') AS json1")
 
     // 内置书源与代码中的清单同步 (处理内置源的增删调整)
     const builtinUrls = BUILTIN_SOURCES.map(s => s.url)
@@ -257,6 +265,7 @@ export class TauriStorage implements LibraryStorage {
   }
 
   private async insertBook(meta: NewBookMeta, file?: Blob, cover?: Blob) {
+    meta = validatedBookClassification(meta)
     if (meta.readingStatus !== undefined && !isReadingStatus(meta.readingStatus)) throw new Error('Invalid reading status')
     validateAvailability(meta.fileAvailability)
     const id = newId()
@@ -271,8 +280,8 @@ export class TauriStorage implements LibraryStorage {
     await this.db.execute(
       `INSERT INTO books (id, title, author, format, file_name, description, language,
         tags, added_at, last_read_at, location, progress, source, has_cover, kind,
-        reading_seconds, pinned_at, reading_status, publisher, publication_date, source_ref, file_availability)
-       VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19,$20,$21,$22)`,
+        reading_seconds, pinned_at, reading_status, publisher, publication_date, source_ref, file_availability, classification)
+       VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19,$20,$21,$22,$23)`,
       [id, meta.title, meta.author, meta.format, meta.fileName,
         meta.description ?? null, meta.language ?? null, JSON.stringify(meta.tags),
         meta.addedAt, meta.lastReadAt ?? null, meta.location ?? null,
@@ -280,11 +289,15 @@ export class TauriStorage implements LibraryStorage {
         meta.kind === 'paper' ? 'paper' : 'book',
         Math.round(meta.readingSeconds ?? 0), meta.pinnedAt || null, meta.readingStatus ?? null,
         meta.publisher ?? null, meta.publicationDate ?? null,
-        meta.sourceRef ? JSON.stringify(meta.sourceRef) : null, meta.fileAvailability ?? null])
+        meta.sourceRef ? JSON.stringify(meta.sourceRef) : null, meta.fileAvailability ?? null,
+        meta.classification ? JSON.stringify(meta.classification) : null])
     return id
   }
 
   async updateBook(id: string, patch: Partial<Omit<BookMeta, 'id'>>) {
+    rejectClassificationPatch(patch)
+    const hasTags = Object.prototype.hasOwnProperty.call(patch, 'tags')
+    if (hasTags && (await this.getBook(id))?.classification) throw new Error('Use updateBookClassifications')
     if (patch.readingStatus !== undefined && !isReadingStatus(patch.readingStatus)) throw new Error('Invalid reading status')
     if (patch.sourceRef !== undefined) validateSourceRef(patch.sourceRef)
     validateAvailability(patch.fileAvailability)
@@ -317,8 +330,38 @@ export class TauriStorage implements LibraryStorage {
     if (!sets.length) return
     values.push(id)
     const result = await this.db.execute(
-      `UPDATE books SET ${sets.join(', ')} WHERE id = $${values.length}`, values)
+      `UPDATE books SET ${sets.join(', ')} WHERE id = $${values.length}${hasTags ? ' AND classification IS NULL' : ''}`, values)
     if (result.rowsAffected === 0) throw new Error('Book not found')
+  }
+
+  async updateBookClassifications(updates: readonly BookClassificationUpdate[], legacyUpdates: readonly LegacyBookTagsUpdate[] = []) {
+    const prepared = prepareClassificationUpdates(updates, legacyUpdates)
+    if (!prepared.length) return
+    // MATERIALIZED freezes the full gate before any row changes; one pooled execute is atomic.
+    const result = await this.db.execute(`
+      WITH changes AS MATERIALIZED (SELECT value AS item FROM json_each($1)),
+      eligible AS MATERIALIZED (
+        SELECT b.id FROM books b JOIN changes c ON b.id = json_extract(c.item, '$.id')
+        WHERE (json_type(c.item, '$.classification') = 'null'
+            OR coalesce(json_extract(b.classification, '$.revision'), 0) = json_extract(c.item, '$.expectedRevision'))
+          AND (json_type(c.item, '$.expectedTags') IS NULL OR (
+            b.classification IS NULL AND json(b.tags) = json_extract(c.item, '$.expectedTags')
+          ))
+          AND (json_type(c.item, '$.expectedMetadata') IS NULL OR (
+            b.title IS json_extract(c.item, '$.expectedMetadata.title')
+            AND b.author IS json_extract(c.item, '$.expectedMetadata.author')
+            AND b.publisher IS json_extract(c.item, '$.expectedMetadata.publisher')
+            AND b.publication_date IS json_extract(c.item, '$.expectedMetadata.publicationDate')
+            AND b.description IS json_extract(c.item, '$.expectedMetadata.description')
+          ))
+      )
+      UPDATE books SET
+        classification = (SELECT json_extract(item, '$.classification') FROM changes WHERE json_extract(item, '$.id') = books.id),
+        tags = (SELECT json_extract(item, '$.tags') FROM changes WHERE json_extract(item, '$.id') = books.id)
+      WHERE id IN (SELECT id FROM eligible)
+        AND (SELECT count(*) FROM eligible) = (SELECT count(*) FROM changes)
+    `, [JSON.stringify(prepared)])
+    if (result.rowsAffected !== prepared.length) throw new Error('Book classification conflict')
   }
 
   async deleteBook(id: string) {
