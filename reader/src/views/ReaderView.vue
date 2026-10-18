@@ -10,7 +10,7 @@ import { useSettings } from '../stores/settings'
 import { useLibrary } from '../stores/library'
 import { isSupportedBookFormat, isTextLike } from '../services/format'
 import { convertToEpub, TEXT_EPUB_LAYOUT } from '../services/textToEpub'
-import { getReaderCSS, resolveReaderColors, resolveReaderTheme, HIGHLIGHT_COLORS, listenMarkStyle, type ListenMarkStyle } from '../services/readerTheme'
+import { getReaderCSS, resolveReaderColors, resolveReaderTheme, HIGHLIGHT_COLORS, annotationLineStyle, annotationLabelKey, annotationSwatchStyle, listenMarkStyle, type ListenMarkStyle } from '../services/readerTheme'
 import { resolvedTheme } from '../services/appearance'
 import { setPageBarsDark, setSystemBarsHidden, setKeepScreenOn } from '../services/systemBars'
 import { injectFontIntoDoc, resolveFontFamily } from '../services/fonts'
@@ -550,6 +550,7 @@ function applyPrefs(strict = false) {
         injectFontIntoDoc(content.doc, custom)
       }
     }
+    drawStoredAnnotations()
   } catch (error) {
     if (strict === true) throw error
   }
@@ -2517,7 +2518,48 @@ function clearSelection() {
   for (const { doc } of view?.renderer?.getContents?.() ?? []) doc.getSelection()?.removeAllRanges()
 }
 
+const annotationRanges = new WeakMap<Document, Map<string, Range>>()
+
+function setAnnotationBackground(doc: Document, key: string, range?: Range) {
+  const win = doc.defaultView as (Window & typeof globalThis) | null
+  if (!win?.Highlight || !win.CSS?.highlights) return
+  const ranges = annotationRanges.get(doc) ?? new Map<string, Range>()
+  if (range) ranges.set(key, range)
+  else ranges.delete(key)
+  annotationRanges.set(doc, ranges)
+  if (ranges.size) win.CSS.highlights.set('lr-annotation', new win.Highlight(...ranges.values()))
+  else win.CSS.highlights.delete('lr-annotation')
+}
+
+function drawEinkAnnotation(rects: Array<{ left: number; right: number; top: number; bottom: number }>, color: string, doc: Document) {
+  const ns = 'http://www.w3.org/2000/svg'
+  const group = doc.createElementNS(ns, 'g')
+  group.setAttribute('fill', 'none')
+  group.setAttribute('stroke', themeColors.value.fg)
+  group.setAttribute('stroke-width', '2')
+  const style = annotationLineStyle(color)
+  if (style === 'dashed') group.setAttribute('stroke-dasharray', '6 3')
+  if (style === 'dotted') {
+    group.setAttribute('stroke-dasharray', '1 4')
+    group.setAttribute('stroke-linecap', 'round')
+  }
+  const vertical = doc.defaultView?.getComputedStyle(doc.documentElement).writingMode.startsWith('vertical')
+  for (const rect of rects) for (const gap of style === 'double' ? [2, 6] : [2]) {
+    const line = doc.createElementNS(ns, 'line')
+    const coordinates = vertical
+      ? { x1: rect.right + gap, x2: rect.right + gap, y1: rect.top, y2: rect.bottom }
+      : { x1: rect.left, x2: rect.right, y1: rect.bottom + gap, y2: rect.bottom + gap }
+    for (const [name, value] of Object.entries(coordinates)) line.setAttribute(name, String(value))
+    group.append(line)
+  }
+  return group
+}
+
 function drawStoredAnnotations() {
+  for (const { doc } of view?.renderer?.getContents?.() ?? []) {
+    doc.defaultView?.CSS?.highlights?.delete('lr-annotation')
+    annotationRanges.delete(doc)
+  }
   for (const a of highlights.value) {
     try {
       view.addAnnotation({ value: a.cfi, color: a.color })
@@ -2642,6 +2684,7 @@ async function removeAnnotation(a: AnnotationRec) {
   const storage = await getStorage()
   await storage.deleteAnnotation(a.id)
   annotations.value = annotations.value.filter(x => x.id !== a.id)
+  for (const { doc } of view?.renderer?.getContents?.() ?? []) setAnnotationBackground(doc, a.cfi)
   try {
     view.deleteAnnotation({ value: a.cfi })
   } catch { /* 当前分节未绘制时忽略 */ }
@@ -3090,8 +3133,15 @@ onMounted(async () => {
     view.addEventListener('load', onSectionLoad)
     view.addEventListener('create-overlay', () => drawStoredAnnotations())
     view.addEventListener('draw-annotation', (e: CustomEvent) => {
-      const { draw, annotation } = e.detail
-      draw(Overlayer.highlight, { color: HIGHLIGHT_COLORS[annotation.color] ?? annotation.color })
+      const { draw, annotation, doc, range } = e.detail
+      if (modes.einkActive.value) {
+        // Foliate's normal overlay covers glyphs; one CSS Highlight paints overlapping ranges behind them.
+        setAnnotationBackground(doc, annotation.value, range)
+        draw((rects: Parameters<typeof drawEinkAnnotation>[0]) => drawEinkAnnotation(rects, annotation.color, doc))
+      } else {
+        setAnnotationBackground(doc, annotation.value)
+        draw(Overlayer.highlight, { color: HIGHLIGHT_COLORS[annotation.color] ?? annotation.color })
+      }
     })
     view.addEventListener('show-annotation', (e: CustomEvent) => {
       const found = annotations.value.find(a => a.cfi === e.detail.value)
@@ -3202,7 +3252,7 @@ onBeforeRouteLeave(async () => {
 </script>
 
 <template>
-  <div class="reader" :class="[{ 'bars-on': barsVisible, 'portrait-scroll': portraitView && effectiveFlow === 'scrolled' }, modes.shellClass.value]" :style="{ background: themeColors.bg, color: themeColors.fg }">
+  <div class="reader" :class="[{ 'bars-on': barsVisible, 'portrait-scroll': portraitView && effectiveFlow === 'scrolled' }, modes.shellClass.value]" :data-reader-theme="themeColors.bg === '#000000' ? 'dark' : 'light'" :style="{ background: themeColors.bg, color: themeColors.fg }">
     <!-- 工具栏隐藏时: 鼠标移到上下边缘呼出 -->
     <div v-if="!barsVisible" class="bar-peek top" @mouseenter="showBars()" />
     <div v-if="!barsVisible" class="bar-peek bottom" @mouseenter="showBars()" />
@@ -3515,12 +3565,15 @@ onBeforeRouteLeave(async () => {
     <div v-if="selection" class="highlight-bar card">
       <span class="hl-hint">{{ t('reader.highlight') }}</span>
       <button
-        v-for="(hex, name) in HIGHLIGHT_COLORS"
+        v-for="name in Object.keys(HIGHLIGHT_COLORS)"
         :key="name"
+        type="button"
         class="hl-color"
-        :style="{ background: hex }"
+        :style="annotationSwatchStyle(name as string, modes.einkActive.value)"
+        :title="t(annotationLabelKey(name as string, modes.einkActive.value))"
+        :aria-label="t(annotationLabelKey(name as string, modes.einkActive.value))"
         @click="addHighlight(name as string)"
-      />
+      ><span v-if="modes.einkActive.value">{{ t(annotationLabelKey(name as string, true)) }}</span></button>
       <button class="btn btn-sm" @click="addHighlight('yellow', true)"><svg viewBox="0 0 24 24" width="14" height="14" aria-hidden="true"><path fill="currentColor" d="M5 4h14a2 2 0 0 1 2 2v9a2 2 0 0 1-2 2H10l-4.3 3.4A1 1 0 0 1 4 19.6V6a2 2 0 0 1 1-2zm1 2v11.5L9.3 15H19V6H6zm2 2.5h8a1 1 0 1 1 0 2H8a1 1 0 1 1 0-2zm0 3h5a1 1 0 1 1 0 2H8a1 1 0 1 1 0-2z"/></svg>{{ t('reader.writeNote') }}</button>
       <button class="btn btn-sm" @click="aiExplainSelection"><svg viewBox="0 0 24 24" width="14" height="14" aria-hidden="true"><path fill="currentColor" d="M10 3a1 1 0 0 1 .95.68l1.3 3.9a3 3 0 0 0 1.9 1.9l3.9 1.3a1 1 0 0 1 0 1.9l-3.9 1.3a3 3 0 0 0-1.9 1.9l-1.3 3.9a1 1 0 0 1-1.9 0l-1.3-3.9a3 3 0 0 0-1.9-1.9l-3.9-1.3a1 1 0 0 1 0-1.9l3.9-1.3a3 3 0 0 0 1.9-1.9l1.3-3.9A1 1 0 0 1 10 3zm8-1a1 1 0 0 1 .95.68l.4 1.2.97.32a1 1 0 0 1 0 1.9l-.97.32-.4 1.2a1 1 0 0 1-1.9 0l-.4-1.2-.97-.32a1 1 0 0 1 0-1.9l.97-.32.4-1.2A1 1 0 0 1 18 2z"/></svg>{{ t('ai.explain') }}</button>
       <button v-if="dj.selectionKey.value" class="btn btn-sm" @click="dj.openKeyCard(); selection = null">{{ t('dianjing.why') }}</button>
@@ -3757,7 +3810,7 @@ onBeforeRouteLeave(async () => {
         <div class="panel-body">
           <template v-if="annoTab === 'highlight'">
             <div v-for="a in highlights" :key="a.id" class="anno-item" @click="gotoAnnotation(a)">
-              <span class="anno-dot" :style="{ background: HIGHLIGHT_COLORS[a.color] ?? a.color }" />
+              <span class="anno-dot" :style="annotationSwatchStyle(a.color, modes.einkActive.value)" :title="t(annotationLabelKey(a.color, modes.einkActive.value))"><span v-if="modes.einkActive.value">{{ t(annotationLabelKey(a.color, true)) }}</span></span>
               <span class="anno-body">
                 <span class="anno-text">{{ a.text }}</span>
                 <span v-if="a.note" class="anno-note"><svg viewBox="0 0 24 24" width="14" height="14" aria-hidden="true"><path fill="currentColor" d="M5 4h14a2 2 0 0 1 2 2v9a2 2 0 0 1-2 2H10l-4.3 3.4A1 1 0 0 1 4 19.6V6a2 2 0 0 1 1-2zm1 2v11.5L9.3 15H19V6H6zm2 2.5h8a1 1 0 1 1 0 2H8a1 1 0 1 1 0-2zm0 3h5a1 1 0 1 1 0 2H8a1 1 0 1 1 0-2z"/></svg>{{ a.note }}</span>

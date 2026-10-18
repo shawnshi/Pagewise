@@ -710,22 +710,67 @@ input[type='range'] {
 }
 
 /* The existing user-selected e-ink mode also controls the surrounding UI; disabling it restores the normal palette. */
-:root.pagewise-eink {
+:root.pagewise-eink, .lr-eink {
   color-scheme: light;
-  --bg: #ffffff; --card: #ffffff; --surface-2: #eeeeee; --surface-3: #dddddd;
-  --text: #111111; --text-2: #444444; --text-3: #555555;
-  --border: #888888; --border-strong: #666666;
-  --brand: #111111; --brand-hover: #222222; --brand-active: #000000;
-  --brand-light: #eeeeee; --brand-soft: #eeeeee; --on-brand: #ffffff;
-  --danger: #111111; --danger-soft: #eeeeee; --success: #111111; --success-soft: #eeeeee;
-  --warning: #111111; --warning-soft: #eeeeee; --overlay: #ffffff;
+  --bg: #ffffff; --card: #ffffff; --surface-2: #f0f0f0; --surface-3: #e0e0e0;
+  --text: #000000; --text-2: #444444; --text-3: #555555;
+  --border: #777777; --border-strong: #000000; --divider: #bbbbbb;
+  --brand: #000000; --brand-hover: #444444; --brand-active: #000000;
+  --brand-light: #e0e0e0; --brand-soft: #e0e0e0; --on-brand: #ffffff;
+  --danger: #000000; --danger-soft: #f0f0f0; --success: #000000; --success-soft: #f0f0f0;
+  --warning: #000000; --warning-soft: #f0f0f0; --overlay: #ffffff;
+  --annotation-bg: #e0e0e0;
   --radius: 4px; --radius-sm: 4px; --radius-lg: 4px; --radius-xl: 4px;
   --control-h: 48px; --control-h-sm: 48px;
   --shadow-sm: none; --shadow: none; --shadow-md: none; --shadow-lg: none;
+}
+.lr-eink[data-reader-theme="dark"], :root.pagewise-eink:has(.lr-eink[data-reader-theme="dark"]) {
+  color-scheme: dark;
+  --bg: #000000; --card: #000000; --surface-2: #1a1a1a; --surface-3: #333333;
+  --text: #ffffff; --text-2: #cccccc; --text-3: #bbbbbb;
+  --border: #888888; --border-strong: #ffffff; --divider: #444444;
+  --brand: #ffffff; --brand-hover: #cccccc; --brand-active: #ffffff;
+  --brand-light: #333333; --brand-soft: #333333; --on-brand: #000000;
+  --danger: #ffffff; --danger-soft: #1a1a1a; --success: #ffffff; --success-soft: #1a1a1a;
+  --warning: #ffffff; --warning-soft: #1a1a1a; --overlay: #000000;
+  --annotation-bg: #333333;
 }
 .pagewise-eink *, .pagewise-eink *::before, .pagewise-eink *::after { animation: none !important; transition: none !important; scroll-behavior: auto !important; }
 .pagewise-eink .btn, .pagewise-eink .input { font-size: 16px; }
 .pagewise-eink .icon-btn { min-width: 48px; min-height: 48px; }
 .pagewise-eink .shell .reader { --bar-h: 56px; --footer-h: 56px; }
 .pagewise-eink blockquote { border-color: var(--text) !important; }
+.pagewise-eink *, .lr-eink * { box-shadow: none !important; backdrop-filter: none !important; }
+.pagewise-eink button:is(.active, .selected, [aria-pressed="true"]),
+.lr-eink button:is(.active, .selected, [aria-pressed="true"]) {
+  outline: 2px solid var(--text);
+  outline-offset: -2px;
+}
+.pagewise-eink :focus-visible, .lr-eink :focus-visible {
+  outline: 2px solid var(--text) !important;
+  outline-offset: 3px !important;
+}
+.lr-eink :is(.sel-bar, .highlight-bar) {
+  background: var(--card);
+  background-image: none;
+}
+.pagewise-eink .lr-eink :is(.hl-color, .anno-dot, .sel-color) {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  flex-shrink: 0;
+  width: auto;
+  height: auto;
+  min-width: 64px;
+  min-height: 48px;
+  padding: 4px 8px;
+  color: var(--text);
+  border: 2px solid var(--border);
+  border-radius: 4px;
+  font-size: 14px;
+}
+.pagewise-eink input, .lr-eink input { accent-color: var(--text); }
+.pagewise-eink ::selection, .lr-eink ::selection { background: var(--annotation-bg); color: var(--text); }
+.lr-eink .sel-colors { flex-wrap: wrap; }
+.lr-eink :is(.highlight-bar, .sel-bar) { flex-wrap: wrap; max-width: calc(100vw - 24px); }
 

@@ -300,6 +300,7 @@ export function useReadingModes(opts: UseReadingModesOptions) {
   const dimLevel = computed(() => clampDim(settings.readingMode.eyeCare.dim))
   /** 调暗遮罩 (阅读器正文之上, pointer-events:none); 0 时为 null */
   const dimOverlayStyle = computed(() => {
+    if (settings.readingMode.eink.enabled) return null
     const bg = dimBackground(dimLevel.value)
     return bg ? { background: bg } : null
   })
@@ -842,7 +843,7 @@ export function useReadingModes(opts: UseReadingModesOptions) {
   let prevInWindow: boolean | null = null
   function checkNight() {
     const n = settings.readingMode.night
-    if (!n.schedule) {
+    if (!n.schedule || settings.readingMode.eink.enabled) {
       prevInWindow = null
       return
     }

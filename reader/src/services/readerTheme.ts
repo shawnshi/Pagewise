@@ -103,6 +103,10 @@ export function getReaderCSS(
     }, colors)}
     ${readingModeCSS(colors, theme, style)}
     ${modeStyleCSS(style)}
+    ${style?.eink ? `
+    ::highlight(lr-annotation) { background-color: ${theme === 'dark' ? '#333333' : '#e0e0e0'}; color: ${colors.fg}; }
+    ::selection { background-color: ${theme === 'dark' ? '#333333' : '#e0e0e0'}; color: ${colors.fg}; }
+    ` : ''}
     ${dianjingCSS(djThemeName(theme, !!style?.eink))}
   `
 }
@@ -121,7 +125,7 @@ function modeStyleCSS(style?: ReaderModeStyle): string {
     css += `
     body { font-weight: ${style.largeText ? 600 : 500}; }
     b, strong, th, h1, h2, h3, h4, h5, h6 { font-weight: 800; }
-    a:any-link { text-decoration: underline; }
+    a:any-link { text-decoration: underline; text-decoration-thickness: 2px; text-underline-offset: 2px; }
     img, svg, video { filter: grayscale(1) contrast(1.1); }
     *, *::before, *::after { transition: none !important; animation: none !important; scroll-behavior: auto !important; }
     `
@@ -158,6 +162,32 @@ export const HIGHLIGHT_COLORS: Record<string, string> = {
   green: '#7ed99b',
   blue: '#7cb8ff',
   red: '#ff8f8f',
+}
+
+export function annotationLineStyle(color: string): 'solid' | 'double' | 'dashed' | 'dotted' {
+  switch (color) {
+    case 'green': return 'double'
+    case 'blue': return 'dashed'
+    case 'red': return 'dotted'
+    default: return 'solid'
+  }
+}
+
+export function annotationLabelKey(color: string, eink: boolean): string {
+  const known = Object.hasOwn(HIGHLIGHT_COLORS, color)
+  return eink ? `reader.highlightLine.${known ? color : 'yellow'}`
+    : known ? `reader.highlightColor.${color}` : 'reader.highlight'
+}
+
+export function annotationSwatchStyle(color: string, eink: boolean) {
+  return eink ? {
+    background: 'var(--annotation-bg)',
+    color: 'var(--text)',
+    textDecorationLine: 'underline',
+    textDecorationStyle: annotationLineStyle(color),
+    textDecorationThickness: '2px',
+    textUnderlineOffset: '3px',
+  } : { background: HIGHLIGHT_COLORS[color] ?? color }
 }
 
 /**

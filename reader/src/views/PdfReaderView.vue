@@ -25,7 +25,7 @@ import {
 import { initMupdf } from '../services/mupdf'
 import { importFile } from '../services/importer'
 import { detectFormat, isSupportedBookFormat } from '../services/format'
-import { FONT_FAMILIES, HIGHLIGHT_COLORS, READER_THEME_CHOICES, resolveReaderColors } from '../services/readerTheme'
+import { FONT_FAMILIES, HIGHLIGHT_COLORS, READER_THEME_CHOICES, resolveReaderColors, resolveReaderTheme, annotationLineStyle, annotationLabelKey, annotationSwatchStyle } from '../services/readerTheme'
 import { resolvedTheme } from '../services/appearance'
 import { injectFontIntoDoc, resolveFontFamily } from '../services/fonts'
 import { useLibrary } from '../stores/library'
@@ -1408,12 +1408,21 @@ const pageHls = computed(() => {
 
 const hlStyle = (page: number, r: HlRect, color: string) => {
   const display = displaySizeOf(page)
+  const eink = settings.readingMode.eink.enabled
+  const lineStyle = annotationLineStyle(color)
+  const lineWidth = lineStyle === 'double' ? 6 : 2
   return {
     left: `${r.x * display.sx}px`,
     top: `${r.y * display.sy}px`,
     width: `${r.w * display.sx}px`,
-    height: `${r.h * display.sy}px`,
-    background: HIGHLIGHT_COLORS[color] ?? color,
+    height: `${r.h * display.sy + (eink ? lineWidth : 0)}px`,
+    ...(eink ? {
+      // Original PDF page pixels remain unchanged, so marks use black even when the surrounding UI is dark.
+      background: 'transparent',
+      opacity: 1,
+      mixBlendMode: 'normal' as const,
+      borderBottom: `${lineWidth}px ${lineStyle} #000000`,
+    } : { background: HIGHLIGHT_COLORS[color] ?? color }),
   }
 }
 
@@ -2220,8 +2229,12 @@ let reflowBuildPromise: Promise<void> | null = null
 let reflowSession = 0
 let reflowScrollScheduled = false
 
+const reflowThemeChoices = computed(() => READER_THEME_CHOICES.map(choice => {
+  const colors = resolveReaderColors(choice.name, resolvedTheme.value === 'dark', { eink: settings.readingMode.eink.enabled })
+  return { ...choice, bg: colors.bg, fg: colors.fg }
+}))
 const reflowStyle = computed<Record<string, string>>(() => {
-  const colors = resolveReaderColors(settings.reader.theme, resolvedTheme.value === 'dark')
+  const colors = resolveReaderColors(settings.reader.theme, resolvedTheme.value === 'dark', { eink: settings.readingMode.eink.enabled })
   return {
     '--reflow-bg': colors.bg,
     '--reflow-fg': colors.fg,
@@ -2935,7 +2948,8 @@ onBeforeUnmount(() => {
   <div
     ref="paperRoot"
     class="paper"
-    :class="{ 'is-fullscreen': isFullscreen, 'is-presentation': presentationMode }"
+    :class="{ 'is-fullscreen': isFullscreen, 'is-presentation': presentationMode, 'lr-eink': settings.readingMode.eink.enabled }"
+    :data-reader-theme="resolveReaderTheme(settings.reader.theme, resolvedTheme === 'dark')"
   >
     <input
       ref="pdfOpenInput"
@@ -3297,7 +3311,7 @@ onBeforeUnmount(() => {
         <div v-show="annoOpen" class="drawer-body">
           <p class="drawer-count">{{ t('reader.highlightsTab') }} · {{ highlights.length }}</p>
           <div v-for="a in highlights" :key="a.id" class="anno-item" @click="gotoAnnotation(a)">
-            <span class="anno-dot" :style="{ background: HIGHLIGHT_COLORS[a.color] ?? a.color }" />
+            <span class="anno-dot" :style="annotationSwatchStyle(a.color, settings.readingMode.eink.enabled)" :title="t(annotationLabelKey(a.color, settings.readingMode.eink.enabled))"><span v-if="settings.readingMode.eink.enabled">{{ t(annotationLabelKey(a.color, true)) }}</span></span>
             <div class="anno-main">
               <p class="anno-text">{{ a.text }}</p>
               <p v-if="a.note" class="anno-note">{{ a.note }}</p>
@@ -3560,7 +3574,7 @@ onBeforeUnmount(() => {
           <div class="reflow-theme-row">
             <span>{{ t('reader.theme') }}</span>
             <button
-              v-for="choice in READER_THEME_CHOICES"
+              v-for="choice in reflowThemeChoices"
               :key="choice.name"
               :class="{ active: settings.reader.theme === choice.name }"
               :style="{ background: choice.bg, color: choice.fg }"
@@ -3588,11 +3602,12 @@ onBeforeUnmount(() => {
           :key="name"
           type="button"
           class="sel-color"
-          :title="`${t('reader.highlight')} · ${t(`reader.highlightColor.${name}`)}`"
-          :aria-label="`${t('reader.highlight')} · ${t(`reader.highlightColor.${name}`)}`"
+          :title="`${t('reader.highlight')} · ${t(annotationLabelKey(name as string, settings.readingMode.eink.enabled))}`"
+          :aria-label="`${t('reader.highlight')} · ${t(annotationLabelKey(name as string, settings.readingMode.eink.enabled))}`"
           @click="addHighlight(name as string)"
         >
-          <span class="sel-color-dot" :style="{ background: hex }" />
+          <span v-if="settings.readingMode.eink.enabled" :style="annotationSwatchStyle(name as string, true)">{{ t(annotationLabelKey(name as string, true)) }}</span>
+          <span v-else class="sel-color-dot" :style="{ background: hex }" />
         </button>
       </div>
       <span class="sel-sep" />

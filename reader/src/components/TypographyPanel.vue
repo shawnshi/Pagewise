@@ -183,7 +183,15 @@ const THEME_LABEL_KEYS: Record<string, string> = {
   dark: 'reader.themeDark',
   auto: 'reader.themeAuto',
 }
-const themeLabel = (name: string) => (THEME_LABEL_KEYS[name] ? t(THEME_LABEL_KEYS[name]) : name)
+const themeLabel = (name: string) => {
+  if (settings.readingMode.eink.enabled && name === 'light') return t('reader.einkDay')
+  if (settings.readingMode.eink.enabled && name === 'dark') return t('reader.einkNight')
+  return THEME_LABEL_KEYS[name] ? t(THEME_LABEL_KEYS[name]) : name
+}
+const themeChoices = computed(() => READER_THEME_CHOICES.map(choice => {
+  const colors = resolveReaderColors(choice.name, isDark.value, { eink: settings.readingMode.eink.enabled })
+  return { ...choice, bg: colors.bg, fg: colors.fg }
+}))
 
 // 步进控制: 字号 (8..64)
 function setFontSize(raw: string | number) {
@@ -313,6 +321,7 @@ function onMoreToggle(which: 'text' | 'layout', e: Event) {
 
 // 拟真预览计算样式
 const isDark = computed(() => {
+  if (settings.readingMode.eink.enabled) return false
   if (settings.appearance === 'dark') return true
   if (settings.appearance === 'light') return false
   return Boolean(globalThis.matchMedia?.('(prefers-color-scheme: dark)').matches)
@@ -587,7 +596,7 @@ let systemFontsLoading = false
         <span class="tp-label">{{ t('reader.theme') }}</span>
         <div class="theme-btns" role="group" :aria-label="t('reader.theme')">
           <button
-            v-for="choice in READER_THEME_CHOICES"
+            v-for="choice in themeChoices"
             :key="choice.name"
             type="button"
             class="theme-btn"
@@ -597,7 +606,7 @@ let systemFontsLoading = false
             :aria-label="themeLabel(choice.name)"
             :aria-pressed="draft.theme === choice.name"
             @click="draft.theme = choice.name"
-          >{{ t('reader.themeSample') }}</button>
+          ><span><span v-if="draft.theme === choice.name" aria-hidden="true">✓ </span>{{ t('reader.themeSample') }}</span><span>{{ themeLabel(choice.name) }}</span></button>
         </div>
       </div>
       <div class="set-row">
@@ -608,6 +617,7 @@ let systemFontsLoading = false
           :max="DIM_MAX"
           step="5"
           :value="draft.dim"
+          :disabled="settings.readingMode.eink.enabled"
           :aria-label="t('reader.dim')"
           :aria-valuetext="`${draft.dim}%`"
           @input="onDim"
@@ -947,20 +957,29 @@ let systemFontsLoading = false
 .theme-btns {
   flex: 1;
   display: flex;
+  flex-wrap: wrap;
   gap: 8px;
+  min-width: 0;
 }
 .theme-btn {
-  width: 34px;
-  height: 34px;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 2px;
+  width: 76px;
+  min-height: 64px;
+  padding: 6px;
   flex-shrink: 0;
-  border-radius: 50%;
+  border-radius: 4px;
   border: 2px solid var(--border);
   font-size: 14px;
   cursor: pointer;
 }
 .theme-btn.active {
-  border-color: var(--brand);
-  box-shadow: 0 0 0 2px var(--brand-light);
+  border-color: currentColor;
+  outline: 2px solid currentColor;
+  outline-offset: -3px;
 }
 .seg {
   display: flex;
