@@ -28,7 +28,6 @@ import {
   type TrItem,
   type GistItem,
 } from './protocol.ts'
-import { noteKeyWordChunk } from '../usageCounters.ts'
 import { SectionTextModel } from './textModel.ts'
 import type { DjColors } from './theme.ts'
 
@@ -458,7 +457,6 @@ export class DianjingEngine {
         c.kw = keyWordsUsable(kws, stats.kwMissing ?? 0, c.chunk.chars)
         if (!c.kw) c.items = c.items.filter(i => i.t !== 'kw')
         else this.#addKw(c)
-        noteKeyWordChunk({ usable: c.kw, lines: stats.kwLines ?? 0, missing: stats.kwMissing ?? 0 })
         this.host.onKeyWords?.(s.index)
       } else c.kw = false
       this.error = null

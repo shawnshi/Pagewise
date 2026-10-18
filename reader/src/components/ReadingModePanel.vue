@@ -22,6 +22,7 @@ import type { TypographySection } from './TypographyPanel.vue'
 
 const props = defineProps<{
   modes: ReadingModes
+  presentationSuppressed?: boolean
   /** 自动翻页是否在运行 (ReaderView 的 autoReading) */
   autoReading: boolean
   /** 自动翻页速度, 秒/页 (v-model:auto-read-seconds); 滚动模式下为秒/屏 */
@@ -199,6 +200,8 @@ function onSpeedInput(e: Event) {
         <svg viewBox="0 0 24 24" width="16" height="16" aria-hidden="true"><path fill="currentColor" d="M6.3 6.3a1 1 0 0 1 1.4 0L12 10.58l4.3-4.3a1 1 0 1 1 1.4 1.42L13.42 12l4.3 4.3a1 1 0 0 1-1.42 1.4L12 13.42l-4.3 4.3a1 1 0 0 1-1.4-1.42L10.58 12l-4.3-4.3a1 1 0 0 1 0-1.4z"/></svg>
       </button>
     </header>
+
+    <p v-if="presentationSuppressed" class="rm-publication-note" role="status">{{ t('reader.publicationPaused') }}</p>
 
     <!-- 主会话放点睛阅读开关 -->
     <slot name="top" />
@@ -1213,4 +1216,5 @@ function onSpeedInput(e: Event) {
     transition: none;
   }
 }
+.rm-publication-note { margin: 0; padding: 12px 20px; color: var(--text-2); font-size: 13px; line-height: 1.6; }
 </style>

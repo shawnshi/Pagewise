@@ -3,7 +3,7 @@ import { before, after, test } from 'node:test'
 import { mkdir, writeFile } from 'node:fs/promises'
 import { realpathSync } from 'node:fs'
 import { resolve } from 'node:path'
-import { createServer } from 'vite'
+import { createServer } from './vite-isolated.mjs'
 import { chromium } from 'playwright'
 import { zipSync, strToU8 } from 'fflate'
 import { settingsDefaults } from '../src/stores/settings.ts'
@@ -33,7 +33,7 @@ function pdf() {
 }
 before(async () => {
   await mkdir(artifacts, { recursive: true })
-  server = await createServer({ root: resolve(import.meta.dirname, '..'), configLoader: 'runner', cacheDir: resolve(artifacts, 'vite-cache'), logLevel: 'error', server: { host: '127.0.0.1', port: 0, fs: { allow: [resolve(import.meta.dirname, '..'), realpathSync(resolve(import.meta.dirname, '../node_modules'))] } } })
+  server = await createServer({ root: resolve(import.meta.dirname, '..'), configLoader: 'runner', logLevel: 'error', server: { host: '127.0.0.1', port: 0, fs: { allow: [resolve(import.meta.dirname, '..'), realpathSync(resolve(import.meta.dirname, '../node_modules'))] } } })
   await server.listen(); origin = `http://127.0.0.1:${server.httpServer.address().port}`
   browser = await chromium.launch({ headless: true, ...(process.platform === 'win32' ? { channel: 'msedge' } : {}) })
 })

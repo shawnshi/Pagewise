@@ -1,0 +1,85 @@
+/* Full upstream glyph sets. URLs resolve beside this sheet in app and EPUB frames.
+   Latin-only aliases leave CJK quotes, dashes and ellipses to the Chinese face. */
+@font-face {
+  font-family: "PW Source Han Serif";
+  src: url("./SourceHanSerifSC-VF.woff2") format("woff2");
+  font-style: normal;
+  font-weight: 250 900;
+  font-display: swap;
+}
+@font-face {
+  font-family: "PW Source Han Sans";
+  src: url("./SourceHanSansSC-VF.woff2") format("woff2");
+  font-style: normal;
+  font-weight: 250 900;
+  font-display: swap;
+}
+@font-face {
+  font-family: "PW Literata";
+  src: url("./Literata-Regular.woff2") format("woff2");
+  font-style: normal;
+  font-weight: 200 900;
+  font-display: swap;
+}
+@font-face {
+  font-family: "PW Literata";
+  src: url("./Literata-Italic.woff2") format("woff2");
+  font-style: italic;
+  font-weight: 200 900;
+  font-display: swap;
+}
+@font-face {
+  font-family: "PW Literata Latin";
+  src: url("./Literata-Regular.woff2") format("woff2");
+  font-style: normal;
+  font-weight: 400;
+  font-display: swap;
+  unicode-range: U+0000-024F, U+0370-052F, U+1E00-1FFF, U+2000-200A, U+202F, U+2030-203A, U+2070-214F, U+2C60-2C7F, U+A720-A7FF, U+AB30-AB6F, U+FB00-FB06;
+}
+@font-face {
+  font-family: "PW Literata Latin";
+  src: url("./Literata-Italic.woff2") format("woff2");
+  font-style: italic;
+  font-weight: 400;
+  font-display: swap;
+  unicode-range: U+0000-024F, U+0370-052F, U+1E00-1FFF, U+2000-200A, U+202F, U+2030-203A, U+2070-214F, U+2C60-2C7F, U+A720-A7FF, U+AB30-AB6F, U+FB00-FB06;
+}
+/* A Chinese 500 trial keeps Latin Regular 400; headings/emphasis still use
+   genuine 600–900 outlines instead of synthesizing bold. */
+@font-face {
+  font-family: "PW Literata Latin";
+  src: url("./Literata-Regular.woff2") format("woff2");
+  font-style: normal;
+  font-weight: 600 900;
+  font-display: swap;
+  unicode-range: U+0000-024F, U+0370-052F, U+1E00-1FFF, U+2000-200A, U+202F, U+2030-203A, U+2070-214F, U+2C60-2C7F, U+A720-A7FF, U+AB30-AB6F, U+FB00-FB06;
+}
+@font-face {
+  font-family: "PW Literata Latin";
+  src: url("./Literata-Italic.woff2") format("woff2");
+  font-style: italic;
+  font-weight: 600 900;
+  font-display: swap;
+  unicode-range: U+0000-024F, U+0370-052F, U+1E00-1FFF, U+2000-200A, U+202F, U+2030-203A, U+2070-214F, U+2C60-2C7F, U+A720-A7FF, U+AB30-AB6F, U+FB00-FB06;
+}
+@font-face {
+  font-family: "PW WenKai Screen";
+  src: url("./LXGWWenKaiScreen.woff2") format("woff2");
+  font-style: normal;
+  font-weight: 400;
+  font-display: swap;
+}
+@font-face {
+  font-family: "PW Source Serif 4";
+  src: url("./SourceSerif4-Regular.woff2") format("woff2");
+  font-style: normal;
+  font-weight: 200 900;
+  font-display: swap;
+}
+@font-face {
+  font-family: "PW Source Serif 4";
+  src: url("./SourceSerif4-Italic.woff2") format("woff2");
+  font-style: italic;
+  font-weight: 200 900;
+  font-display: swap;
+}

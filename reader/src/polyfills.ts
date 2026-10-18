@@ -26,6 +26,11 @@ function toObject(value: unknown, method: string): any {
   return Object(value)
 }
 
+// Own-property lookups are used by icons, classification and bundled fonts.
+if (typeof Object.hasOwn !== 'function') {
+  define(Object, 'hasOwn', (object: unknown, key: PropertyKey) => Object.prototype.hasOwnProperty.call(object, key))
+}
+
 // %TypedArray%.prototype: 所有 Uint8Array/Float32Array… 的共同原型
 const typedArrayProto: object | null = typeof Int8Array !== 'undefined' ? Object.getPrototypeOf(Int8Array.prototype) : null
 

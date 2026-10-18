@@ -7,6 +7,8 @@ import { parse, compileScript, compileTemplate } from '@vue/compiler-sfc'
 import { ref, computed } from 'vue'
 import { blocksReaderTurn, isReaderInteractive, createReaderContext, readerBackTarget } from '../src/services/readerSession.ts'
 import { restorableView } from '../src/services/navigationSession.ts'
+import { prepareTypographyDocument, UNKNOWN_TYPOGRAPHY_CONTEXT } from '../src/services/readerTypographyContext.ts'
+import { applyTypographyDocumentMode } from '../src/services/readerTypographyDocument.ts'
 
 const filename = new URL('../src/views/ReaderView.vue', import.meta.url)
 const source = readFileSync(filename, 'utf8')
@@ -23,6 +25,8 @@ function eventDocument() {
   const selected = { isCollapsed: true, toString: () => '', getRangeAt: () => ({ cloneRange: () => ({}) }) }
   return {
     selected,
+    documentElement: { lang: '', style: { setProperty() {} } },
+    querySelectorAll: () => [],
     getSelection: () => selected,
     addEventListener(type, listener, options) {
       const entries = listeners.get(type) ?? []
@@ -45,6 +49,8 @@ function gestureFixture() {
   const calls = { engine: 0, clicks: 0, turns: 0 }
   const context = vm.createContext({
     readerContext: createReaderContext(), readerSession: { inspecting: false, navigating: false },
+    applyTypographyDocumentMode, effectiveReader: ref({ displayMode: 'publisher' }),
+    prepareTypographyDocument, bookTypographyContext: ref(UNKNOWN_TYPOGRAPHY_CONTEXT), effectiveTypography: ref({ profile: 'original' }),
     modes: { onSectionLoad() {} }, dj: { onSectionLoad() {}, onSelection() {} },
     bookVertical: true, selectedCustomFont: () => null, sectionLoadResolvers: [], selection: ref(null), selectionRange: null,
     view: { getCFI: () => 'synthetic-selection' }, blocksReaderTurn, isReaderInteractive,
@@ -115,9 +121,11 @@ test('primary panel setters replace one another instead of stacking independent 
 
 test('Back retains legacy stop-auto/fullscreen controls before hiding toolbar or leaving', async () => {
   const actions = []
+  const backOwner = () => true
   const context = vm.createContext({
     readerBackTarget, typographyApplying: ref(false), activeAnnotation: ref(null), selection: ref(null), noteDraft: ref(''),
-    readerSession: { inspecting: false }, anyOverlayOpen: () => false,
+    readerSession: { inspecting: false, flush: async () => {} }, anyOverlayOpen: () => false,
+    nativeBackAlive: true, nativeBackHost: { __pagewiseReaderBack: backOwner }, handleNativeReaderBack: backOwner,
     autoReading: ref(true), isFullscreen: ref(true), barsVisible: ref(true),
     stopAutoRead: () => { context.autoReading.value = false; actions.push('stop') },
     toggleFullscreen: async () => { context.isFullscreen.value = false; actions.push('fullscreen') },

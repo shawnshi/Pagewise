@@ -1,5 +1,6 @@
 import { defineStore } from 'pinia'
 import { watch } from 'vue'
+import { profileDefaults, defaultTypographyProfile, normalizeTypographyCalibration, calibrationStatus as getCalibrationStatus, type TypographyProfile, type TypographyCalibration } from '../services/readerTypographyProfiles.ts'
 import { normalizeAiProfiles, providerById, type AiProviderProfile } from '../services/aiProviders.ts'
 import type { TypographyApplyPayload } from '../services/readerTypography.ts'
 import { DIM_MAX } from '../services/readingModes/eyeCare.ts'
@@ -9,32 +10,40 @@ import { BASIC_MARK_DEFAULT, migrateLevel, normalizeLevel, savedBasicMark, type 
 
 export type TypographyDisplayMode = 'optimized' | 'publisher' | 'repair'
 export type TypographyScope = 'book' | 'language'
-
-export interface TypographySettings {
-  /** 显示模式 */
-  displayMode: TypographyDisplayMode
-  /** 字号 (px, 8..64) */
-  fontSize: number
-  /** 行距 (1.0..3.0) */
-  lineHeight: number
-  /** 页边距百分比 (2..20) */
-  gap: number
-  /** 字体族 (空为默认) */
-  fontFamily: string
-  /** 两端对齐 */
-  justify: boolean
-  /** 字距 (em, 0..0.5) */
-  letterSpacing: number
-  /** 段距 (em, 0..2.0) */
-  paragraphSpacing: number
-  /** 首行缩进 (em, 0..4.0, 中文默认 2em) */
-  textIndent: number
+export interface BookDisplayPrefs {
+  theme: ReaderPrefs['theme']
+  flow: ReaderPrefs['flow']
+  continuousScroll: boolean
+  maxColumnCount: 1 | 2
+  portraitScroll: boolean
+  progressDisplay: 'both' | 'page' | 'percent'
 }
-
+export interface TypographySettings extends Partial<BookDisplayPrefs> {
+  profile?: TypographyProfile | 'auto'
+  displayMode: TypographyDisplayMode
+  /** CSS px; physical pt is converted only after explicit ruler calibration. */
+  fontSize: number
+  lineHeight: number
+  gap: number
+  fontFamily: string
+  justify: boolean
+  letterSpacing: number
+  paragraphSpacing: number
+  textIndent: number
+  /** Full-width units for Chinese/mixed, zero-glyph units for English; 0 disables the cap. */
+  maxLineLength?: number
+  publicationBaseline?: boolean
+}
 export interface ResolvedTypography extends TypographySettings {
-  source: 'base' | 'language' | 'book'
+  profile: TypographyProfile
+  profilePreference: TypographyProfile | 'auto'
+  calibration: 'uncalibrated' | 'calibrated' | 'changed-dpr' | 'changed-text-scale'
+  textScale: number
+  viewportWidth: number
+  source: 'base' | 'global' | 'language' | 'book'
   hasBookOverride: boolean
   hasLanguageOverride: boolean
+  overriddenFields: string[]
   appliedLanguage: string
   bookId?: string
 }
@@ -52,7 +61,7 @@ function clampNum(val: unknown, min: number, max: number, fallback: number, prec
 
 export function normalizeLanguageTag(lang?: string): string {
   if (!lang || typeof lang !== 'string') return 'und'
-  const clean = lang.trim().toLowerCase()
+  const clean = lang.trim().toLowerCase().replaceAll('_', '-')
   if (!/^[a-z]{2,3}(?:[-_][a-z0-9]{2,8})*$/.test(clean)) return 'und'
   if (/^zh\b|^cmn\b/i.test(clean)) return 'zh'
   if (/^en\b|^eng\b/i.test(clean)) return 'en'
@@ -78,7 +87,7 @@ export function validateTypographySettings(raw: unknown): Partial<TypographySett
     res.fontSize = Math.round(clampNum(r.fontSize, 8, 64, 18))
   }
   if (r.lineHeight !== undefined) {
-    res.lineHeight = clampNum(r.lineHeight, 1.0, 3.0, 1.8, 1)
+    res.lineHeight = clampNum(r.lineHeight, 1.0, 3.0, 1.8, 2)
   }
   if (r.gap !== undefined) {
     res.gap = Math.round(clampNum(r.gap, 2, 20, 6))
@@ -89,6 +98,7 @@ export function validateTypographySettings(raw: unknown): Partial<TypographySett
   if (typeof r.justify === 'boolean') {
     res.justify = r.justify
   }
+  if (typeof r.publicationBaseline === 'boolean') res.publicationBaseline = r.publicationBaseline
   if (r.letterSpacing !== undefined) {
     res.letterSpacing = clampNum(r.letterSpacing, 0, 0.5, 0, 2)
   }
@@ -99,6 +109,14 @@ export function validateTypographySettings(raw: unknown): Partial<TypographySett
     res.textIndent = clampNum(r.textIndent, 0, 4.0, 2, 1)
   }
 
+  if (['auto', 'zh', 'en', 'mixed', 'original'].includes(String(r.profile))) res.profile = r.profile as TypographyProfile | 'auto'
+  if (r.maxLineLength !== undefined) res.maxLineLength = Math.round(clampNum(r.maxLineLength, 0, 120, 0))
+  if (['auto', 'light', 'sepia', 'green', 'dark'].includes(String(r.theme))) res.theme = r.theme as ReaderPrefs['theme']
+  if (r.flow === 'paginated' || r.flow === 'scrolled') res.flow = r.flow
+  if (typeof r.continuousScroll === 'boolean') res.continuousScroll = r.continuousScroll
+  if (r.maxColumnCount === 1 || r.maxColumnCount === 2) res.maxColumnCount = r.maxColumnCount
+  if (typeof r.portraitScroll === 'boolean') res.portraitScroll = r.portraitScroll
+  if (['both', 'page', 'percent'].includes(String(r.progressDisplay))) res.progressDisplay = r.progressDisplay as BookDisplayPrefs['progressDisplay']
   return res
 }
 
@@ -108,6 +126,7 @@ export function normalizeTypographyLanguages(raw: unknown): Record<string, Parti
   for (const [lang, val] of Object.entries(raw as Record<string, unknown>)) {
     if (typeof lang === 'string' && lang.trim()) {
       const validated = validateTypographySettings(val)
+      delete validated.publicationBaseline
       if (Object.keys(validated).length > 0) {
         res[normalizeLanguageTag(lang)] = validated
       }
@@ -130,32 +149,22 @@ export function normalizeTypographyBooks(raw: unknown): Record<string, Partial<T
   return res
 }
 
-export function getDefaultTypographyForLanguage(language = 'zh'): TypographySettings {
-  const norm = normalizeLanguageTag(language)
-  if (!['zh', 'ja', 'ko'].includes(norm)) {
-    return {
-      displayMode: 'optimized',
-      fontSize: 17,
-      lineHeight: 1.5,
-      gap: 7,
-      fontFamily: '',
-      justify: true,
-      letterSpacing: 0,
-      paragraphSpacing: 0.6,
-      textIndent: 0,
-    }
-  }
-  return {
-    displayMode: 'optimized',
-    fontSize: 18,
-    lineHeight: 1.8,
-    gap: 6,
-    fontFamily: '',
-    justify: true,
-    letterSpacing: 0,
-    paragraphSpacing: 0.4,
-    textIndent: 2,
-  }
+/** Legacy global prefs have no provenance; factory-equal values must not shadow language profiles. */
+function globalTypographyOverrides(base: Partial<ReaderPrefs>): Partial<TypographySettings> {
+  const clean = validateTypographySettings(base)
+  const fields = ['fontSize', 'lineHeight', 'gap', 'fontFamily', 'justify', 'letterSpacing', 'theme', 'flow', 'continuousScroll', 'maxColumnCount', 'portraitScroll', 'progressDisplay'] as const
+  return Object.fromEntries(fields.filter(key => clean[key] !== undefined && clean[key] !== defaults.reader[key]).map(key => [key, clean[key]])) as Partial<TypographySettings>
+}
+
+export function getDefaultTypographyForLanguage(language = 'zh', opts: {
+  profile?: TypographyProfile
+  base?: Partial<ReaderPrefs>
+  calibration?: unknown
+  dpr?: number
+  textScale?: number
+  viewportWidth?: number
+} = {}): TypographySettings {
+  return { ...profileDefaults(opts.profile ?? defaultTypographyProfile(normalizeLanguageTag(language)), opts), ...globalTypographyOverrides(opts.base ?? {}) }
 }
 
 export function resolveEffectiveTypography(opts: {
@@ -164,52 +173,67 @@ export function resolveEffectiveTypography(opts: {
   bookId?: string
   languagesMap?: Record<string, Partial<TypographySettings>>
   booksMap?: Record<string, Partial<TypographySettings>>
+  profile?: TypographyProfile
+  calibration?: unknown
+  dpr?: number
+  protectedLayout?: boolean
+  viewportWidth?: number
+  textScale?: number
 }): ResolvedTypography {
   const normLang = normalizeLanguageTag(opts.language)
-  const langDefault = getDefaultTypographyForLanguage(normLang)
-
-  const baseSettings: TypographySettings = {
-    displayMode: 'optimized',
-    fontSize: clampNum(opts.baseReaderPrefs.fontSize, 8, 64, langDefault.fontSize),
-    lineHeight: clampNum(opts.baseReaderPrefs.lineHeight, 1.0, 3.0, langDefault.lineHeight, 1),
-    gap: clampNum(opts.baseReaderPrefs.gap, 2, 20, langDefault.gap),
-    fontFamily: opts.baseReaderPrefs.fontFamily ?? '',
-    justify: opts.baseReaderPrefs.justify ?? true,
-    letterSpacing: clampNum(opts.baseReaderPrefs.letterSpacing, 0, 0.5, 0, 2),
-    paragraphSpacing: langDefault.paragraphSpacing,
-    textIndent: langDefault.textIndent,
+  const lang = normLang === 'und' ? {} : validateTypographySettings(opts.languagesMap?.[normLang])
+  delete lang.publicationBaseline
+  const book = opts.bookId ? validateTypographySettings(opts.booksMap?.[opts.bookId]) : {}
+  const preference = book.profile ?? 'auto'
+  const selected = preference !== 'auto' ? preference : lang.profile && lang.profile !== 'auto' ? lang.profile : null
+  const profile = opts.protectedLayout ? 'original' : selected ?? opts.profile ?? defaultTypographyProfile(normLang)
+  const base = opts.baseReaderPrefs
+  const global = globalTypographyOverrides(base)
+  const merged: TypographySettings = {
+    theme: base.theme, flow: base.flow, continuousScroll: base.continuousScroll,
+    maxColumnCount: base.maxColumnCount, portraitScroll: base.portraitScroll, progressDisplay: base.progressDisplay,
+    ...getDefaultTypographyForLanguage(normLang, { profile, base, calibration: opts.calibration, dpr: opts.dpr, viewportWidth: opts.viewportWidth, textScale: opts.textScale }),
+    ...lang, ...book,
   }
+  // Saved text preferences are retained, but unsupported publication layouts are never normalized.
+  if (opts.protectedLayout) merged.displayMode = 'publisher'
+  const hasLanguageOverride = Object.keys(lang).length > 0
+  const hasBookOverride = Object.keys(book).length > 0
+  return { ...merged, profile, profilePreference: preference,
+    calibration: getCalibrationStatus(opts.calibration, opts.dpr ?? 1, opts.textScale ?? 1),
+    textScale: opts.textScale ?? 1, viewportWidth: opts.viewportWidth ?? 0,
+    source: hasBookOverride ? 'book' : hasLanguageOverride ? 'language' : Object.keys(global).length ? 'global' : 'base',
+    hasBookOverride, hasLanguageOverride, overriddenFields: [...new Set([...Object.keys(global), ...Object.keys(lang), ...Object.keys(book)])], appliedLanguage: normLang, bookId: opts.bookId }
+}
 
-  let source: 'base' | 'language' | 'book' = 'base'
-  let hasLanguageOverride = false
-  let hasBookOverride = false
-
-  let merged: TypographySettings = { ...baseSettings }
-  if (opts.languagesMap && opts.languagesMap[normLang]) {
-    const langOv = validateTypographySettings(opts.languagesMap[normLang])
-    if (Object.keys(langOv).length > 0) {
-      merged = { ...merged, ...langOv }
-      hasLanguageOverride = true
-      source = 'language'
-    }
-  }
-
-  if (opts.bookId && opts.booksMap && opts.booksMap[opts.bookId]) {
-    const bookOv = validateTypographySettings(opts.booksMap[opts.bookId])
-    if (Object.keys(bookOv).length > 0) {
-      merged = { ...merged, ...bookOv }
-      hasBookOverride = true
-      source = 'book'
-    }
-  }
-
+/** One sparse candidate owns both the trial layout and durable commit. */
+export function prepareTypographyCommit(current: {
+  typographyLanguages: Record<string, Partial<TypographySettings>>
+  typographyBooks: Record<string, Partial<TypographySettings>>
+}, payload: TypographyApplyPayload) {
+  if (!payload.bookId) throw new Error('没有可应用排版的书籍')
+  const language = normalizeLanguageTag(payload.language)
+  if (payload.scope === 'language' && language === 'und') throw new Error('书籍语言未识别，不能设置语言默认')
+  if (payload.textLayoutProtected && payload.scope === 'language') throw new Error('固定版式或竖排不能改写语言默认')
+  const requested = validateTypographySettings(payload.textLayoutProtected ? payload.readerPatch : { ...payload.settings, ...payload.readerPatch })
+  const previous = payload.previousSettings ? validateTypographySettings(payload.previousSettings) : null
+  const changed = !previous ? requested : Object.fromEntries(Object.entries(requested).filter(([key, value]) => {
+    const old = key === 'profile' ? (payload.previousSettings as Partial<ResolvedTypography>)?.profilePreference ?? previous.profile ?? 'auto' : previous[key as keyof TypographySettings]
+    return value !== old
+  })) as Partial<TypographySettings>
+  // Language scope copies existing explicit book choices, never unedited factory values.
+  const languageFields = { ...validateTypographySettings(current.typographyBooks[payload.bookId]), ...changed }
+  if (requested.profile === 'auto') delete languageFields.profile
+  delete languageFields.publicationBaseline
+  const bookOnlyBaseline = changed.publicationBaseline ?? current.typographyBooks[payload.bookId]?.publicationBaseline
+  const withoutBook = removeBookOverride(current.typographyBooks, payload.bookId)
   return {
-    ...merged,
-    source,
-    hasBookOverride,
-    hasLanguageOverride,
-    appliedLanguage: normLang,
-    bookId: opts.bookId,
+    typographyLanguages: payload.scope === 'language'
+      ? setLanguageDefault(current.typographyLanguages, language, languageFields) : current.typographyLanguages,
+    typographyBooks: payload.isRestoreAuto ? withoutBook
+      : payload.scope === 'language' ? typeof bookOnlyBaseline === 'boolean'
+        ? setBookOverride(withoutBook, payload.bookId, { publicationBaseline: bookOnlyBaseline }) : withoutBook
+      : setBookOverride(current.typographyBooks, payload.bookId, changed),
   }
 }
 
@@ -220,6 +244,7 @@ export function setBookOverride(
 ): Record<string, Partial<TypographySettings>> {
   if (!bookId) return { ...booksMap }
   const clean = validateTypographySettings(settings)
+  if (!Object.keys(clean).length && !booksMap[bookId]) return { ...booksMap }
   return {
     ...booksMap,
     [bookId]: {
@@ -246,13 +271,10 @@ export function setLanguageDefault(
 ): Record<string, Partial<TypographySettings>> {
   const norm = normalizeLanguageTag(language)
   const clean = validateTypographySettings(settings)
-  return {
-    ...languagesMap,
-    [norm]: {
-      ...(languagesMap[norm] ? validateTypographySettings(languagesMap[norm]) : {}),
-      ...clean,
-    },
-  }
+  const previous = validateTypographySettings(languagesMap[norm])
+  delete clean.publicationBaseline
+  delete previous.publicationBaseline
+  return { ...languagesMap, [norm]: { ...previous, ...clean } }
 }
 
 export interface ReaderPrefs {
@@ -352,29 +374,11 @@ export interface ReadingModePrefs {
 }
 
 /** 结构版本: 修正历史默认值时递增 */
-const SETTINGS_VERSION = 14
+const SETTINGS_VERSION = 16
 
 export interface CustomFontRec {
   name: string
   file: string
-}
-
-/** 背景音 (services/ambient, docs/research/reading-ambient-audio.md §5.5); 只记住选择, 从不自动播放 */
-export interface AmbientPrefs {
-  /** 最近一次使用的场景 id */
-  scene: string
-  /** 主音量 0..1 (滑块值, 按感知曲线映射到增益), 默认 0.3 */
-  master: number
-  /** 每层音量 0..1, 键为「场景/层」; 缺省用场景默认值 */
-  layers: Record<string, number>
-  /** 专注噪音的颜色 */
-  noiseColor: 'pink' | 'white' | 'brown'
-  /** 听书时自动降低 */
-  duckWithVoice: boolean
-  /** 降低到的倍数 (0.25 = -12 dB) */
-  duckLevel: number
-  /** 手机切到后台时暂停 (只有背景音在播时) */
-  pauseWhenHidden: boolean
 }
 
 /**
@@ -435,8 +439,6 @@ interface SettingsState {
   /** 书库存储根目录 (桌面端), 空为默认应用数据目录 */
   libraryRoot: string
   /** AI 助手: 预设 id / 接口地址 / 密钥 / 模型 */
-  /** 匿名使用统计 (设置 → 隐私); 默认开启, 可关闭, 见 services/usageStats.ts */
-  usageStats: boolean
   aiProvider: string
   aiBaseUrl: string
   aiApiKey: string
@@ -449,9 +451,8 @@ interface SettingsState {
   dianjing: DianjingPrefs
   /** 阅读模式 (打字机等) */
   readingMode: ReadingModePrefs
-  /** 背景音 */
-  ambient: AmbientPrefs
   /** 语言默认排版配置 (例如 'zh', 'en') */
+  typographyCalibration: TypographyCalibration | null
   typographyLanguages: Record<string, Partial<TypographySettings>>
   /** 单书排版覆盖配置 (bookId -> 局部覆盖) */
   typographyBooks: Record<string, Partial<TypographySettings>>
@@ -494,7 +495,6 @@ const defaults: SettingsState = {
   corsProxy: '',
   httpProxy: '',
   libraryRoot: '',
-  usageStats: true,
   aiProvider: 'trial',
   aiBaseUrl: 'https://lightread-ai.jiangshu.ai/v1',
   aiApiKey: '',
@@ -533,15 +533,7 @@ const defaults: SettingsState = {
     night: { schedule: false, from: '22:00', to: '07:00' },
     presets: {},
   },
-  ambient: {
-    scene: 'rain-study',
-    master: 0.3,
-    layers: {},
-    noiseColor: 'pink',
-    duckWithVoice: true,
-    duckLevel: 0.25,
-    pauseWhenHidden: true,
-  },
+  typographyCalibration: null,
   typographyLanguages: {},
   typographyBooks: {},
 }
@@ -591,6 +583,9 @@ function load(): SettingsState {
     const raw = localStorage.getItem(STORAGE_KEY)
     if (!raw) return firstRunDefaults()
     const saved = JSON.parse(raw)
+    // 退役功能不再进入内存或随后持久化的设置；其余偏好保持不变。
+    delete saved.ambient
+    delete saved.usageStats
     normalizeRetiredLyricSettings(saved)
     const merged = {
       ...structuredClone(defaults),
@@ -598,6 +593,7 @@ function load(): SettingsState {
       aiProfiles: normalizeAiProfiles(saved.aiProfiles),
       reader: { ...defaults.reader, ...saved.reader },
       pdf: { ...defaults.pdf, ...saved.pdf },
+      typographyCalibration: normalizeTypographyCalibration(saved.typographyCalibration),
       typographyLanguages: normalizeTypographyLanguages(saved.typographyLanguages),
       typographyBooks: normalizeTypographyBooks(saved.typographyBooks),
       readingMode: mergeReadingMode(saved.readingMode),
@@ -695,24 +691,17 @@ export const useSettings = defineStore('settings', {
       this.reader = structuredClone(defaults.reader)
     },
     commitTypography(payload: TypographyApplyPayload) {
-      if (!payload.bookId) throw new Error('没有可应用排版的书籍')
-      const language = normalizeLanguageTag(payload.language)
-      if (payload.scope === 'language' && language === 'und') throw new Error('书籍语言未识别，不能设置语言默认')
-      const typographyLanguages = payload.scope === 'language'
-        ? setLanguageDefault(this.typographyLanguages, language, payload.settings)
-        : this.typographyLanguages
-      const typographyBooks = payload.isRestoreAuto || payload.scope === 'language'
-        ? removeBookOverride(this.typographyBooks, payload.bookId)
-        : setBookOverride(this.typographyBooks, payload.bookId, payload.settings)
-      const patch = {
-        typographyLanguages,
-        typographyBooks,
-        reader: { ...this.reader, ...payload.readerPatch },
-        readingMode: { ...this.readingMode, eyeCare: { ...this.readingMode.eyeCare, dim: clampNum(payload.dim, 0, DIM_MAX, this.readingMode.eyeCare.dim) } },
-      }
-      // Persist before acknowledgement: quota denial must leave both maps and the old body usable.
+      const { typographyLanguages, typographyBooks } = prepareTypographyCommit(this, payload)
+      const patch = { typographyLanguages, typographyBooks,
+        readingMode: { ...this.readingMode, eyeCare: { ...this.readingMode.eyeCare, dim: clampNum(payload.dim, 0, DIM_MAX, this.readingMode.eyeCare.dim) } } }
       localStorage.setItem(STORAGE_KEY, JSON.stringify({ ...this.$state, ...patch }))
       this.$patch(state => { Object.assign(state, patch) })
+    },
+    setTypographyCalibration(value: unknown) {
+      const typographyCalibration = value === null ? null : normalizeTypographyCalibration(value)
+      if (value !== null && !typographyCalibration) throw new Error('无效的显示校准')
+      localStorage.setItem(STORAGE_KEY, JSON.stringify({ ...this.$state, typographyCalibration }))
+      this.typographyCalibration = typographyCalibration
     },
     setBookTypography(bookId: string, settings: Partial<TypographySettings>) {
       this.typographyBooks = setBookOverride(this.typographyBooks, bookId, settings)
@@ -723,13 +712,15 @@ export const useSettings = defineStore('settings', {
     setLanguageTypography(language: string, settings: Partial<TypographySettings>) {
       this.typographyLanguages = setLanguageDefault(this.typographyLanguages, language, settings)
     },
-    getEffectiveTypography(bookId?: string, language?: string): ResolvedTypography {
+    getEffectiveTypography(bookId?: string, language?: string, opts: {
+      profile?: TypographyProfile; protectedLayout?: boolean; dpr?: number; ignoreBook?: boolean; viewportWidth?: number; textScale?: number
+    } = {}): ResolvedTypography {
       return resolveEffectiveTypography({
-        baseReaderPrefs: this.reader,
-        language,
-        bookId,
-        languagesMap: this.typographyLanguages,
-        booksMap: this.typographyBooks,
+        baseReaderPrefs: this.reader, language, bookId,
+        languagesMap: this.typographyLanguages, booksMap: opts.ignoreBook ? {} : this.typographyBooks,
+        profile: opts.profile, protectedLayout: opts.protectedLayout,
+        calibration: this.typographyCalibration, dpr: opts.dpr ?? globalThis.devicePixelRatio ?? 1,
+        viewportWidth: opts.viewportWidth ?? globalThis.innerWidth ?? 0, textScale: opts.textScale ?? 1,
       })
     },
   },

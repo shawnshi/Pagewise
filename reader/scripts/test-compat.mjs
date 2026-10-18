@@ -24,6 +24,7 @@ const removable = [
   [Array.prototype, 'findLast'], [Array.prototype, 'findLastIndex'],
   [typedProto, 'findLast'], [typedProto, 'findLastIndex'],
   [globalThis, 'structuredClone'], [AbortSignal, 'timeout'], [CryptoProto, 'randomUUID'],
+  [Object, 'hasOwn'],
 ]
 
 async function withoutNatives(run) {
@@ -42,6 +43,20 @@ async function withoutNatives(run) {
     delete globalThis.crypto.randomUUID
   }
 }
+
+test('Object.hasOwn works on Chrome 89 fallback without accepting inherited keys', async () => {
+  await withoutNatives(() => {
+    const symbol = Symbol('owned')
+    const value = Object.assign(Object.create({ inherited: 1 }), { own: 0, hasOwnProperty: null, [symbol]: 2 })
+    assert.equal(Object.hasOwn(value, 'own'), true)
+    assert.equal(Object.hasOwn(value, 'inherited'), false)
+    assert.equal(Object.hasOwn(value, symbol), true)
+    assert.equal(Object.hasOwn('text', 0), true)
+    assert.throws(() => Object.hasOwn(null, 'x'), TypeError)
+    assert.throws(() => Object.hasOwn(undefined, 'x'), TypeError)
+    assert.equal(Object.getOwnPropertyDescriptor(Object, 'hasOwn').enumerable, false)
+  })
+})
 
 test('polyfills restore .at / findLast / findLastIndex with spec semantics', async () => {
   await withoutNatives(() => {
@@ -195,7 +210,6 @@ test('build target keeps the top-level-await floor required by mupdf', () => {
 // 目标内核 (Chrome 89 / Safari 15) 缺失且 polyfills.ts 未补齐的 API。需要时先在 polyfills.ts 补上再用。
 const UNPOLYFILLED = [
   [/\.toSorted\(|\.toReversed\(|\.toSpliced\(/, 'change-array-by-copy (Chrome 110 / Safari 16)'],
-  [/\bObject\.hasOwn\(/, 'Object.hasOwn (Chrome 93 / Safari 15.4)'],
   [/\bPromise\.(withResolvers|try)\b/, 'Promise.withResolvers/try'],
   [/\bArray\.fromAsync\b/, 'Array.fromAsync'],
   [/\.(isWellFormed|toWellFormed)\(/, 'String well-formed helpers'],

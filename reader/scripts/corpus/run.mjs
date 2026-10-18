@@ -10,7 +10,7 @@
 //
 // 用法: node scripts/corpus/run.mjs [路径过滤子串] [--limit N]
 // 报告: .corpus/report.json
-import { createServer } from 'vite'
+import { createServer } from '../vite-isolated.mjs'
 import { chromium } from 'playwright'
 import { readdirSync, statSync, createReadStream, writeFileSync, readFileSync, mkdtempSync, rmSync } from 'node:fs'
 import { execFileSync } from 'node:child_process'

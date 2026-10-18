@@ -2,7 +2,11 @@
  * readerTypography.ts: EPUB 排版事务管理、拟真预览与 REAL CSS 生成
  */
 
+import { isCFI, collapse as collapseCFI } from 'foliate-js/epubcfi.js'
 import type { ReaderThemeColors } from './readerTheme.ts'
+import type { BookTypographyContext } from './readerTypographyContext.ts'
+import { PROTECTED_FONT_RUNS } from './readerTypographyDocument.ts'
+import { automaticFontFamily, BUNDLED_READER_FAMILIES, bundledFontWeight, calibrationStatus, normalizeTypographyCalibration, type TypographyProfile } from './readerTypographyProfiles.ts'
 import {
   getDefaultTypographyForLanguage,
   normalizeLanguageTag,
@@ -39,6 +43,11 @@ export {
   validateTypographySettings,
 }
 
+/** A viewport range is not a stable reflow target: its union rect can include earlier columns. */
+export function getTypographyAnchor(location: string): string {
+  return isCFI.test(location) ? collapseCFI(location) : location
+}
+
 export function clampNumber(val: unknown, min: number, max: number, fallback: number, precision?: number): number {
   const n = Number(val)
   if (!Number.isFinite(n)) return fallback
@@ -51,6 +60,16 @@ export function clampNumber(val: unknown, min: number, max: number, fallback: nu
 }
 
 export const clamp = clampNumber
+
+export function typographyPageMetrics(opts: { profile: TypographyProfile; width: number; height: number; calibration?: unknown; dpr: number; textScale: number }) {
+  const calibration = normalizeTypographyCalibration(opts.calibration)
+  const calibrated = calibrationStatus(calibration, opts.dpr, opts.textScale) === 'calibrated'
+  const inline = calibrated && calibration ? (opts.profile === 'en' ? 14 : 12) * calibration.cssPxPerMm
+    : opts.width * (opts.profile === 'en' ? 0.09 : 0.08)
+  const top = calibrated && calibration ? 12 * calibration.cssPxPerMm : Math.max(24, Math.min(64, opts.height * 0.04))
+  const bottom = calibrated && calibration ? 16 * calibration.cssPxPerMm : top + Math.min(24, opts.height * 0.01)
+  return { inline: Math.min(inline, opts.width * 0.3), top, bottom, calibrated }
+}
 
 export interface TypographyApplyPayload {
   /** 当前书籍 ID */
@@ -65,6 +84,7 @@ export interface TypographyApplyPayload {
   previousSettings?: TypographySettings
   /** 是否为恢复自动优化/默认操作 */
   isRestoreAuto?: boolean
+  textLayoutProtected?: boolean
   readerPatch: Pick<ReaderPrefs, 'theme' | 'flow' | 'continuousScroll' | 'maxColumnCount' | 'portraitScroll' | 'progressDisplay'>
   dim: number
 }
@@ -79,6 +99,7 @@ export function getDisplayModeCSS(
   mode: TypographyDisplayMode,
   settings: TypographySettings,
   colors?: ReaderThemeColors,
+  context?: BookTypographyContext & { automaticFont?: boolean; fontKey?: string; userAlignment?: boolean; userLineHeight?: boolean; textScale?: number },
 ): string {
   if (mode === 'publisher') {
     return ''
@@ -115,18 +136,75 @@ export function getDisplayModeCSS(
     `
   }
 
-  // 默认为 optimized
+  // Ordinary paragraphs are marked without inserting nodes; semantic blocks retain publisher rules.
+  const family = context?.automaticFont ? `var(--pw-auto-font-family, ${settings.fontFamily || 'serif'})` : settings.fontFamily || 'inherit'
+  const englishFamily = context?.automaticFont ? automaticFontFamily('en', context.language) : 'inherit'
+  const profile = context?.profile ?? (normalizeLanguageTag(context?.language) === 'en' ? 'en' : 'zh')
+  const fontKey = context?.fontKey ?? (context?.automaticFont ? 'auto' : '')
+  const bundled = fontKey === 'auto' || Object.hasOwn(BUNDLED_READER_FAMILIES, fontKey)
+  const headingFamily = fontKey === 'songti-sans' ? '"PW Literata Latin", "PW Source Han Sans", sans-serif' : family
+  const sansHeadings = fontKey === 'songti-sans' || fontKey === 'sans'
+  const headingWeight = fontKey === 'wenkai' ? 400 : sansHeadings ? 500 : 600
+  const renderedEm = settings.fontSize * (context?.textScale ?? 1)
+  const px = (em: number, ratio = 1) => `${Math.round(renderedEm * ratio * em * 1000) / 1000}px`
   return `
-    /* [排版模式: 自动优化] 现代数字阅读规范: 规范化断词、缩进与段落流 */
-    p:not(blockquote p, li p, td p, th p, dd p) {
-      ${settings.justify ? 'text-align: justify;' : 'text-align: start;'}
-      text-indent: ${settings.textIndent}em;
-      margin-block-start: ${settings.paragraphSpacing}em;
-      margin-block-end: 0;
+    html, body {
+      font-size: ${settings.fontSize}px !important;
+      line-height: ${settings.lineHeight} !important;
+      font-family: ${family} !important;
+      font-synthesis: none;
+      font-optical-sizing: ${fontKey === 'source-serif4' ? 'none' : 'auto'};
+      ${bundled ? `font-weight: ${bundledFontWeight(fontKey)};` : ''}
+    }
+    ${bundled ? `[data-pw-semantic="h1"], [data-pw-semantic="h2"], [data-pw-semantic="h3"] {
+      font-family: ${headingFamily} !important; font-weight: ${headingWeight} !important;
+    }` : ''}
+    ${sansHeadings ? '[data-pw-semantic="h1"] { font-weight: 700 !important; }' : ''}
+    ${fontKey === 'wenkai' ? 'strong, b { font-family: "PW Literata Latin", "PW Source Han Serif", serif; font-weight: 700; }' : ''}
+    p[data-pw-paragraph] {
+      font-size: 1rem !important;
+      font-family: inherit !important;
+      line-height: ${settings.lineHeight} !important;
+      text-align: ${settings.justify ? 'justify' : 'start'} !important;
+      text-indent: ${px(settings.textIndent)} !important;
+      margin-block-start: ${px(settings.paragraphSpacing)} !important;
+      margin-block-end: 0 !important;
+      letter-spacing: ${px(settings.letterSpacing)} !important;
+      overflow-wrap: break-word;
+      word-break: normal;
+    }
+    p[data-pw-paragraph] span:not(${PROTECTED_FONT_RUNS.map(selector => `${selector}, ${selector} *`).join(', ')}) {
+      font-size: inherit !important;
+      font-family: inherit !important;
+    }
+    p[data-pw-paragraph="zh"] { line-break: strict; hyphens: none; text-justify: inter-character; }
+    p[data-pw-paragraph="en"] {
+      font-family: ${englishFamily} !important;
+      font-size: ${profile === 'mixed' ? '0.96rem' : '1rem'} !important;
+      text-indent: ${px(settings.textIndent, profile === 'mixed' ? 0.96 : 1)} !important;
+      margin-block-start: ${px(settings.paragraphSpacing, profile === 'mixed' ? 0.96 : 1)} !important;
+      letter-spacing: ${px(settings.letterSpacing, profile === 'mixed' ? 0.96 : 1)} !important;
+      line-height: ${profile !== 'en' && !context?.userLineHeight ? 1.55 : settings.lineHeight} !important;
+      text-align: ${settings.justify && (profile === 'en' || context?.userAlignment) ? 'justify' : 'start'} !important;
       hyphens: auto;
       -webkit-hyphens: auto;
-      overflow-wrap: break-word;
+      line-break: auto;
+      text-justify: auto;
+      font-kerning: normal;
+      font-variant-ligatures: common-ligatures;
     }
+    p[data-pw-after-heading] { text-indent: 0 !important; }
+    [data-pw-semantic="h1"] { --pw-semantic-floor: 1.6rem; font-size: max(1.6rem, var(--pw-semantic-size, 1.6rem)) !important; line-height: 1.3 !important; margin-block: ${px(1.2)} ${px(0.8)} !important; }
+    [data-pw-semantic="h2"] { --pw-semantic-floor: 1.25rem; font-size: max(1.25rem, var(--pw-semantic-size, 1.25rem)) !important; line-height: 1.4 !important; margin-block: ${px(1.1)} ${px(0.65)} !important; }
+    [data-pw-semantic="h3"] { --pw-semantic-floor: 1.1rem; font-size: max(1.1rem, var(--pw-semantic-size, 1.1rem)) !important; line-height: 1.4 !important; margin-block: ${px(0.9)} ${px(0.5)} !important; }
+    [data-pw-semantic="caption"], [data-pw-semantic="cell"], [data-pw-semantic="note"] {
+      --pw-semantic-floor: 0.9rem;
+      font-size: max(0.9rem, var(--pw-semantic-size, 0.9rem)) !important;
+      line-height: 1.45 !important;
+      font-synthesis: none;
+    }
+    [data-pw-semantic="caption"] { margin-block: ${px(0.45)} ${px(0.8)} !important; }
+    [data-pw-semantic-text] { font-size: max(var(--pw-semantic-floor, 0.9rem), var(--pw-semantic-size, 0.9rem)) !important; line-height: inherit !important; }
   `
 }
 

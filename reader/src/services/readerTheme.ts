@@ -1,4 +1,5 @@
-import type { ReaderPrefs } from '../stores/settings'
+import type { ReaderPrefs, ResolvedTypography } from '../stores/settings'
+import type { BookTypographyContext } from './readerTypographyContext.ts'
 import { WORD_GUIDE_DEFAULT, guideAccent, guideTailAlpha } from './readingModes/wordGuideIntensity.ts'
 import { dianjingCSS, djThemeName } from './dianjing/theme.ts'
 import { getDisplayModeCSS, type TypographySettings } from './readerTypography.ts'
@@ -26,7 +27,8 @@ export const EINK_THEMES: { light: ReaderThemeColors; dark: ReaderThemeColors } 
 
 /** 阅读模式对正文样式的附加影响 (useReadingModes().readerStyle), 由阅读器传给 getReaderCSS / resolveReaderColors */
 export interface ReaderModeStyle {
-  /** 墨水屏: 纯黑白配色、字重 +100、无动画 */
+  publication?: boolean
+  /** 墨水屏: 纯黑白配色、无动画 */
   eink?: boolean
   /** 大字: 段距 0.6em、正文字重 500 */
   largeText?: boolean
@@ -42,6 +44,7 @@ export function resolveReaderTheme(theme: ReaderPrefs['theme'], appDark: boolean
 
 export function resolveReaderColors(theme: ReaderPrefs['theme'], appDark: boolean, style?: ReaderModeStyle): ReaderThemeColors {
   const name = resolveReaderTheme(theme, appDark)
+  if (style?.publication) return EINK_THEMES.light
   if (style?.eink) return EINK_THEMES[name === 'dark' ? 'dark' : 'light']
   return READER_THEMES[name]
 }
@@ -54,6 +57,14 @@ export const READER_THEME_CHOICES: Array<{ name: ReaderPrefs['theme']; bg: strin
 ]
 
 export const FONT_FAMILIES = [
+  { labelKey: 'reader.fontAutoLanguage', value: 'auto' },
+  { labelKey: 'reader.fontSongti', label: '思源宋体 · 400', value: 'songti' },
+  { labelKey: 'reader.fontSongti', label: '思源宋体 · 500', value: 'songti-medium' },
+  { labelKey: 'reader.fontSongti', label: '宋体正文＋黑体标题', value: 'songti-sans' },
+  { labelKey: 'reader.fontHeiti', label: '思源黑体 · 400', value: 'sans' },
+  { labelKey: 'reader.fontKaiti', label: '霞鹜文楷屏幕版 · SC', value: 'wenkai' },
+  { labelKey: 'reader.fontDefault', label: 'Literata', value: 'literata' },
+  { labelKey: 'reader.fontDefault', label: 'Source Serif 4 · Text', value: 'source-serif4' },
   { labelKey: 'reader.fontDefault', value: '' },
   { labelKey: 'reader.fontSongti', value: '"Songti SC", "Noto Serif SC", SimSun, serif' },
   { labelKey: 'reader.fontHeiti', value: '"PingFang SC", "Noto Sans SC", "Microsoft YaHei", sans-serif' },
@@ -66,9 +77,11 @@ export function getReaderCSS(
   appDark: boolean,
   style?: ReaderModeStyle,
   typography?: TypographySettings,
+  context?: BookTypographyContext & { automaticFont?: boolean; fontKey?: string; userAlignment?: boolean; userLineHeight?: boolean; textScale?: number },
 ): string {
   const theme = resolveReaderTheme(prefs.theme, appDark)
   const colors = resolveReaderColors(prefs.theme, appDark, style)
+  if (context?.protectedLayout) return `html { color-scheme: ${theme === 'dark' ? 'dark' : 'light'}; color: ${colors.fg}; } body { background: none !important; } ${modeStyleCSS({ ...style, largeText: false })}`
   const fontSize = typography?.fontSize ?? prefs.fontSize
   const fontFamily = typography?.fontFamily ?? prefs.fontFamily
   const letterSpacing = typography?.letterSpacing ?? prefs.letterSpacing
@@ -98,9 +111,9 @@ export function getReaderCSS(
       fontFamily,
       justify,
       letterSpacing,
-      paragraphSpacing: typography?.paragraphSpacing ?? 0.4,
+      paragraphSpacing: style?.largeText && !(typography as Partial<ResolvedTypography>)?.hasBookOverride && !(typography as Partial<ResolvedTypography>)?.hasLanguageOverride ? Math.max(0.6, typography?.paragraphSpacing ?? 0) : typography?.paragraphSpacing ?? 0,
       textIndent: typography?.textIndent ?? 2,
-    }, colors)}
+    }, colors, context)}
     ${readingModeCSS(colors, theme, style)}
     ${modeStyleCSS(style)}
     ${style?.eink ? `
@@ -120,11 +133,10 @@ function modeStyleCSS(style?: ReaderModeStyle): string {
     p + p { margin-block-start: 0.6em; }
     `
   }
+  if (style?.publication) css += 'a:any-link { text-decoration: underline; }'
   if (style?.eink) {
-    // 字重 +100 (约等于 Boox 的「加深」); 链接黑色加下划线; 图片灰度; 去掉一切过渡与动画
+    // Contrast and refresh policy only: do not silently change the user's text metrics or synthesize bold.
     css += `
-    body { font-weight: ${style.largeText ? 600 : 500}; }
-    b, strong, th, h1, h2, h3, h4, h5, h6 { font-weight: 800; }
     a:any-link { text-decoration: underline; text-decoration-thickness: 2px; text-underline-offset: 2px; }
     img, svg, video { filter: grayscale(1) contrast(1.1); }
     *, *::before, *::after { transition: none !important; animation: none !important; scroll-behavior: auto !important; }

@@ -1,11 +1,14 @@
 import assert from 'node:assert/strict'
 import { test, before, after } from 'node:test'
 import { resolve } from 'node:path'
-import { createServer } from 'vite'
+import { mkdir } from 'node:fs/promises'
+import { createServer } from './vite-isolated.mjs'
 import { chromium } from 'playwright'
 
+const artifacts = resolve(import.meta.dirname, '../../.cache/typography-visual-20261018-r3/reader-more-regression')
 let server, browser, origin
 before(async () => {
+  await mkdir(artifacts, { recursive: true })
   server = await createServer({ root: resolve(import.meta.dirname, '..'), server: { host: '127.0.0.1', port: 0 }, logLevel: 'error' })
   await server.listen()
   origin = `http://127.0.0.1:${server.httpServer.address().port}`
@@ -13,8 +16,15 @@ before(async () => {
 })
 after(async () => { await browser?.close(); await server?.close() })
 
-async function withReader(run, width = 992) {
+async function withReader(run, width = 992, language = 'en') {
   const context = await browser.newContext({ viewport: { width, height: 1100 }, serviceWorkers: 'block' })
+  await context.addInitScript(language => {
+    if (!localStorage.getItem('lightread-settings')) localStorage.setItem('lightread-settings', JSON.stringify({
+      version: 14, language, usageStats: true, ambient: { scene: 'rain-study', master: 0.8 },
+      ttsEngine: 'system', ttsRate: 1.25, dailyGoalMinutes: 45,
+      readingMode: { typewriter: { soundPreset: 'mechanical', soundVolume: 0.2 } },
+    }))
+  }, language)
   const external = [], errors = []
   await context.route('**/*', route => {
     const url = route.request().url()
@@ -26,16 +36,16 @@ async function withReader(run, width = 992) {
   page.on('pageerror', error => errors.push(error.message))
   try {
     await page.goto(origin + '/#/library', { waitUntil: 'networkidle' })
-    const id = await page.evaluate(async () => {
+    const id = await page.evaluate(async language => {
       const { useSettings } = await import('/src/stores/settings.ts')
       const s = useSettings()
-      s.language = 'en'; s.usageStats = false
+      s.language = language
       s.reader.flow = 'scrolled'; s.reader.portraitScroll = false; s.reader.continuousScroll = false
       s.autoReadMode = 'scroll'; s.autoReadSeconds = 10
       const { getStorage } = await import('/src/storage/index.ts')
       const text = Array.from({ length: 160 }, (_, i) => `SYNTHETIC PARAGRAPH ${i}. ` + 'Only synthetic local test content. '.repeat(30)).join('\n\n')
       return (await getStorage()).addBook({ title: 'UI-MORE-FIXTURE', author: 'Fixture Author', fileName: 'UI-MORE-FIXTURE.txt', format: 'txt', tags: [], addedAt: 1 }, new Blob([text]))
-    })
+    }, language)
     await page.goto(`${origin}/#/read/${id}`)
     await page.waitForFunction(() => {
       const v = document.querySelector('.reader')?.__vueParentComponent?.setupState
@@ -60,15 +70,15 @@ for (const width of [992, 390]) test(`actual reader ${width}px: More replaces pa
     const search = page.getByTitle(initial.search, { exact: true })
     await search.click()
     await page.waitForFunction(() => document.querySelector('.reader').__vueParentComponent.setupState.panel === 'search')
-    // Narrow sheets intentionally cover the toolbar; dismiss through the real Back path first.
-    if (width < 720) await page.keyboard.press('Escape')
-    await page.locator('.reader-more-btn').click()
+    // Search sheets can cover the toolbar. Exercise the DOM activation handler here;
+    // unobstructed pointer activation is covered by the retirement cases below.
+    await page.locator('.reader-more-btn').evaluate(button => button.click())
     await page.locator('.reader-more-menu').waitFor()
     assert.equal(await page.evaluate(() => document.querySelector('.reader').__vueParentComponent.setupState.panel), 'none', 'More must replace Search, not stack')
     await search.click()
     await page.waitForFunction(() => !document.querySelector('.reader-more-menu'))
     assert.equal(await page.evaluate(() => document.querySelector('.reader').__vueParentComponent.setupState.panel), 'search')
-    if (width < 720) await page.keyboard.press('Escape')
+    await page.keyboard.press('Escape')
     await page.locator('.reader-more-btn').click()
     await page.keyboard.press('Escape')
     await page.waitForFunction(() => !document.querySelector('.reader-more-menu'))
@@ -78,6 +88,53 @@ for (const width of [992, 390]) test(`actual reader ${width}px: More replaces pa
     assert.ok(page.url().includes('/#/read/'), 'native Back only dismissed the overlay')
     assert.equal(await page.evaluate(() => document.querySelector('.reader').__vueParentComponent.setupState.view.lastLocation.cfi), initial.cfi)
   }, width)
+})
+
+for (const language of ['zh', 'en']) for (const width of [992, 390]) test(`retired features ${language} ${width}px: upgrade, More, listening, modes and settings`, { timeout: 45000 }, async () => {
+  await withReader(async page => {
+    const prefs = await page.evaluate(async () => {
+      const { useSettings, settingsDefaults } = await import('/src/stores/settings.ts')
+      const s = useSettings(), defaults = settingsDefaults()
+      const v = document.querySelector('.reader').__vueParentComponent.setupState
+      v.showBars()
+      return {
+        retired: ['ambient', 'usageStats'].filter(key => Object.hasOwn(s.$state, key) || Object.hasOwn(defaults, key)),
+        ttsEngine: s.ttsEngine, ttsRate: s.ttsRate, goal: s.dailyGoalMinutes,
+        soundPreset: s.readingMode.typewriter.soundPreset, soundVolume: s.readingMode.typewriter.soundVolume,
+        tts: v.t('tts.title'), modes: v.t('readingMode.title'),
+      }
+    })
+    assert.deepEqual(prefs.retired, [])
+    assert.equal(prefs.ttsEngine, 'system'); assert.equal(prefs.ttsRate, 1.25)
+    assert.equal(prefs.goal, 45); assert.equal(prefs.soundPreset, 'mechanical'); assert.equal(prefs.soundVolume, 0.2)
+    await page.locator('.reader-more-btn').click()
+    const menu = page.locator('.reader-more-menu')
+    await menu.waitFor()
+    assert.equal(await menu.getByRole('menuitem', { name: /背景音|Ambient sound/i }).count(), 0)
+    await page.screenshot({ path: resolve(artifacts, `${language}-${width}-more.png`) })
+    assert.equal(await menu.getByRole('menuitem', { name: prefs.tts, exact: true }).count(), 0, 'Listening moved out of More')
+    await page.keyboard.press('Escape')
+    await page.locator('.bar.top').getByRole('button', { name: prefs.tts, exact: true }).click()
+    await page.locator('.tts-panel').waitFor()
+    await page.keyboard.press('Escape')
+    await page.locator('.reader-more-btn').click()
+    await menu.getByRole('menuitem', { name: prefs.modes, exact: true }).click()
+    await page.locator('.rm-panel').waitFor()
+    await page.keyboard.press('Escape')
+    await page.goto(origin + '/#/settings')
+    await page.locator('#settings-general').waitFor()
+    assert.equal(await page.getByText(/使用统计|Usage statistics/i).count(), 0)
+    assert.equal(await page.locator('#settings-general .language-input').inputValue(), language, 'Language control remains')
+    assert.equal(await page.locator('#settings-general .segmented button').count(), 3, 'System/light/dark appearance controls remain')
+    await page.screenshot({ path: resolve(artifacts, `${language}-${width}-settings.png`) })
+    await page.reload({ waitUntil: 'networkidle' })
+    const persisted = await page.evaluate(async () => {
+      const { useSettings } = await import('/src/stores/settings.ts')
+      const s = useSettings()
+      return { retired: ['ambient', 'usageStats'].filter(key => Object.hasOwn(s.$state, key)), ttsEngine: s.ttsEngine, goal: s.dailyGoalMinutes }
+    })
+    assert.deepEqual(persisted, { retired: [], ttsEngine: 'system', goal: 45 })
+  }, width, language)
 })
 
 test('actual reader motion: More holds a demonstrably moving scroll engine and primary CFI', { timeout: 45000 }, async () => {

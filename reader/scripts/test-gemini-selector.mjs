@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict'
 import { test } from 'node:test'
 import { fileURLToPath } from 'node:url'
-import { createServer } from 'vite'
+import { createServer } from './vite-isolated.mjs'
 import vue from '@vitejs/plugin-vue'
 import { chromium } from 'playwright'
 

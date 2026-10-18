@@ -80,7 +80,7 @@
   --control-h-sm: 30px;
   --tap-min: 48px;
 
-  --font: -apple-system, BlinkMacSystemFont, 'PingFang SC', 'Segoe UI',
+  --font: 'PW Source Han Sans', -apple-system, BlinkMacSystemFont, 'PingFang SC', 'Segoe UI',
     'Microsoft YaHei', 'Helvetica Neue', Arial, sans-serif;
   --font-mono: ui-monospace, 'SF Mono', Menlo, Consolas, 'Liberation Mono', monospace;
 }

@@ -41,7 +41,7 @@ test('normalizeLanguageTag handles various CJK, Latin, and fallback tags', () =>
   assert.equal(clampNumber(70, 8, 64, 18), 64)
   assert.equal(clampNumber(-5, 8, 64, 18), 8)
   assert.equal(getDefaultTypographyForLanguage('zh').textIndent, 2)
-  assert.equal(getDefaultTypographyForLanguage('en').textIndent, 0)
+  assert.equal(getDefaultTypographyForLanguage('en').textIndent, 1.2)
   assert.equal(normalizeLanguageTag('zh-CN'), 'zh')
   assert.equal(normalizeLanguageTag('zh-TW'), 'zh')
   assert.equal(normalizeLanguageTag('zh-Hans'), 'zh')
@@ -224,8 +224,8 @@ test('display modes generate real, distinct CSS semantics', () => {
 
   // 1. optimized: 包含两端对齐、首行缩进、断词与 CJK 禁则
   const cssOptimized = getDisplayModeCSS('optimized', sampleSettings, colors)
-  assert.match(cssOptimized, /p:not\(blockquote p, li p, td p, th p, dd p\)/)
-  assert.match(cssOptimized, /text-indent:\s*2em/)
+  assert.match(cssOptimized, /p\[data-pw-paragraph\]/)
+  assert.match(cssOptimized, /text-indent:\s*36px/)
   assert.match(cssOptimized, /hyphens:\s*auto/)
   assert.doesNotMatch(cssOptimized, /word-break:\s*break-word/)
 

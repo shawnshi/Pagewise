@@ -90,17 +90,18 @@ test('App.vue: integrates useFolderLibrary lifecycle, expands immersive routes, 
   assert.ok(script, 'App.vue script compiles')
 })
 
-test('BookCard.vue: displays author, publisher, publicationDate and tags with honest placeholders, disables sourceRef deletion', () => {
+test('BookCard.vue: compact rows show available author/topics without fabricated metadata and protect sourceRef deletion', () => {
   const content = readSrc('components/BookCard.vue')
   const { descriptor, errors } = parse(content)
   assert.equal(errors.length, 0, 'BookCard.vue parses cleanly')
 
-  // Metadata overview fields
-  assert.match(content, /book\.author\s*\|\|\s*t\('book\.unknownAuthor'\)/, 'BookCard displays author or honest placeholder')
-  assert.match(content, /book\.publisher\s*\|\|\s*t\('book\.unknownPublisher'\)/, 'BookCard displays publisher or honest placeholder')
-  assert.match(content, /book\.publicationDate\s*\|\|\s*t\('book\.unknownDate'\)/, 'BookCard displays publicationDate or honest placeholder')
-  assert.match(content, /book\.tags/, 'BookCard displays tags')
-  assert.match(content, /t\('book\.noTags'\)/, 'BookCard displays noTags honest placeholder')
+  // Compact rows omit absent author fields; publication metadata remains in BookDetail.
+  assert.match(content, /v-if="book\.author"[^>]*>\{\{ book\.author \}\}/, 'Author is displayed only when supplied')
+  assert.match(content, /visibleBookTopics\(props\.book\)/, 'Visible topics use the bounded projection without truncating stored tags')
+  assert.match(content, /v-for="tag in topics"/, 'BookCard displays its topic projection')
+  const detail = readSrc('views/BookDetailView.vue')
+  assert.match(detail, /book\.publisher/)
+  assert.match(detail, /book\.publicationDate/)
 
   // SourceRef handling
   assert.match(content, /book\.sourceRef/, 'BookCard checks book.sourceRef')
@@ -145,7 +146,7 @@ test('BookDetailView.vue: displays metadata overview, sourceRef status, and expl
   assert.ok(script, 'BookDetailView script compiles')
 })
 
-test('LibraryView.vue: removes booklists and manual convert, integrates monitored folder banner with state handling', () => {
+test('LibraryView.vue: removes retired actions and provides actionable file-health status and folder settings', () => {
   const content = readSrc('views/LibraryView.vue')
   const { descriptor, errors } = parse(content)
   assert.equal(errors.length, 0, 'LibraryView.vue parses cleanly')
@@ -166,12 +167,12 @@ test('LibraryView.vue: removes booklists and manual convert, integrates monitore
   assert.doesNotMatch(content, /paperMode/, 'LibraryView has no paperMode')
   assert.doesNotMatch(content, /batchMoveKind/, 'LibraryView has no batchMoveKind')
 
-  // Monitored folder integration
+  // Folder control moved to Settings; the library exposes actionable availability errors.
   assert.match(content, /useFolderLibrary/, 'LibraryView integrates useFolderLibrary')
-  assert.match(content, /monitored-folder-banner/, 'LibraryView renders monitored-folder-banner')
-  assert.match(content, /folderLibrary\?\.status\?\.value\?\.state/, 'LibraryView checks folderLibrary state')
-  assert.match(content, /onChooseFolder/, 'LibraryView has onChooseFolder')
-  assert.match(content, /onRescan/, 'LibraryView has onRescan')
+  assert.match(content, /class="library-notice" role="status"/, 'File-health errors have a status region')
+  assert.match(content, /folderLibrary\.value\.status\.value\.state/, 'LibraryView checks the reactive folder service state')
+  assert.match(content, /@click="showUnavailable"/, 'Unavailable books can be inspected')
+  assert.match(content, /to="\/settings\?section=folder"/, 'Folder authorization and rescan remain accessible in Settings')
 
   // Batch delete protects source-ref books
   assert.match(content, /sourceRef/, 'LibraryView batchDelete checks sourceRef')
@@ -219,17 +220,19 @@ test('ReaderView.vue: visible Chinese/English text labels on major reader action
   // Secondary actions in More menu
   assert.match(content, /readerMoreOpen/, 'ReaderView has readerMoreOpen state')
   assert.match(content, /reader-more-menu/, 'ReaderView has reader-more-menu')
-  assert.match(content, /t\('reader\.addBookmark'\)/, 'More menu contains bookmark')
-  assert.match(content, /t\('tts\.title'\)/, 'More menu contains tts')
-  assert.match(content, /t\('ambient\.title'\)/, 'More menu contains ambient')
-  assert.match(content, /t\('readingMode\.title'\)/, 'More menu contains readingMode')
-  assert.match(content, /t\('reader\.fullscreen'\)/, 'More menu contains fullscreen')
+  assert.match(content, /t\('reader\.bookmark'\)/, 'Primary toolbar contains bookmark')
+  assert.match(content, /t\('tts\.title'\)/, 'Primary toolbar contains tts')
+  assert.doesNotMatch(content, /ambient|AmbientPanel/, 'More menu and reader no longer expose ambient sound')
+  const more = content.slice(content.indexOf('<div v-if="readerMoreOpen"'), content.indexOf('<!-- 正文 -->'))
+  assert.match(more, /t\('readingMode\.title'\)/, 'More menu contains readingMode')
+  assert.match(more, /toggleFullscreen/, 'More menu contains fullscreen')
+  assert.doesNotMatch(more, /toggleBookmark|t\('tts\.title'\)/, 'Primary actions are not duplicated in More')
 
   // Dock buttons have AppIcon + text
   assert.match(content, /<AppIcon\s+name="toc"/, 'Dock has TOC AppIcon')
-  assert.match(content, /<AppIcon\s+name="notes"/, 'Dock has Notes AppIcon')
+  assert.match(content, /<AppIcon\s+name="annotations"/, 'Dock has book annotations, distinct from global Notes')
   assert.match(content, /<AppIcon\s+name="audio"/, 'Dock has Audio AppIcon')
-  assert.match(content, /<AppIcon\s+name="reading"/, 'Dock has Reading AppIcon')
+  assert.match(content, /<AppIcon\s+name="readingModes"/, 'Dock has Reading modes, distinct from currently reading')
   assert.match(content, /<AppIcon\s+name="typography"/, 'Dock has Typography AppIcon')
 
   // Minimum hit target area in styles

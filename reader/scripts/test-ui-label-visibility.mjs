@@ -2,7 +2,7 @@ import assert from 'node:assert/strict'
 import { before, after, test } from 'node:test'
 import { resolve, join } from 'node:path'
 import { existsSync, mkdirSync, writeFileSync } from 'node:fs'
-import { createServer } from 'vite'
+import { createServer } from './vite-isolated.mjs'
 import { chromium } from 'playwright'
 import { collapse } from 'foliate-js/epubcfi.js'
 
@@ -39,7 +39,10 @@ async function controls(page, selector, labelSelector) {
     for (const p of chain) { const c = rgba(getComputedStyle(p).backgroundColor), a = c[3] / 255; bg = bg.map((v, i) => c[i] * a + v * (1 - a)) }
     const lum = c => c.map(v => v / 255).map(v => v <= 0.04045 ? v / 12.92 : ((v + 0.055) / 1.055) ** 2.4).reduce((a, v, i) => a + v * [0.2126, 0.7152, 0.0722][i], 0)
     const fg = label ? rgba(s.color).slice(0, 3) : [0, 0, 0], l = [lum(fg), lum(bg)].sort((a, b) => a - b)
+    const glyph = el.querySelector('svg[data-icon]')
+    const gr = glyph?.getBoundingClientRect(), gs = glyph ? getComputedStyle(glyph) : null
     return {
+      glyph: glyph ? { name: glyph.dataset.icon, viewBox: glyph.getAttribute('viewBox'), width: gr.width, height: gr.height, stroke: parseFloat(gs.strokeWidth), color: gs.color } : null,
       foreground: fg, background: bg, contrast: (l[1] + 0.05) / (l[0] + 0.05),
       text: label?.textContent.trim(), width: r.width, height: r.height,
       left: r.left, right: r.right, top: r.top, bottom: r.bottom,
@@ -65,6 +68,15 @@ function assertControls(items, width, font = 13) {
     assert.equal(overlap, false, `Actions overlap: ${a.text}/${b.text}`)
   }
 }
+function assertGlyphs(items) {
+  for (const { glyph } of items) {
+    if (!glyph) continue
+    assert.equal(glyph.viewBox, '0 0 24 24', JSON.stringify(glyph))
+    assert.equal(glyph.width, 28, JSON.stringify(glyph))
+    assert.equal(glyph.height, 28, JSON.stringify(glyph))
+    assert.ok(glyph.stroke === 2 || glyph.stroke === 2.25, JSON.stringify(glyph))
+  }
+}
 const cases = [
   [992, 'zh', false], [390, 'zh', false], [768, 'zh', false], [1280, 'zh', false],
   [992, 'en', false], [390, 'en', false], [768, 'en', false], [1280, 'en', false],
@@ -87,7 +99,7 @@ for (const [width, language, eink] of cases) test(`actual labeled UI ${width}px 
     await page.goto(origin + '/#/library', { waitUntil: 'networkidle' })
     await page.evaluate(async ({ language, eink }) => {
       const s = (await import('/src/stores/settings.ts')).useSettings()
-      s.language = language; s.appearance = language === 'en' ? 'dark' : 'light'; s.usageStats = false
+      s.language = language; s.appearance = language === 'en' ? 'dark' : 'light'
       s.readingMode.eink.enabled = eink
       s.reader.flow = 'paginated'; s.reader.portraitScroll = false; s.reader.continuousScroll = false
       const root = document.documentElement
@@ -99,6 +111,9 @@ for (const [width, language, eink] of cases) test(`actual labeled UI ${width}px 
     result.navigation = await controls(page, '.sidebar .nav-item', '.nav-label')
     assert.equal(result.navigation.length, 5)
     assertControls(result.navigation, width)
+    assertGlyphs(result.navigation)
+    assert.deepEqual(result.navigation.map(x => x.glyph?.name), ['library', 'currently-reading', 'notes', 'reading-history', 'settings'])
+    assert.equal(result.navigation[0].glyph.stroke, 2.25, 'current navigation destination has emphasized strokes')
     result.navigationGeometry = await page.evaluate(() => {
       const nav = document.querySelector('.sidebar').getBoundingClientRect(), main = document.querySelector('.main').getBoundingClientRect()
       const rect = r => ({ top: r.top, bottom: r.bottom, left: r.left, right: r.right, height: r.height })
@@ -153,13 +168,34 @@ for (const [width, language, eink] of cases) test(`actual labeled UI ${width}px 
     assert.ok(result.toolbarBackgrounds.every(x => x.alpha === 255 && x.backdrop === 'none'), 'Toolbar text must not blend with underlying book content')
     result.top = await controls(page, '.bar.top .icon-btn', '.btn-text')
     assertControls(result.top, width)
+    assertGlyphs(result.top)
+    assert.ok(result.top.some(x => x.glyph?.name === 'reading-assistant'))
+    assert.ok(result.top.some(x => x.glyph?.name === 'search-in-book'))
     result.chapters = await controls(page, '.progress-row .chapter-btn', '.btn-text')
     assert.equal(result.chapters.length, 2); assertControls(result.chapters, width, 12)
     result.dock = await controls(page, '.dock button', 'span')
-    if (result.dock.length) assertControls(result.dock, width)
+    if (result.dock.length) { assertControls(result.dock, width); assertGlyphs(result.dock) }
+    assert.ok([...result.top, ...result.dock].some(x => x.glyph?.name === 'annotations'))
     await page.locator('.reader-more-btn').click()
     await page.locator('.reader-more-menu').waitFor()
-    assertControls(await controls(page, '.reader-more-item', 'span'), width)
+    const more = await controls(page, '.reader-more-item', 'span')
+    assertControls(more, width); assertGlyphs(more)
+    result.more = more
+    assert.equal(more.length, 2)
+    assert.equal(more[0].glyph?.name, 'reading-modes')
+    assert.equal(more[1].text, await page.evaluate(() => document.querySelector('.reader').__vueParentComponent.setupState.t('reader.fullscreen')))
+    assert.ok(result.top.some(x => x.glyph?.name === 'bookmarks'), 'Bookmarks moved to the primary toolbar')
+    assert.ok(result.top.some(x => x.glyph?.name === 'read-aloud'), 'Read aloud moved to the primary toolbar')
+    if (width === 992 && language === 'zh' && !eink) {
+      assert.equal(await page.evaluate(() => window.__pagewiseReaderBack()), true)
+      const bookmark = page.locator('.bar.top button').filter({ has: page.locator('svg[data-icon="bookmarks"]') })
+      await bookmark.click()
+      await page.waitForFunction(() => document.querySelector('.reader').__vueParentComponent.setupState.isBookmarked)
+      assert.equal(await bookmark.locator('svg[data-icon="bookmarks"] path').getAttribute('fill'), 'currentColor')
+      await bookmark.click()
+      await page.waitForFunction(() => !document.querySelector('.reader').__vueParentComponent.setupState.isBookmarked)
+      await page.locator('.reader-more-btn').click()
+    }
     assert.equal(await page.evaluate(() => window.__pagewiseReaderBack()), true)
     await page.waitForFunction(() => !document.querySelector('.reader-more-menu'))
     const after = await page.evaluate(() => document.querySelector('.reader').__vueParentComponent.setupState.view.lastLocation.cfi)

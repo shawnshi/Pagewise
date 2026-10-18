@@ -1,19 +1,16 @@
 <script setup lang="ts">
-import { pingUsage } from '../services/usageStats'
-import { noteDjReading } from '../services/usageCounters'
-import type { DjLevelIdx, DjState } from '../services/usageStatsCore'
 import { computed, nextTick, onBeforeUnmount, onMounted, reactive, ref, shallowRef, watch } from 'vue'
 import { onBeforeRouteLeave, useRoute, useRouter } from 'vue-router'
 import { blocksReaderTurn, createReaderContext, createReaderSession, isReaderInteractive, readerBackTarget } from '../services/readerSession'
 import { getStorage, type AnnotationRec, type BookMeta } from '../storage'
-import { useSettings } from '../stores/settings'
+import { useSettings, resolveEffectiveTypography, prepareTypographyCommit } from '../stores/settings'
 import { useLibrary } from '../stores/library'
 import { isSupportedBookFormat, isTextLike } from '../services/format'
 import { convertToEpub, TEXT_EPUB_LAYOUT } from '../services/textToEpub'
 import { getReaderCSS, resolveReaderColors, resolveReaderTheme, HIGHLIGHT_COLORS, annotationLineStyle, annotationLabelKey, annotationSwatchStyle, listenMarkStyle, type ListenMarkStyle } from '../services/readerTheme'
 import { resolvedTheme } from '../services/appearance'
 import { setPageBarsDark, setSystemBarsHidden, setKeepScreenOn } from '../services/systemBars'
-import { injectFontIntoDoc, resolveFontFamily } from '../services/fonts'
+import { injectFontIntoDoc, injectBundledFontsIntoDoc, resolveFontFamily, measureTextScale } from '../services/fonts'
 import { isTauri } from '../storage/types'
 import { listVoicesSorted, warmUpSpeech, resetEdgeFailure } from '../services/tts'
 import { ListenPlayer, type ListenFeed } from '../services/listenPlayer'
@@ -36,12 +33,14 @@ import { chatStream, aiConfigured, readerSystemPrompt, explainPrompt, providerBy
 import TocList, { type TocItem } from '../components/TocList.vue'
 import ReadingModePanel from '../components/ReadingModePanel.vue'
 import TypographyPanel, { type TypographySection } from '../components/TypographyPanel.vue'
-import type { TypographyApplyPayload } from '../services/readerTypography'
+import { getTypographyAnchor, typographyPageMetrics, type TypographyApplyPayload } from '../services/readerTypography'
+import { resolveBookTypographyContext, createTypographyBookOwner, prepareTypographyDocument, UNKNOWN_TYPOGRAPHY_CONTEXT, type BookTypographyContext } from '../services/readerTypographyContext'
+import { TYPOGRAPHY_POLICY_VERSION } from '../services/readerTypographyProfiles'
+import { applyTypographyDocumentMode } from '../services/readerTypographyDocument'
 import { restorableView } from '../services/navigationSession'
 import { createDebouncedDraftSaver, loadNoteDraft, removeNoteDraft, type DebouncedDraftSaver } from '../services/noteDrafts'
 import ReadingModeMini from '../components/ReadingModeMini.vue'
 import { useReadingModes } from '../composables/useReadingModes'
-import AmbientPanel from '../components/AmbientPanel.vue'
 import ReadingModeLayer from '../components/ReadingModeLayer.vue'
 import DianjingToggle from '../components/DianjingToggle.vue'
 import DianjingConsent from '../components/DianjingConsent.vue'
@@ -53,7 +52,6 @@ import DianjingStatus from '../components/DianjingStatus.vue'
 import AppIcon from '../components/AppIcon.vue'
 import { useDianjing } from '../composables/useDianjing'
 import { djThemeName } from '../services/dianjing/theme'
-import { useAmbient } from '../services/ambient'
 import type { ReadingModeProgress } from '../services/readingModes/progress'
 import { buildSmartToc, findCurrentSmartItem, flattenToc } from '../services/smartToc'
 import {
@@ -72,8 +70,31 @@ const container = ref<HTMLElement>()
 const meta = ref<BookMeta>()
 const pendingTypography = ref<TypographyApplyPayload | null>(null)
 const typographyApplying = ref(false)
-const effectiveTypography = computed(() => pendingTypography.value?.settings ?? settings.getEffectiveTypography(bookId, meta.value?.language))
-const effectiveReader = computed(() => ({ ...settings.reader, ...effectiveTypography.value, ...(pendingTypography.value?.readerPatch ?? {}) }))
+const typographyFontWarning = ref(false)
+// Scene refs exist before typography getters so mode initialization cannot hit a TDZ.
+const lateModes = shallowRef<ReturnType<typeof useReadingModes>>()
+const lateDj = shallowRef<ReturnType<typeof useDianjing>>()
+const bookTypographyContext = shallowRef<BookTypographyContext>({ ...UNKNOWN_TYPOGRAPHY_CONTEXT })
+const typographyDpr = ref(globalThis.devicePixelRatio || 1)
+const typographyTextScale = ref(measureTextScale(document) ?? 1)
+const typographyViewport = ref({ width: window.innerWidth, height: window.innerHeight })
+const effectiveTypography = computed(() => {
+  const context = bookTypographyContext.value
+  const pending = pendingTypography.value
+  const candidate = pending ? prepareTypographyCommit(settings, { ...pending, textLayoutProtected: !!context.protectedLayout }) : settings
+  const resolved = resolveEffectiveTypography({ baseReaderPrefs: settings.reader, language: context.language, bookId,
+    languagesMap: candidate.typographyLanguages, booksMap: candidate.typographyBooks,
+    profile: context.profile, protectedLayout: !!context.protectedLayout,
+    calibration: settings.typographyCalibration, dpr: typographyDpr.value, textScale: typographyTextScale.value,
+    viewportWidth: Math.min(typographyViewport.value.width, window.screen.width || Infinity, window.screen.height || Infinity) })
+  if (resolved.source === 'base' && lateModes.value?.largeTextOn.value) {
+    return { ...resolved, fontSize: settings.reader.fontSize, lineHeight: settings.reader.lineHeight }
+  }
+  return resolved
+})
+const publicationBaseline = computed(() => !!effectiveTypography.value.publicationBaseline && !bookTypographyContext.value.protectedLayout)
+const effectiveReader = computed(() => ({ ...settings.reader, ...effectiveTypography.value,
+  theme: publicationBaseline.value ? 'light' as const : effectiveTypography.value.theme ?? settings.reader.theme }))
 const loading = ref(true)
 const error = ref('')
 const toc = ref<TocItem[]>([])
@@ -84,7 +105,7 @@ const currentTocHref = ref<string>()
 const fraction = ref(0)
 const chapterLabel = ref('')
 type PanelName = 'toc' | 'annotations' | 'search' | 'ai'
-type PrimaryPanel = PanelName | 'settings' | 'tts' | 'ambient' | 'more' | 'none'
+type PrimaryPanel = PanelName | 'settings' | 'tts' | 'more' | 'none'
 const primaryPanel = ref<PrimaryPanel>('none')
 function setPrimaryPanel(name: PrimaryPanel) {
   if (name !== 'none') {
@@ -97,7 +118,7 @@ const panel = computed<'none' | PanelName>({
   get: () => ['toc', 'annotations', 'search', 'ai'].includes(primaryPanel.value) ? primaryPanel.value as PanelName : 'none',
   set: name => { if (name !== 'none' || panel.value !== 'none') setPrimaryPanel(name) },
 })
-function primaryToggle(name: 'settings' | 'tts' | 'ambient' | 'more') {
+function primaryToggle(name: 'settings' | 'tts' | 'more') {
   return computed({
     get: () => primaryPanel.value === name,
     set: (open: boolean) => { if (open) setPrimaryPanel(name); else if (primaryPanel.value === name) primaryPanel.value = 'none' },
@@ -112,7 +133,7 @@ const barsVisible = ref(true)
 let barsTimer: ReturnType<typeof setTimeout> | undefined
 
 const anyOverlayOpen = () =>
-  panel.value !== 'none' || settingsOpen.value || ttsPanel.value || modes.panelOpen.value || ambientPanel.value || !!activeAnnotation.value || jumpOpen.value || dj.overlayOpen.value || readerMoreOpen.value
+  panel.value !== 'none' || settingsOpen.value || ttsPanel.value || modes.panelOpen.value || !!activeAnnotation.value || jumpOpen.value || dj.overlayOpen.value || readerMoreOpen.value
 
 /** 显示工具栏; autoHide 时若几秒内无交互且无面板打开则自动隐去 */
 function showBars(autoHide = false) {
@@ -140,7 +161,6 @@ function closeOverlays() {
   ttsPanel.value = false
   modes.closePanel()
   dj.closeOverlays()
-  ambientPanel.value = false
   if (!activeAnnotation.value || noteDraft.value === (activeAnnotation.value.note ?? '')) activeAnnotation.value = null
   jumpOpen.value = false
 }
@@ -152,6 +172,7 @@ function togglePanel(name: PanelName) {
 }
 
 function toggleSettings() {
+  if (loading.value || typographyApplying.value) { toast(t('reader.typographyNotReady')); return }
   const next = !settingsOpen.value
   closeOverlays()
   typoFocus.value = null
@@ -178,7 +199,7 @@ function openTypography(section?: TypographySection) {
 }
 
 /** 手机端抽屉打开时显示遮罩 (桌面端遮罩由 CSS 隐藏) */
-const sheetOpen = computed(() => panel.value !== 'none' || settingsOpen.value || ttsPanel.value || modes.panelOpen.value || ambientPanel.value)
+const sheetOpen = computed(() => panel.value !== 'none' || settingsOpen.value || ttsPanel.value || modes.panelOpen.value)
 
 // ---- 一键全屏沉浸 ----
 const isFullscreen = ref(false)
@@ -230,49 +251,12 @@ const isBookmarked = computed(() => bookmarks.value.some(b => b.cfi === currentC
 
 // 听书
 const ttsPanel = primaryToggle('tts')
-/** 背景音面板 (见 services/ambient); 背景音本身是全局单例, 只在阅读器里提供入口 */
-const ambientPanel = primaryToggle('ambient')
-const ambient = useAmbient()
-
-function toggleAmbientPanel() {
-  const next = !ambientPanel.value
-  closeOverlays()
-  ambientPanel.value = next
-}
-
-async function showAmbientSources() {
-  const url = 'https://github.com/yzfly/LightRead/blob/main/docs/ambient-sources.md'
-  if (isTauri()) {
-    const { openUrl } = await import('@tauri-apps/plugin-opener')
-    await openUrl(url)
-  } else window.open(url, '_blank', 'noopener,noreferrer')
-}
 const ttsState = ref<'stopped' | 'playing' | 'paused'>('stopped')
 const ttsVoices = ref<{ name: string; lang: string }[]>([])
 let sectionLoadResolvers: Array<() => void> = []
 
 // 翻页 / 位置变化 / 朗读推进时 ping: 正文在 iframe 里, 其中的操作不会冒泡到 window
-const { ping: pingReading, pingAuto: pingReadingAuto } = useReadingTimer(bookId, {
-  // 点睛阅读的使用统计 (按天汇总, 只记中文书): 这段时长按落库时的点睛状态计
-  onCredit: seconds => {
-    const st = djUsageState()
-    if (st) noteDjReading(seconds, st.state, st.level)
-  },
-})
-
-/** 当前的点睛状态 (使用统计): 关 / 词与词 / 重点词 / 智能; 非中文书返回 null */
-function djUsageState(): { state: DjState; level: DjLevelIdx | null } | null {
-  const m = lateModes.value
-  const d = lateDj.value
-  if (!m || !d || !m.keyWordsSupported.value) return null
-  const kind = m.guideKind.value
-  const density = settings.dianjing.density
-  const lvl: DjLevelIdx = density === 'low' ? 0 : density === 'high' ? 2 : 1
-  if (d.enabled.value) return { state: 3, level: kind === 'smart' ? lvl : null }
-  if (kind === 'boundary') return { state: 1, level: null }
-  if (kind === 'keywords') return { state: 2, level: lvl }
-  return { state: 0, level: null }
-}
+const { ping: pingReading, pingAuto: pingReadingAuto } = useReadingTimer(bookId)
 
 // 书内搜索 (VSCode 风格: 多关键词 / 正则 / 大小写 / 全词)
 const searchQuery = ref('')
@@ -385,6 +369,7 @@ const autoPaused = ref(false)
 let autoTimer: ReturnType<typeof setInterval> | undefined
 
 let view: any = null
+const typographyBookOwner = createTypographyBookOwner()
 let Overlayer: any = null
 const inspectionTick = ref(0)
 const sourceError = ref('')
@@ -474,8 +459,6 @@ const readerLayout = computed(() => effectiveReaderLayout({
 const effectiveFlow = computed(() => readerLayout.value.flow)
 // 阅读模式与点睛在下方声明, 二者初始化时会互相 / 回头读取这里的值;
 // 先用响应式占位, 声明完再填入, 避免初始化顺序问题 (TDZ), 填入后依赖它们的 computed 自动重算
-const lateModes = shallowRef<ReturnType<typeof useReadingModes>>()
-const lateDj = shallowRef<ReturnType<typeof useDianjing>>()
 // 墨水屏等阅读模式会改写正文配色 (纯黑白)
 const themeColors = computed(() => resolveReaderColors(effectiveReader.value.theme, appDark.value, lateModes.value?.readerStyle.value))
 // 正文主题铺满全屏 (含状态栏下方), 安卓系统栏图标按正文深浅切换
@@ -491,24 +474,54 @@ function selectedCustomFont() {
   return m ? settings.customFonts.find(f => f.name === m[1]) : undefined
 }
 
-/**
- * 排版几何 (左右留白 / 行宽上限 / 上下边带)。竖屏时按绝对像素留窄边并放宽行宽让正文铺满,
- * 不改用户保存的页边距百分比 (横屏照旧); 见 services/portraitLayout.ts portraitSpacing
- */
+const typographyPage = computed(() => {
+  const p = effectiveTypography.value
+  if (!portraitView.value || p.displayMode !== 'optimized' || p.profile === 'original' || bookTypographyContext.value.protectedLayout) return null
+  return typographyPageMetrics({ profile: p.profile, width: typographyViewport.value.width, height: typographyViewport.value.height,
+    calibration: settings.typographyCalibration, dpr: typographyDpr.value, textScale: typographyTextScale.value })
+})
+const typographyBottomInset = computed(() => {
+  const page = typographyPage.value
+  return page ? page.bottom - page.top : 0
+})
+
+/** Portrait flowable pages use page edges; explicit percent margins take precedence over ruler defaults. */
+let typographyLineMeasure = { key: '', width: 0 }
+function typographyMeasureKey() {
+  const p = effectiveTypography.value
+  return JSON.stringify([TYPOGRAPHY_POLICY_VERSION, p.profile, bookTypographyContext.value.language, p.fontSize, p.fontFamily, p.maxLineLength, p.letterSpacing, typographyTextScale.value, selectedCustomFont()?.file])
+}
+function runtimeFontFamily() {
+  return resolveFontFamily(effectiveReader.value.fontFamily, { profile: effectiveTypography.value.profile, language: bookTypographyContext.value.language })
+}
+function injectCurrentFont(doc: Document) {
+  if (!bookTypographyContext.value.protectedLayout && effectiveTypography.value.displayMode !== 'publisher') {
+    void injectBundledFontsIntoDoc(doc).catch(() => { typographyFontWarning.value = true })
+  }
+  const custom = selectedCustomFont()
+  if (custom) void injectFontIntoDoc(doc, custom).catch(() => {
+    if (effectiveReader.value.fontFamily === `custom:${custom.name}`) typographyFontWarning.value = true
+  })
+}
+
 function layoutGeometry() {
   const prefs = effectiveReader.value
   const width = container.value?.clientWidth || window.innerWidth
   const portrait = portraitView.value
   const spacing = portrait ? portraitSpacing(width, prefs.gap) : null
   const phone = window.innerWidth <= 600
-  // 上下边带: 翻页模式放页眉页脚 (章节名 / 进度), 手机屏幕矮收窄些; 滚动模式下正文铺满全高,
-  // 它只决定「哪段算在屏上」(进度 / 朗读起点), 竖屏滚动收窄让判定贴近实际可见区
-  const margin = portrait && readerLayout.value.flow === 'scrolled'
-    ? (phone ? '12px' : '20px')
-    : (phone ? '36px' : '48px')
+  const page = typographyPage.value
+  const inlineEdge = page && (effectiveTypography.value.overriddenFields.includes('gap') || settings.reader.gap !== 6)
+    ? width * prefs.gap / 100 : page?.inline ?? 0
+  const margin = page ? `${page.top}px` : portrait && readerLayout.value.flow === 'scrolled'
+    ? (phone ? '12px' : '20px') : (phone ? '36px' : '48px')
   return {
-    gap: `${spacing ? spacing.gapPercent : prefs.gap}%`,
-    maxInline: spacing ? `${spacing.maxInlineSize}px` : '720px',
+    gap: page ? '0%' : `${spacing ? spacing.gapPercent : prefs.gap}%`,
+    maxInline: `${Math.min(page ? Math.max(120, width - inlineEdge * 2) : spacing?.maxInlineSize ?? 720,
+      effectiveTypography.value.displayMode === 'optimized' && !bookTypographyContext.value.protectedLayout && (effectiveTypography.value.maxLineLength ?? 0) > 0
+        ? Math.max(120, typographyLineMeasure.key === typographyMeasureKey() ? typographyLineMeasure.width
+          : (effectiveTypography.value.maxLineLength ?? 0) * prefs.fontSize * (effectiveTypography.value.profile === 'en' ? 0.5 : 1))
+        : Infinity)}px`,
     margin,
   }
 }
@@ -542,49 +555,103 @@ function applyPrefs(strict = false) {
     // 大字 / 歌词运行时、竖屏单页滚动时强制单栏, 不改用户自己的分栏设置
     view.renderer.setAttribute('max-column-count', String(modes.forceSingleColumn.value ? 1 : layout.maxColumnCount))
     view.renderer.setAttribute('margin', geo.margin)
-    if (strict === true && typeof view.renderer.setStyles !== 'function') throw new Error('Reader styles unavailable')
-    view.renderer.setStyles?.(getReaderCSS({ ...prefs, fontFamily: resolveFontFamily(prefs.fontFamily) }, appDark.value, modes.readerStyle.value, { ...effectiveTypography.value, fontFamily: resolveFontFamily(prefs.fontFamily) }))
-    const custom = selectedCustomFont()
-    if (custom) {
-      for (const content of view.renderer.getContents?.() ?? []) {
-        injectFontIntoDoc(content.doc, custom)
-      }
+    for (const { doc } of view.renderer.getContents?.() ?? []) {
+      prepareTypographyDocument(doc, bookTypographyContext.value, effectiveTypography.value.profile)
+      applyTypographyDocumentMode(doc, prefs.displayMode)
     }
+    if (strict === true && !view.isFixedLayout && typeof view.renderer.setStyles !== 'function') throw new Error('Reader styles unavailable')
+    view.renderer.setStyles?.(getReaderCSS({ ...prefs, fontFamily: runtimeFontFamily() }, appDark.value, modes.readerStyle.value, { ...effectiveTypography.value, fontFamily: runtimeFontFamily() }, { ...bookTypographyContext.value, profile: effectiveTypography.value.profile, automaticFont: prefs.fontFamily === 'auto', fontKey: prefs.fontFamily, userAlignment: effectiveTypography.value.overriddenFields.includes('justify'), userLineHeight: effectiveTypography.value.overriddenFields.includes('lineHeight'), textScale: typographyTextScale.value }))
+    for (const content of view.renderer.getContents?.() ?? []) injectCurrentFont(content.doc)
     drawStoredAnnotations()
   } catch (error) {
     if (strict === true) throw error
   }
 }
 
-async function typographyLayoutReady(currentView: typeof view) {
+async function typographyLayoutReady(currentView: typeof view, strictFonts = true) {
+  let cancelled = false
   const work = async () => {
+    if (cancelled || currentView !== view) throw new Error('Reader context changed')
+    const protectedLayout = !!bookTypographyContext.value.protectedLayout
     const contents = currentView?.renderer?.getContents?.() ?? []
-    if (!contents.length) throw new Error('Reader layout unavailable')
-    await Promise.all(contents.map(async (content: { doc: Document }) => {
-      const fonts = content.doc.fonts
-      if (fonts) {
-        await fonts.load(`${effectiveReader.value.fontSize}px ${resolveFontFamily(effectiveReader.value.fontFamily) || 'serif'}`)
-        await fonts.ready
+    if (!contents.length && !protectedLayout) throw new Error('Reader layout unavailable')
+    if (!protectedLayout) await Promise.all(contents.map(async (content: { doc: Document }) => {
+      const doc = content.doc
+      try {
+        if (effectiveTypography.value.displayMode !== 'publisher') await injectBundledFontsIntoDoc(doc)
+        const custom = selectedCustomFont()
+        if (effectiveReader.value.fontFamily.startsWith('custom:') && !custom) throw new Error('Saved font unavailable')
+        if (custom) await injectFontIntoDoc(doc, custom)
+        if (doc.fonts) {
+          const family = doc.defaultView?.getComputedStyle(doc.body).fontFamily || runtimeFontFamily() || 'serif'
+          const bodyStyle = doc.defaultView?.getComputedStyle(doc.body)
+          await doc.fonts.load(`${bodyStyle?.fontWeight || 400} ${effectiveReader.value.fontSize}px ${family}`, '知頁閱讀ABCéα')
+          await doc.fonts.ready
+        }
+      } catch (error) {
+        if (strictFonts) throw error
+        if (!cancelled && currentView === view) typographyFontWarning.value = true // Explicit startup fallback; saved family is not rewritten.
       }
     }))
-    await new Promise<void>(resolve => requestAnimationFrame(() => requestAnimationFrame(() => resolve())))
+    if (cancelled || currentView !== view) throw new Error('Reader context changed')
+    if (!protectedLayout && effectiveTypography.value.displayMode === 'optimized') {
+      const scale = measureTextScale(contents[0].doc, effectiveTypography.value.fontSize)
+      if (scale && Math.abs(scale - typographyTextScale.value) > 0.005) {
+        typographyTextScale.value = scale
+        await nextTick()
+        applyPrefs(true)
+      }
+    }
+    const p = effectiveTypography.value
+    if (p.displayMode === 'optimized' && (p.maxLineLength ?? 0) > 0 && !bookTypographyContext.value.protectedLayout) {
+      const doc = contents[0].doc as Document
+      const style = doc.defaultView?.getComputedStyle(doc.body)
+      const canvas = doc.createElement('canvas').getContext('2d')
+      if (style && canvas) {
+        canvas.font = `${style.fontStyle} ${style.fontWeight} ${style.fontSize} ${style.fontFamily}`
+        const unit = canvas.measureText(p.profile === 'en' ? '0000000000' : '水水水水水水水水水水').width / 10
+        const width = unit * (p.maxLineLength ?? 0)
+        const key = typographyMeasureKey()
+        if (Number.isFinite(width) && width > 0 && (typographyLineMeasure.key !== key || Math.abs(typographyLineMeasure.width - width) > 1)) {
+          typographyLineMeasure = { key, width }
+          applyPrefs(true)
+        }
+      }
+    }
+    // A bounded quiet-layout observation follows real font promises and renderer navigation;
+    // merely waiting two animation frames is not a layout-completion oracle.
+    await new Promise<void>((resolve, reject) => {
+      let signature = '', unchangedAt = performance.now(), frames = 0
+      const check = () => {
+        if (cancelled || currentView !== view) { reject(new Error('Reader context changed')); return }
+        const next = JSON.stringify((currentView.renderer.getContents?.() ?? []).map((c: { doc: Document }) =>
+          [c.doc.documentElement.scrollWidth, c.doc.documentElement.scrollHeight, c.doc.body?.getBoundingClientRect().width, c.doc.body?.getBoundingClientRect().height, c.doc.fonts?.status]))
+        if (next !== signature) { signature = next; unchangedAt = performance.now(); frames = 0 }
+        if (++frames >= 3 && performance.now() - unchangedAt >= 160) resolve()
+        else requestAnimationFrame(check)
+      }
+      requestAnimationFrame(check)
+    })
   }
   let timer: ReturnType<typeof setTimeout> | undefined
   try {
     await Promise.race([work(), new Promise<never>((_, reject) => { timer = setTimeout(() => reject(new Error('Font/layout timeout')), 6000) })])
-  } finally { clearTimeout(timer) }
+  } finally { cancelled = true; clearTimeout(timer) }
 }
 
 async function applyTypography(payload: TypographyApplyPayload): Promise<{ success: boolean; error?: string }> {
   if (typographyApplying.value || readerSession.inspecting || payload.bookId !== bookId) return { success: false, error: t('reader.typographyFailed') }
-  const anchor = readerSession.reading?.cfi || currentCfi.value
+  const anchor = getTypographyAnchor(readerSession.reading?.cfi || currentCfi.value)
   const currentView = view
   if (!anchor || !currentView?.renderer) return { success: false, error: t('reader.typographyNotReady') }
   const token = readerContext.capture()
+  const previousMeasure = { ...typographyLineMeasure }
+  const previousFontWarning = typographyFontWarning.value
   typographyApplying.value = true
   clearTimeout(prefsTimer)
   try {
     await readerSession.flush()
+    prepareTypographyCommit(settings, { ...payload, textLayoutProtected: !!bookTypographyContext.value.protectedLayout })
     pendingTypography.value = payload
     await nextTick()
     applyPrefs(true)
@@ -592,18 +659,21 @@ async function applyTypography(payload: TypographyApplyPayload): Promise<{ succe
     await navigateReader(anchor)
     await typographyLayoutReady(currentView)
     if (view !== currentView || !readerContext.current(token)) throw new Error('Reader context changed')
-    settings.commitTypography(payload)
+    settings.commitTypography({ ...payload, textLayoutProtected: !!bookTypographyContext.value.protectedLayout })
+    typographyFontWarning.value = false
     pendingTypography.value = null
     await nextTick()
     return { success: true }
   } catch (error) {
     pendingTypography.value = null
+    typographyLineMeasure = previousMeasure
+    typographyFontWarning.value = previousFontWarning
     let message = error instanceof Error ? error.message : t('reader.typographyFailed')
     if (view === currentView && readerContext.current(token)) {
       try {
         await nextTick()
         applyPrefs(true)
-        await typographyLayoutReady(currentView)
+        await typographyLayoutReady(currentView, !previousFontWarning)
         await navigateReader(anchor)
       } catch (rollbackError) {
         message += `; ${t('reader.typographyRollbackFailed')}: ${rollbackError instanceof Error ? rollbackError.message : ''}`
@@ -624,6 +694,9 @@ watch([() => effectiveReader.value, appDark, readerLayout, portraitView], () => 
 // 拖动窗口 / 分屏改变宽度: 竖屏留白按像素算, 跨过手机宽度时边带也变; 几何没变就不重排
 let geometryTimer: ReturnType<typeof setTimeout> | undefined
 function onWindowResize() {
+  typographyDpr.value = globalThis.devicePixelRatio || 1
+  typographyViewport.value = { width: window.innerWidth, height: window.innerHeight }
+  typographyTextScale.value = measureTextScale(document) ?? typographyTextScale.value
   clearTimeout(geometryTimer)
   geometryTimer = setTimeout(() => {
     if (view && JSON.stringify(layoutGeometry()) !== appliedGeometry) applyPrefs()
@@ -637,7 +710,7 @@ onBeforeUnmount(() => {
 
 function onRelocate(e: CustomEvent) {
   const { cfi, fraction: frac, tocItem } = e.detail
-  const primary = !typographyApplying.value && readerSession.relocate({ cfi: cfi ?? '', fraction: frac ?? 0 })
+  const primary = !loading.value && !typographyApplying.value && readerSession.relocate({ cfi: cfi ?? '', fraction: frac ?? 0 })
   if (primary) {
     modes.onRelocate(e.detail)
     dj.onRelocate(e.detail)
@@ -662,7 +735,9 @@ function updateMarginals() {
   if (!r?.heads?.length || !r?.feet?.length) return
   // 沉浸等模式可要求页眉 / 页脚留白
   const policy = modes.marginalsPolicy.value
+  const marginalSize = `${Math.max(12, Math.round(effectiveTypography.value.fontSize * 0.68 * 10) / 10)}px`
   r.heads.forEach((el: HTMLElement, i: number) => {
+    el.style.fontSize = marginalSize
     el.textContent = i === 0 && policy.head ? (chapterLabel.value || meta.value?.title || '') : ''
   })
   // 左下: 本章剩余; 右下: 页码 / 百分比。双栏时分居左右两栏, 单栏时同一行两端对齐
@@ -674,6 +749,7 @@ function updateMarginals() {
   feet.forEach(el => {
     el.replaceChildren()
     el.style.display = 'flex'
+    el.style.fontSize = marginalSize
     el.style.gap = '1em'
   })
   const put = (el: HTMLElement, text: string, end: boolean) => {
@@ -749,7 +825,7 @@ function layoutSignature(per: number, scrolled: boolean) {
   const p = effectiveReader.value
   const rect = container.value?.getBoundingClientRect()
   const q = (n = 0) => Math.round(n / 8)
-  return [p.fontSize, p.lineHeight, p.gap, p.fontFamily, p.justify ? 1 : 0, scrolled ? 's' : 'p', per, q(rect?.width), q(rect?.height)].join('|')
+  return [TYPOGRAPHY_POLICY_VERSION, bookTypographyContext.value.protectedLayout, effectiveTypography.value.overriddenFields.includes('justify'), effectiveTypography.value.overriddenFields.includes('lineHeight'), bookTypographyContext.value.language, effectiveTypography.value.profile, p.displayMode, p.fontSize, p.lineHeight, p.gap, p.fontFamily, p.letterSpacing, p.paragraphSpacing, p.textIndent, p.maxLineLength, typographyLineMeasure.width, selectedCustomFont()?.file, p.justify ? 1 : 0, scrolled ? 's' : 'p', per, q(rect?.width), q(rect?.height)].join('|')
 }
 
 async function buildTocAnchors() {
@@ -983,6 +1059,10 @@ async function readerBack() {
   else if (isFullscreen.value) await toggleFullscreen()
   else if (target === 'toolbar') barsVisible.value = false
   else {
+    // router.back() returns before its async leave guards; retain Back ownership
+    // until progress is acknowledged, including failed saves and rapid presses.
+    await readerSession.flush()
+    if (!nativeBackAlive || nativeBackHost.__pagewiseReaderBack !== handleNativeReaderBack) return
     const origin = restorableView(window.history.state?.back)
     if (origin && origin !== route.path) router.back()
     else await router.replace('/library')
@@ -991,11 +1071,14 @@ async function readerBack() {
 
 const nativeBackHost = window as Window & { __pagewiseReaderBack?: () => boolean }
 let nativeBackPending = false
+let nativeBackAlive = true
 function handleNativeReaderBack(): boolean {
+  if (!nativeBackAlive || nativeBackHost.__pagewiseReaderBack !== handleNativeReaderBack) return false
   if (nativeBackPending) return true
   nativeBackPending = true
   void readerBack()
     .catch(error => {
+      if (!nativeBackAlive || nativeBackHost.__pagewiseReaderBack !== handleNativeReaderBack) return
       console.error('Pagewise: native Back failed', error)
       toast(t('reader.progressSaveFailed'), 'error')
     })
@@ -1004,6 +1087,7 @@ function handleNativeReaderBack(): boolean {
 }
 onMounted(() => { nativeBackHost.__pagewiseReaderBack = handleNativeReaderBack })
 onBeforeUnmount(() => {
+  nativeBackAlive = false
   if (nativeBackHost.__pagewiseReaderBack === handleNativeReaderBack) delete nativeBackHost.__pagewiseReaderBack
 })
 
@@ -1094,7 +1178,7 @@ let autoCrossing = false
 /** 面板 / 抽屉打开、手指按住正文时暂缓 (不算暂停, 收起后自动继续) */
 function autoHeld() {
   return Date.now() < autoHoldUntil || panel.value !== 'none' || settingsOpen.value || ttsPanel.value
-    || readerMoreOpen.value || jumpOpen.value || ambientPanel.value || !!activeAnnotation.value || !!selection.value
+    || readerMoreOpen.value || jumpOpen.value || !!activeAnnotation.value || !!selection.value
 }
 
 function holdAutoScroll(ms: number) {
@@ -1975,9 +2059,6 @@ function listenFromSelection() {
   if (range) void startTTS({ range })
 }
 
-// 听书出声时压低背景音
-watch(ttsState, s => ambient.duck(s === 'playing'), { immediate: true })
-
 // 换音色 / 倍速 / 引擎: 从正在读的这一句开头按新设置重读 (拖语速滑条时停手 0.4 秒再重读一次);
 // 暂停中改的, 继续时从这句开头读
 let settingsRestartTimer: ReturnType<typeof setTimeout> | undefined
@@ -2057,8 +2138,6 @@ function cancelSleep() {
 /** 时长定时到点: 淡出后暂停; 系统语音则等这句读完 */
 async function sleepNow() {
   setSleep(0)
-  // 听书定时到点, 背景音跟着慢慢淡出
-  if (ambient.state.playing) ambient.fadeOutAndStop(30)
   if (ttsState.value !== 'playing') return
   sleepFading.value = true
   const result = await listenPlayer.fadeOut(SLEEP_FADE_SECONDS)
@@ -2112,10 +2191,7 @@ function sleepStopsBefore(key: string): boolean {
 
 /** 定时停下: 暂停 (不是停止), 下次继续从这一句开头读; 提示可以再听 15 分钟 */
 function sleepPause() {
-  const byChapter = sleepMode.value === 'chapter'
   setSleep(0)
-  // 时长定时在 sleepNow 里已让背景音淡出; 听完本章在这里
-  if (byChapter && ambient.state.playing) ambient.fadeOutAndStop(30)
   if (ttsState.value !== 'playing') return
   pauseTTS()
   restartOnResume = true
@@ -2209,12 +2285,14 @@ function onSectionLoad(e: CustomEvent) {
     try {
       if (doc.defaultView?.getComputedStyle(doc.body).writingMode?.startsWith('vertical')) {
         bookVertical = true
+        bookTypographyContext.value = { ...bookTypographyContext.value, profile: 'original', protectedLayout: 'vertical' }
         if (view?.renderer?.hasAttribute?.('continuous')) setTimeout(applyPrefs, 0)
       }
     } catch { /* 忽略 */ }
   }
-  const custom = selectedCustomFont()
-  if (custom) injectFontIntoDoc(doc, custom)
+  prepareTypographyDocument(doc, bookTypographyContext.value, effectiveTypography.value.profile)
+  applyTypographyDocumentMode(doc, effectiveReader.value.displayMode)
+  if (effectiveReader.value.displayMode !== 'publisher' || selectedCustomFont()) injectCurrentFont(doc)
   const context = readerContext.capture()
   let pointerStartedAt = 0
   let selectionGesture = false
@@ -2931,12 +3009,13 @@ const modes = useReadingModes({
   getColors: () => themeColors.value,
   pingReadingAuto,
   appDark: () => appDark.value,
+  presentationSuppressed: () => publicationBaseline.value,
   onExclusiveStart: () => {
     stopAutoRead()
     if (ttsState.value === 'playing') pauseTTS()
   },
   isAutoReading: () => autoReading.value,
-  pauseWhen: () => panel.value !== 'none' || settingsOpen.value || ttsPanel.value || jumpOpen.value || ambientPanel.value
+  pauseWhen: () => panel.value !== 'none' || settingsOpen.value || ttsPanel.value || jumpOpen.value
     || readerMoreOpen.value || !!activeAnnotation.value || !!lateDj.value?.overlayOpen.value,
   beforePanelOpen: closeOverlays,
   // 沉浸: 安卓隐藏系统栏 + 常亮 (网页 / 桌面用 Wake Lock), 并收起工具栏
@@ -2953,6 +3032,7 @@ lateModes.value = modes
 // ---- 点睛阅读 (docs/dianjing-reading.md) ----
 const dj = useDianjing({
   getView: () => view,
+  presentationSuppressed: () => publicationBaseline.value,
   goToText: async cfi => {
     if (!await jumpSource(cfi)) throw new Error(t('reader.sourceUnavailable'))
   },
@@ -3067,10 +3147,7 @@ watch(() => modes.progressActive.value, on => {
 
 onMounted(async () => {
   const context = readerContext.capture()
-  // 匿名使用统计: 今天打开过书 (每天一次, 设置 → 隐私 可关闭)
-  void pingUsage(true)
-  // 手机切后台时背景音暂停, 但听书在播时跟随听书的后台策略
-  ambient.setPauseWhenHidden(() => ttsState.value !== 'playing')
+  let bookOpened = false
   window.addEventListener('keydown', handleKeydown)
   document.addEventListener('fullscreenchange', syncFullscreenState)
   showBars(true)
@@ -3155,16 +3232,20 @@ onMounted(async () => {
 
     const { makeFoliateBook } = await import('../services/foliateBook')
     const foliateBook = await makeFoliateBook(file)
-    if (!readerContext.current(context)) { foliateBook.destroy?.(); return }
+    if (!typographyBookOwner.adopt(foliateBook)) return
+    if (!readerContext.current(context)) { typographyBookOwner.release(); return }
+    bookTypographyContext.value = await resolveBookTypographyContext(foliateBook, { languageHint: meta.value.language, generatedText: isTextLike(meta.value.format), current: () => readerContext.current(context) })
+    if (!readerContext.current(context)) { typographyBookOwner.release(); return }
     const openedView = view
     await openedView.open(foliateBook)
+    bookOpened = true
     if (!readerContext.current(context)) { openedView.close?.(); return }
     // 跨章连续滚动的渲染器事件 (view 不转发): 主章切换、远处分节卸载。旧版渲染器不会派发
     view.renderer?.addEventListener?.('section-change', onRendererSectionChange)
     view.renderer?.addEventListener?.('unload', onRendererUnload)
     toc.value = view.book?.toc ?? []
     secSizes = sectionSizes(view.book?.sections ?? [])
-    bookCjk.value = view.language?.isCJK ?? true
+    bookCjk.value = /^(zh|ja|ko)(-|$)/i.test(bookTypographyContext.value.language) || (bookTypographyContext.value.language === 'und' && (view.language?.isCJK ?? true))
     loadPageMeasure()
     void buildTocAnchors()
     applyPrefs()
@@ -3175,22 +3256,30 @@ onMounted(async () => {
     if (isTextLike(meta.value.format) && meta.value.location) {
       try { staleTextLocation = localStorage.getItem(layoutKey) !== TEXT_EPUB_LAYOUT } catch { /* 存储不可用时按新版式处理 */ }
     }
+    const savedTypographyAnchor = !staleTextLocation && meta.value.location ? getTypographyAnchor(meta.value.location) : undefined
     // 只有进度比例、没有位置的书 (如由 MOBI 等转换来的 EPUB): 按比例定位
     if (staleTextLocation || (!meta.value.location && meta.value.progress)) {
       await view.init({})
       if (meta.value.progress) await view.goToFraction(meta.value.progress)
     } else {
-      await view.init({ lastLocation: meta.value.location })
+      await view.init({ lastLocation: savedTypographyAnchor })
     }
     if (!readerContext.current(context)) return
     if (isTextLike(meta.value.format)) {
       try { localStorage.setItem(layoutKey, TEXT_EPUB_LAYOUT) } catch { /* 忽略 */ }
     }
+    applyPrefs(true) // A chapter may reveal vertical layout only after its stylesheet loads.
+    const initialAnchor = savedTypographyAnchor || getTypographyAnchor(view.lastLocation?.cfi || '')
+    await typographyLayoutReady(openedView, false)
+    if (initialAnchor && !bookTypographyContext.value.protectedLayout) await navigateReader(initialAnchor)
+    await typographyLayoutReady(openedView, false)
+    if (!readerContext.current(context)) return
     loading.value = false
+    if (view.lastLocation?.cfi) onRelocate(new CustomEvent('relocate', { detail: view.lastLocation }))
     if (flattenToc(toc.value).length <= 1) void applySmartToc()
   } catch (e: any) {
-    console.error(e)
-    if (readerContext.current(context)) error.value = e?.message ?? t('reader.cantOpenBook')
+    if (!bookOpened) typographyBookOwner.release()
+    if (readerContext.current(context)) { console.error(e); error.value = e?.message ?? t('reader.cantOpenBook') }
   } finally {
     if (readerContext.current(context)) loading.value = false
   }
@@ -3223,12 +3312,8 @@ onBeforeUnmount(() => {
   stopTTS()
   modes.dispose()
   dj.dispose()
-  // 背景音属于阅读场景, 离开阅读器即淡出停止
-  ambient.stop()
-  ambient.setPauseWhenHidden(null)
-  view?.close?.()
-  view?.remove()
-  view = null
+  try { view?.close?.() }
+  finally { typographyBookOwner.dispose(); view?.remove(); view = null }
 })
 
 let traversingBack = false
@@ -3279,7 +3364,7 @@ onBeforeRouteLeave(async () => {
       </div>
       <!-- 听书中且工具栏显示时, 胶囊收进顶栏中间 -->
       <div v-if="ttsChipInBar" class="tts-chip" role="group" :aria-label="t('tts.title')">
-        <button class="tts-chip-main" :title="t('tts.expandPanel')" @click="openTTSPanel">
+        <button class="tts-chip-main" :title="t('tts.expandPanel')" :aria-expanded="ttsPanel" @click="openTTSPanel">
           <span class="tts-mini-dot" :class="{ paused: ttsState === 'paused' }" />
           <span class="tts-chip-text">{{ ttsBuffering ? t('tts.buffering') : listenEta ? humanTime(listenEta.chapter) : (ttsState === 'playing' ? t('tts.reading') : t('tts.paused')) }}</span>
           <span v-if="settings.ttsRate !== 1" class="tts-chip-rate">{{ rateText(settings.ttsRate) }}</span>
@@ -3297,25 +3382,47 @@ onBeforeRouteLeave(async () => {
         </button>
       </div>
       <div class="bar-actions">
-        <button class="icon-btn reader-action-btn desk-only" :class="{ 'auto-on': panel === 'toc' }" :title="t('reader.toc')" :aria-label="t('reader.toc')" @click="togglePanel('toc')">
-          <AppIcon name="toc" :size="20" aria-hidden="true" />
+        <button class="icon-btn reader-action-btn" :class="{ 'auto-on': panel === 'toc' }" :title="t('reader.toc')" :aria-label="t('reader.toc')" :aria-expanded="panel === 'toc'" @click="togglePanel('toc')">
+          <AppIcon name="toc" :size="28" :emphasis="panel === 'toc'" aria-hidden="true" />
           <span class="btn-text">{{ t('reader.toc') }}</span>
         </button>
-        <button class="icon-btn reader-action-btn desk-only" :class="{ 'auto-on': settingsOpen }" :title="t('reader.typography')" :aria-label="t('reader.typography')" @click="toggleSettings">
-          <AppIcon name="typography" :size="20" aria-hidden="true" />
-          <span class="btn-text">{{ t('reader.dockTypography') }}</span>
-        </button>
-        <button class="icon-btn reader-action-btn desk-only" :class="{ 'auto-on': panel === 'annotations' }" :title="t('reader.annotationsBookmarks')" :aria-label="t('reader.annotationsBookmarks')" @click="togglePanel('annotations')">
-          <AppIcon name="notes" :size="20" aria-hidden="true" />
-          <span class="btn-text">{{ t('reader.dockNotes') }}</span>
-        </button>
-        <button class="icon-btn reader-action-btn" :class="{ 'auto-on': panel === 'search' }" :title="t('reader.searchInBook')" :aria-label="t('reader.searchInBook')" @click="togglePanel('search')">
-          <AppIcon name="search" :size="20" aria-hidden="true" />
+        <button class="icon-btn reader-action-btn" :class="{ 'auto-on': panel === 'search' }" :title="t('reader.searchInBook')" :aria-label="t('reader.searchInBook')" :aria-expanded="panel === 'search'" @click="togglePanel('search')">
+          <AppIcon name="searchInBook" :size="28" :emphasis="panel === 'search'" aria-hidden="true" />
           <span class="btn-text">{{ t('common.search') }}</span>
         </button>
-        <button class="icon-btn reader-action-btn" :class="{ 'auto-on': panel === 'ai' }" :title="t('ai.title')" :aria-label="t('ai.title')" @click="togglePanel('ai')">
-          <AppIcon name="ai" :size="20" aria-hidden="true" />
+        <button
+          class="icon-btn reader-action-btn"
+          :class="{ 'auto-on': isBookmarked }"
+          :title="isBookmarked ? t('reader.removeBookmark') : t('reader.bookmark')"
+          :aria-label="isBookmarked ? t('reader.removeBookmark') : t('reader.bookmark')"
+          :aria-pressed="isBookmarked"
+          @click="toggleBookmark"
+        >
+          <AppIcon :name="isBookmarked ? 'bookmark' : 'bookmarkBorder'" :size="28" :emphasis="isBookmarked" aria-hidden="true" />
+          <span class="btn-text">{{ t('reader.bookmark') }}</span>
+        </button>
+        <button class="icon-btn reader-action-btn" :class="{ 'auto-on': panel === 'annotations' }" :title="t('reader.annotationsBookmarks')" :aria-label="t('reader.annotationsBookmarks')" :aria-expanded="panel === 'annotations'" @click="togglePanel('annotations')">
+          <AppIcon name="annotations" :size="28" :emphasis="panel === 'annotations'" aria-hidden="true" />
+          <span class="btn-text">{{ t('reader.dockNotes') }}</span>
+        </button>
+        <button class="icon-btn reader-action-btn" :class="{ 'auto-on': panel === 'ai' }" :title="t('ai.title')" :aria-label="t('ai.title')" :aria-expanded="panel === 'ai'" @click="togglePanel('ai')">
+          <AppIcon name="ai" :size="28" :emphasis="panel === 'ai'" aria-hidden="true" />
           <span class="btn-text">{{ t('ai.title') }}</span>
+        </button>
+        <button
+          class="icon-btn reader-action-btn"
+          :class="{ 'auto-on': ttsPanel || ttsState !== 'stopped' }"
+          :title="t('tts.title')"
+          :aria-label="t('tts.title')"
+          :aria-expanded="ttsPanel"
+          @click="openTTSPanel"
+        >
+          <AppIcon name="audio" :size="28" :emphasis="ttsPanel || ttsState !== 'stopped'" aria-hidden="true" />
+          <span class="btn-text">{{ t('tts.title') }}</span>
+        </button>
+        <button class="icon-btn reader-action-btn" :class="{ 'auto-on': settingsOpen }" :title="t('reader.typography')" :aria-label="t('reader.typography')" :aria-expanded="settingsOpen" @click="toggleSettings">
+          <AppIcon name="typography" :size="28" :emphasis="settingsOpen" aria-hidden="true" />
+          <span class="btn-text">{{ t('reader.dockTypography') }}</span>
         </button>
         <div class="reader-more-wrap">
           <button
@@ -3326,44 +3433,17 @@ onBeforeRouteLeave(async () => {
             :aria-expanded="readerMoreOpen"
             @click="toggleReaderMore"
           >
-            <AppIcon name="more" :size="20" aria-hidden="true" />
+            <AppIcon name="more" :size="28" aria-hidden="true" />
             <span class="btn-text">{{ t('common.more') }}</span>
           </button>
           <div v-if="readerMoreOpen" class="reader-more-menu card" role="menu">
             <button
               role="menuitem"
               class="reader-more-item"
-              :class="{ 'auto-on': isBookmarked }"
-              @click="toggleBookmark(); readerMoreOpen = false"
-            >
-              <AppIcon :name="isBookmarked ? 'bookmark' : 'bookmarkBorder'" :size="18" aria-hidden="true" />
-              <span>{{ isBookmarked ? t('reader.removeBookmark') : t('reader.addBookmark') }}</span>
-            </button>
-            <button
-              role="menuitem"
-              class="reader-more-item"
-              :class="{ 'auto-on': ttsState !== 'stopped' }"
-              @click="openTTSPanel(); readerMoreOpen = false"
-            >
-              <AppIcon name="audio" :size="18" aria-hidden="true" />
-              <span>{{ t('tts.title') }}</span>
-            </button>
-            <button
-              role="menuitem"
-              class="reader-more-item"
-              :class="{ 'auto-on': ambientPanel || ambient.state.playing }"
-              @click="toggleAmbientPanel(); readerMoreOpen = false"
-            >
-              <AppIcon name="audio" :size="18" aria-hidden="true" />
-              <span>{{ t('ambient.title') }}</span>
-            </button>
-            <button
-              role="menuitem"
-              class="reader-more-item"
               :class="{ 'auto-on': readingModeActive }"
               @click="modes.togglePanel(); readerMoreOpen = false"
             >
-              <AppIcon name="reading" :size="18" aria-hidden="true" />
+              <AppIcon name="readingModes" :size="28" :emphasis="readingModeActive || modes.panelOpen.value" aria-hidden="true" />
               <span>{{ t('readingMode.title') }}</span>
             </button>
             <button
@@ -3372,7 +3452,7 @@ onBeforeRouteLeave(async () => {
               :class="{ 'auto-on': isFullscreen }"
               @click="toggleFullscreen(); readerMoreOpen = false"
             >
-              <AppIcon :name="isFullscreen ? 'fullscreenExit' : 'fullscreen'" :size="18" aria-hidden="true" />
+              <AppIcon :name="isFullscreen ? 'fullscreenExit' : 'fullscreen'" :size="28" aria-hidden="true" />
               <span>{{ isFullscreen ? t('reader.exitFullscreen') : t('reader.fullscreen') }}</span>
             </button>
           </div>
@@ -3381,7 +3461,8 @@ onBeforeRouteLeave(async () => {
     </header>
 
     <!-- 正文 -->
-    <div ref="container" class="content" />
+    <div ref="container" class="content" :style="{ '--pw-extra-bottom': `${typographyBottomInset}px` }" :class="{ 'typography-loading': loading }" :aria-busy="loading" />
+    <p v-if="typographyFontWarning" class="typography-font-warning" role="status">{{ t('reader.typographyFontFallback') }}</p>
 
     <div v-if="loading" class="state">{{ t('reader.opening') }}</div>
     <div v-if="error" class="state">
@@ -3447,28 +3528,6 @@ onBeforeRouteLeave(async () => {
           <span v-if="showPercent" class="pct">{{ percentText }}</span>
         </button>
       </div>
-      <nav class="dock" :aria-label="t('reader.readerTools')">
-        <button :class="{ active: panel === 'toc' }" @click="togglePanel('toc')">
-          <AppIcon name="toc" :size="22" aria-hidden="true" />
-          <span>{{ t('reader.toc') }}</span>
-        </button>
-        <button :class="{ active: panel === 'annotations' }" @click="togglePanel('annotations')">
-          <AppIcon name="notes" :size="22" aria-hidden="true" />
-          <span>{{ t('reader.dockNotes') }}</span>
-        </button>
-        <button :class="{ active: ttsPanel || ttsState !== 'stopped' }" @click="openTTSPanel">
-          <AppIcon name="audio" :size="22" aria-hidden="true" />
-          <span>{{ t('tts.title') }}</span>
-        </button>
-        <button :class="{ active: readingModeActive }" :aria-label="t('readingMode.title')" @click="modes.togglePanel()">
-          <AppIcon name="reading" :size="22" aria-hidden="true" />
-          <span>{{ t('readingMode.dock') }}</span>
-        </button>
-        <button :class="{ active: settingsOpen }" @click="toggleSettings">
-          <AppIcon name="typography" :size="22" aria-hidden="true" />
-          <span>{{ t('reader.dockTypography') }}</span>
-        </button>
-      </nav>
     </footer>
 
     <!-- 手机端面板为底部抽屉, 点遮罩收起 -->
@@ -3514,6 +3573,7 @@ onBeforeRouteLeave(async () => {
 
     <!-- 阅读模式: 自动翻页 / 打字机 -->
     <ReadingModePanel
+      :presentation-suppressed="publicationBaseline"
       v-if="modes.panelOpen.value"
       :modes="modes"
       :progress="typewriterProgress"
@@ -3649,14 +3709,6 @@ onBeforeRouteLeave(async () => {
       <button v-if="listenDetached" class="tts-mini-btn" :title="t('tts.backToListening')" :aria-label="t('tts.backToListening')" @pointerdown.stop @click.stop="returnToListening"><svg viewBox="0 0 24 24" width="14" height="14" aria-hidden="true"><path fill="currentColor" d="M12 2a1 1 0 0 1 1 1v1.06A8 8 0 0 1 19.94 11H21a1 1 0 1 1 0 2h-1.06A8 8 0 0 1 13 19.94V21a1 1 0 1 1-2 0v-1.06A8 8 0 0 1 4.06 13H3a1 1 0 1 1 0-2h1.06A8 8 0 0 1 11 4.06V3a1 1 0 0 1 1-1zm0 4a6 6 0 1 0 0 12 6 6 0 0 0 0-12zm0 3a3 3 0 1 1 0 6 3 3 0 0 1 0-6z"/></svg></button>
       <button class="tts-mini-btn" :title="t('common.stop')" :aria-label="t('common.stop')" @pointerdown.stop @click.stop="stopTTS()"><svg viewBox="0 0 24 24" width="14" height="14" aria-hidden="true"><rect x="6.5" y="6.5" width="11" height="11" rx="2" fill="currentColor"/></svg></button>
     </div>
-
-    <!-- 背景音 -->
-    <AmbientPanel
-      v-if="ambientPanel"
-      :tts-active="ttsState === 'playing'"
-      @close="ambientPanel = false"
-      @show-sources="showAmbientSources"
-    />
 
     <!-- 听书面板 -->
     <div v-if="ttsPanel" class="tts-panel card" role="dialog" :aria-label="t('tts.title')">
@@ -3909,7 +3961,8 @@ onBeforeRouteLeave(async () => {
       :portrait-locked="readerLayout.portraitLocked"
       :focus="typoFocus"
       :book-id="bookId"
-      :book-language="meta?.language"
+      :book-language="bookTypographyContext.language"
+      :context="bookTypographyContext"
       :book-title="meta?.title"
       :initial-typography="effectiveTypography"
       :apply-typography="applyTypography"
@@ -3920,6 +3973,8 @@ onBeforeRouteLeave(async () => {
 </template>
 
 <style scoped>
+.typography-loading { visibility: hidden; }
+.typography-font-warning { position: absolute; top: calc(56px + var(--safe-top)); left: 12px; right: 12px; z-index: 16; background: var(--card); color: var(--text); border: 1px solid var(--border); padding: 8px; font-size: 12px; pointer-events: none; }
 .reader {
   /* 底栏高度: 浮层 (自动阅读 / 听书胶囊) 在工具栏显示时让到它上方 */
   --footer-h: 64px;
@@ -4040,7 +4095,7 @@ onBeforeRouteLeave(async () => {
   border: none;
   background: none;
   border-radius: 6px;
-  color: var(--text-2);
+  color: var(--text);
   display: inline-flex;
   align-items: center;
   justify-content: center;
@@ -4053,6 +4108,36 @@ onBeforeRouteLeave(async () => {
 .btn-text {
   font-size: 14px;
   white-space: nowrap;
+}
+.reader-action-btn {
+  position: relative;
+  flex-direction: column;
+  gap: 4px;
+  min-width: 56px;
+  min-height: 64px;
+  padding: 6px 8px;
+}
+.reader-action-btn .btn-text {
+  font-size: 13px;
+  line-height: 1.5;
+  white-space: normal;
+  text-align: center;
+}
+.reader-action-btn.auto-on::after {
+  content: '';
+  position: absolute;
+  bottom: 0;
+  left: 50%;
+  width: 24px;
+  height: 3px;
+  transform: translateX(-50%);
+  background: var(--text);
+}
+.reader-action-btn:focus-visible,
+.dock button:focus-visible {
+  outline: 2px solid var(--text);
+  outline-offset: -2px;
+  box-shadow: none;
 }
 .reader-more-wrap {
   position: relative;
@@ -4094,12 +4179,12 @@ onBeforeRouteLeave(async () => {
 }
 .reader-more-item:focus-visible { outline: 2px solid var(--brand); outline-offset: -2px; }
 .reader-more-item.auto-on {
-  color: var(--brand);
-  font-weight: 600;
+  color: var(--text);
+  font-weight: 700;
 }
 .icon-btn:hover {
   background: var(--bg);
-  color: var(--brand);
+  color: var(--text);
 }
 .inspection-bar {
   position: absolute;
@@ -4122,7 +4207,7 @@ onBeforeRouteLeave(async () => {
 .content {
   flex: 1;
   height: 100%;
-  padding: var(--safe-top) var(--lr-safe-right) var(--safe-bottom) var(--lr-safe-left);
+  padding: var(--safe-top) var(--lr-safe-right) calc(var(--safe-bottom) + var(--pw-extra-bottom, 0px)) var(--lr-safe-left);
 }
 .state {
   position: absolute;
@@ -4310,7 +4395,8 @@ onBeforeRouteLeave(async () => {
   background: var(--brand-light);
 }
 .icon-btn.auto-on {
-  color: var(--brand);
+  color: var(--text);
+  font-weight: 700;
 }
 .highlight-bar {
   position: absolute;
@@ -4558,18 +4644,6 @@ onBeforeRouteLeave(async () => {
   font-weight: 600;
   font-variant-numeric: tabular-nums;
   cursor: pointer;
-}
-.ambient-btn {
-  position: relative;
-}
-.ambient-dot {
-  position: absolute;
-  top: 6px;
-  right: 6px;
-  width: 6px;
-  height: 6px;
-  border-radius: 50%;
-  background: var(--brand);
 }
 .tts-head {
   display: flex;
@@ -5062,7 +5136,7 @@ onBeforeRouteLeave(async () => {
     padding: 0 4px;
   }
   .reader {
-    --footer-h: 148px;
+    --footer-h: 68px;
   }
   .chapter,
   .desk-only {
@@ -5073,8 +5147,34 @@ onBeforeRouteLeave(async () => {
     padding-inline: max(8px, var(--lr-safe-left)) max(8px, var(--lr-safe-right));
   }
   .bar.top {
+    flex-wrap: wrap;
+    gap: 4px;
     padding-top: calc(6px + var(--safe-top));
     padding-bottom: 6px;
+  }
+  .bar-actions {
+    flex-wrap: wrap;
+    gap: 2px;
+  }
+  .bar-actions > .reader-action-btn,
+  .bar-actions .reader-more-wrap {
+    flex: 1 1 calc(25% - 4px);
+    min-width: 48px;
+    min-height: 48px;
+    max-width: calc(25% - 2px);
+    padding: 4px 2px;
+    box-sizing: border-box;
+  }
+  .bar-actions .reader-more-wrap .reader-more-btn {
+    width: 100%;
+    min-width: 48px;
+    min-height: 48px;
+    padding: 4px 2px;
+    box-sizing: border-box;
+  }
+  .bar-actions .btn-text {
+    font-size: 13px;
+    line-height: 1.5;
   }
   .icon-btn {
     width: auto;
@@ -5083,7 +5183,7 @@ onBeforeRouteLeave(async () => {
     padding: 8px 10px;
     border-radius: 10px;
   }
-  .chapter-btn { width: 76px; min-width: 76px; min-height: 60px; flex-direction: column; gap: 2px; padding: 6px 4px; font-size: 12px; line-height: 1.2; white-space: normal; }
+  .chapter-btn { width: 76px; min-width: 76px; min-height: 60px; flex-direction: column; gap: 2px; padding: 6px 4px; font-size: 12px; line-height: 1.5; white-space: normal; }
   .chapter-btn .btn-text { max-width: 100%; font-size: 12px; white-space: normal; overflow-wrap: anywhere; text-align: center; }
   .icon-btn:hover {
     background: none;
@@ -5123,14 +5223,15 @@ onBeforeRouteLeave(async () => {
     display: flex;
   }
   .dock button {
+    position: relative;
     flex: 1;
     min-width: 0;
     min-height: 64px;
-    padding: 4px 2px;
+    padding: 4px 0;
     border: none;
     border-radius: 10px;
     background: none;
-    color: var(--text-2);
+    color: var(--text);
     display: flex;
     flex-direction: column;
     align-items: center;
@@ -5144,7 +5245,18 @@ onBeforeRouteLeave(async () => {
     background: var(--surface-2);
   }
   .dock button.active {
-    color: var(--brand);
+    color: var(--text);
+    font-weight: 700;
+  }
+  .dock button.active::after {
+    content: '';
+    position: absolute;
+    bottom: 0;
+    left: 50%;
+    transform: translateX(-50%);
+    width: 24px;
+    height: 3px;
+    background: var(--text);
   }
 
   /* 面板改为底部抽屉 */

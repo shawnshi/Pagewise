@@ -1,0 +1,202 @@
+{
+  "project": "知页 · Pagewise",
+  "version": "1.0.0",
+  "status": "visual_design_ready_for_device_review",
+  "requested_menu_count": 13,
+  "base_icon_count": 14,
+  "reason_for_extra_icon": "原“书类搜索”含义有歧义，分别提供书内搜索与书库搜索。",
+  "tokens": {
+    "viewBox": [
+      0,
+      0,
+      24,
+      24
+    ],
+    "normal_stroke": 2,
+    "emphasis_stroke": 2.25,
+    "linecap": "round",
+    "linejoin": "round",
+    "color": "currentColor",
+    "default_color": "#000000",
+    "background": "transparent",
+    "primary_navigation_size_css_px": 28,
+    "reader_tool_size_css_px": 28,
+    "touch_target_min_css_px": 48,
+    "physical_touch_target_goal_mm": [
+      9,
+      10
+    ],
+    "physical_size_note": "CSS像素需要按设备密度及缩放标定，48CSSpx不能保证实际为9毫米。"
+  },
+  "navigation": {
+    "primary": [
+      "library",
+      "currently-reading",
+      "notes"
+    ],
+    "secondary": [
+      "reading-history",
+      "settings"
+    ],
+    "reader_tools_rows": [
+      [
+        "table-of-contents",
+        "search-in-book",
+        "annotations",
+        "bookmarks"
+      ],
+      [
+        "read-aloud",
+        "reading-assistant",
+        "reading-modes",
+        "typography"
+      ]
+    ]
+  },
+  "state_policy": {
+    "normal": "黑色轮廓与清晰文字；常规态不依靠浅灰表达未选中。",
+    "selected_navigation": "emphasis轮廓＋文字加粗＋底部黑色短线或实边框，三个视觉线索共同表达；不要仅增加0.25线宽。",
+    "opened_panel": "按钮使用aria-expanded，图标可用emphasis；不要把所有工具按钮都当作可切换开关。",
+    "bookmark_toggle": "菜单书签打开列表；当前页书签动作用独立按钮。marked图标表示已加入，并将按钮文案改为“移除书签”。",
+    "loading": "文字状态＋静态标志；避免持续旋转或闪烁。",
+    "disabled": "保留标签并解释不可用原因；不只靠颜色区分。"
+  },
+  "icons": [
+    {
+      "id": "library",
+      "original_label": "藏书",
+      "recommended_label": "书库",
+      "group": "主导航",
+      "metaphor": "三册书脊",
+      "purpose": "全部书籍和书单入口，外部书目与本地文件以状态区分。",
+      "order": 1
+    },
+    {
+      "id": "currently-reading",
+      "original_label": "在读",
+      "recommended_label": "在读",
+      "group": "主导航",
+      "metaphor": "展开的书页",
+      "purpose": "正在阅读的书和继续阅读入口；按钮文案使用“继续阅读”。",
+      "order": 2
+    },
+    {
+      "id": "notes",
+      "original_label": "笔记",
+      "recommended_label": "笔记",
+      "group": "主导航",
+      "metaphor": "带装订线的笔记本",
+      "purpose": "跨书汇总笔记；可按书籍、标签或时间筛选。",
+      "order": 3
+    },
+    {
+      "id": "reading-history",
+      "original_label": "阅读记录",
+      "recommended_label": "阅读记录",
+      "group": "次级入口",
+      "metaphor": "回转箭头与时钟",
+      "purpose": "阅读时段、完成历史和阅读统计；若只展示最近打开清单，则命名“最近阅读”。",
+      "order": 4
+    },
+    {
+      "id": "settings",
+      "original_label": "设置",
+      "recommended_label": "设置",
+      "group": "次级入口",
+      "metaphor": "齿轮",
+      "purpose": "账号、数据、设备及全局默认值；本书排版留在阅读器内。",
+      "order": 5
+    },
+    {
+      "id": "table-of-contents",
+      "original_label": "目录",
+      "recommended_label": "目录",
+      "group": "阅读工具",
+      "metaphor": "分级条目列表",
+      "purpose": "本书章节结构与定位；面板可展示二级、三级标题。",
+      "order": 6
+    },
+    {
+      "id": "annotations",
+      "original_label": "划线想法",
+      "recommended_label": "批注",
+      "group": "阅读工具",
+      "metaphor": "标记笔与下划线",
+      "purpose": "本书的划线和附着原文的想法；面板内使用“划线”“想法”筛选。",
+      "order": 7
+    },
+    {
+      "id": "bookmarks",
+      "original_label": "书签",
+      "recommended_label": "书签",
+      "group": "阅读工具",
+      "metaphor": "书签带",
+      "purpose": "菜单打开本书书签列表；当前页添加与移除书签是独立动作。",
+      "order": 8
+    },
+    {
+      "id": "read-aloud",
+      "original_label": "听书",
+      "recommended_label": "朗读",
+      "group": "阅读工具",
+      "metaphor": "耳机与文字",
+      "purpose": "当前电子书的文字转语音。以后接入专业有声书时，可单独设置“听书”。",
+      "order": 9
+    },
+    {
+      "id": "reading-assistant",
+      "original_label": "ai助手",
+      "recommended_label": "阅读助手",
+      "group": "阅读工具",
+      "metaphor": "对话气泡与四角光点",
+      "purpose": "解释、问答、总结与内容分析；面板标题可标明“阅读助手 · AI”。",
+      "order": 10
+    },
+    {
+      "id": "search-in-book",
+      "original_label": "书类搜索",
+      "recommended_label": "书内搜索",
+      "group": "阅读工具",
+      "metaphor": "书页与放大镜",
+      "purpose": "按阅读场景理解原名称，搜索当前书全文；书库搜书另用search-library。",
+      "order": 11
+    },
+    {
+      "id": "reading-modes",
+      "original_label": "阅读模式",
+      "recommended_label": "阅读模式",
+      "group": "阅读工具",
+      "metaphor": "双栏阅读页面",
+      "purpose": "翻页、滚动、单双栏和专注等阅读方式；工具栏短标签为“模式”。",
+      "order": 12
+    },
+    {
+      "id": "typography",
+      "original_label": "排版",
+      "recommended_label": "排版",
+      "group": "阅读工具",
+      "metaphor": "字母A与排版行",
+      "purpose": "字体、字号、字重、行段距、字距、边距与对齐；面板标题为“排版设置”。",
+      "order": 13
+    },
+    {
+      "id": "search-library",
+      "original_label": "书库搜索（补充）",
+      "recommended_label": "搜索书籍",
+      "group": "上下文入口",
+      "metaphor": "放大镜",
+      "purpose": "书库全局搜书，可切换书名、作者、标签；若原“书类搜索”指此场景，使用本项。",
+      "order": 14
+    }
+  ],
+  "validation": {
+    "completed": [
+      "SVG XML检查",
+      "24/28/32像素栅格预览",
+      "小尺寸及菜单语义人工审查"
+    ],
+    "pending": [
+      "NoteX3 Pro真机残影、触区物理尺寸和用户辨识检查"
+    ]
+  }
+}

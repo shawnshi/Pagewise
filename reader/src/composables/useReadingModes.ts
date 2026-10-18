@@ -140,6 +140,7 @@ export interface UseReadingModesOptions {
   pingReadingAuto: () => void
   /** 界面是否为深色外观 (正文主题 auto 时夜间开关的判定) */
   appDark?: () => boolean
+  presentationSuppressed?: () => boolean
   /** 打字机开始前调用: 停止自动翻页、暂停听书 */
   onExclusiveStart?: () => void
   isAutoReading?: () => boolean
@@ -300,7 +301,7 @@ export function useReadingModes(opts: UseReadingModesOptions) {
   const dimLevel = computed(() => clampDim(settings.readingMode.eyeCare.dim))
   /** 调暗遮罩 (阅读器正文之上, pointer-events:none); 0 时为 null */
   const dimOverlayStyle = computed(() => {
-    if (settings.readingMode.eink.enabled) return null
+    if (opts.presentationSuppressed?.() || settings.readingMode.eink.enabled) return null
     const bg = dimBackground(dimLevel.value)
     return bg ? { background: bg } : null
   })
@@ -507,6 +508,7 @@ export function useReadingModes(opts: UseReadingModesOptions) {
 
   /** 开始打字机 (从本页开始); 互斥: 停自动翻页、暂停听书 */
   function start(): boolean {
+    if (opts.presentationSuppressed?.()) return false
     refreshBookInfo()
     if (!supported.value) {
       toast(t('readingMode.fixedLayoutUnsupported'), 'error')
@@ -598,6 +600,7 @@ export function useReadingModes(opts: UseReadingModesOptions) {
   // 打开任何面板 / 浮层时暂停 (WCAG 2.2.2: 移动内容可暂停, 且不在用户看别处时继续跑)
   watch(panelOpen, open => { if (open) pause() })
   if (opts.pauseWhen) watch(() => opts.pauseWhen!(), v => { if (v) pause() })
+  if (opts.presentationSuppressed) watch(() => opts.presentationSuppressed!(), value => { if (value) stop() })
 
   watch(
     () => [tw.value.unit, tw.value.upcoming, tw.value.punctuationPause, tw.value.freshInk, tw.value.pageDwellMs, speed.value, reducedMotion.value],
@@ -630,9 +633,9 @@ export function useReadingModes(opts: UseReadingModesOptions) {
   const forceSingleColumn = computed(() => largeTextOn.value)
 
   /** 传给 getReaderCSS / resolveReaderColors 的附加样式 */
-  const readerStyle = computed<ReaderModeStyle>(() => ({ eink: einkActive.value, largeText: largeTextOn.value, wordGuideIntensity: guideIntensity(settings.readingMode.wordGuide), wordGuideColor: settings.readingMode.wordGuide.color }))
+  const readerStyle = computed<ReaderModeStyle>(() => ({ publication: !!opts.presentationSuppressed?.(), eink: einkActive.value, largeText: largeTextOn.value, wordGuideIntensity: guideIntensity(settings.readingMode.wordGuide), wordGuideColor: settings.readingMode.wordGuide.color }))
   /** 影响排版 / 样式的模式状态: 阅读器 watch 它来重新 applyPrefs */
-  const renderKey = computed(() => `${einkActive.value ? 1 : 0}${largeTextOn.value ? 1 : 0}${forceSingleColumn.value ? 1 : 0}|${guideIntensity(settings.readingMode.wordGuide).toFixed(2)}|${settings.readingMode.wordGuide.color ?? ''}`)
+  const renderKey = computed(() => `${opts.presentationSuppressed?.() ? 'p' : ''}${einkActive.value ? 1 : 0}${largeTextOn.value ? 1 : 0}${forceSingleColumn.value ? 1 : 0}|${guideIntensity(settings.readingMode.wordGuide).toFixed(2)}|${settings.readingMode.wordGuide.color ?? ''}`)
   /** 阅读器根元素的类名 (样式在 ReadingModeLayer.vue 里) */
   const shellClass = computed(() => ({
     'lr-eink': einkActive.value,
@@ -662,7 +665,7 @@ export function useReadingModes(opts: UseReadingModesOptions) {
    * 基础版选了重点词但这本书不是中文: 改画词与词 (面板上说明一次)。
    */
   const guideKind = computed<'off' | 'boundary' | 'keywords' | 'smart'>(() => {
-    if (!supported.value) return 'off'
+    if (!supported.value || opts.presentationSuppressed?.()) return 'off'
     const level = normalizeLevel(settings.dianjing.level)
     if (level === 'basic') {
       if (!settings.readingMode.wordGuide.enabled) return 'off'

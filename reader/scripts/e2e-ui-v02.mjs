@@ -14,7 +14,7 @@ const fixtures = resolve(root, '../.cache/ui-v02-20261017-01/fixtures')
 mkdirSync(artifacts, { recursive: true })
 const port = 4189, base = `http://127.0.0.1:${port}`
 const report = { status: 'RUNNING', syntheticOnly: true, nativeDeviceTested: false, checks: [], blockedExternalOrigins: [], pageErrors: [], screenshots: [] }
-const server = spawn(process.execPath, ['node_modules/vite/bin/vite.js', 'preview', '--host', '127.0.0.1', '--port', String(port), '--strictPort'], { cwd: root, stdio: ['ignore','pipe','pipe'] })
+const server = spawn(process.execPath, ['node_modules/vite/bin/vite.js', 'preview', '--configLoader', 'runner', '--host', '127.0.0.1', '--port', String(port), '--strictPort'], { cwd: root, stdio: ['ignore','pipe','pipe'] })
 let serverLog = '', browser, page, context
 const t = key => zh[key]
 async function step(name, fn) {
@@ -78,7 +78,7 @@ try {
     return route.continue()
   })
   await context.addInitScript(()=>{
-    if(!localStorage.getItem('lightread-settings'))localStorage.setItem('lightread-settings',JSON.stringify({language:'zh',version:14,appearance:'dark',usageStats:false,readingMode:{eink:{enabled:true}},reader:{theme:'light',flow:'paginated',portraitScroll:false},dianjing:{enabled:false},sync:{autoSync:false}}))
+    if(!localStorage.getItem('lightread-settings'))localStorage.setItem('lightread-settings',JSON.stringify({language:'zh',version:14,appearance:'dark',readingMode:{eink:{enabled:true}},reader:{theme:'light',flow:'paginated',portraitScroll:false},dianjing:{enabled:false},sync:{autoSync:false}}))
   })
   page=await context.newPage()
   page.setDefaultTimeout(8000)

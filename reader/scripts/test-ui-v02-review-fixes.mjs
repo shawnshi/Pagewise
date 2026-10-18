@@ -26,9 +26,9 @@ function loadActualModule(source, globals) {
   return context.module.exports
 }
 const { prepareClassificationUpdates, rejectClassificationPatch, validatedBookClassification } = loadActualModule(
-  readFileSync(new URL('../src/services/bookTagActions.ts', import.meta.url), 'utf8'), classification,
+  readFileSync(new URL('../src/services/bookTagActions.ts', import.meta.url), 'utf8'),
+  { ...classification, structuredClone },
 )
-
 function sqlAdapter(db, fault = () => {}) {
   const bindings = values => Object.fromEntries(values.map((value, i) => [`$${i + 1}`, value]))
   return {
@@ -50,13 +50,13 @@ function nativeStorage(db, fault) {
   const { TauriStorage } = loadActualModule(source, {
     __nativeSql: { default: { load: async () => sqlAdapter(db, fault) } },
     __nativeFs: { BaseDirectory: { AppData: 1 }, exists: async () => true, writeFile: async () => {}, mkdir: async () => {}, remove: async () => {} },
-    BUILTIN_SOURCES: [], getLibraryRoot: () => '', newId: () => `synthetic-${++id}`, isReadingStatus, normalizeReadingStatus, validateAvailability, validateSourceRef, Uint8Array,
+    BUILTIN_SOURCES: [], getLibraryRoot: () => '', newId: () => `synthetic-${++id}`, isReadingStatus, normalizeReadingStatus, validateAvailability, validateSourceRef, Uint8Array, structuredClone,
     prepareClassificationUpdates, rejectClassificationPatch, validatedBookClassification, parseClassification,
   })
   return new TauriStorage()
 }
 function legacySchema(db) {
-  const ddl = tauriSource.match(/await this\.db\.execute\(`([\s\S]*?)`\)/)[1].replace(/^\s*reading_status TEXT,?\r?\n/gm, '')
+  const ddl = tauriSource.match(/await this\.db\.execute\(`([\s\S]*?)`\)/)[1].replace(/^\s*(?:reading_status|classification) TEXT,?\r?\n/gm, '')
   db.exec(ddl)
   db.exec("INSERT INTO books(id,title,author,format,file_name,tags,added_at,location,progress) VALUES ('legacy','Synthetic legacy','Fixture','epub','fixture.epub','[\"fixture\"]',1,'synthetic-cfi',0.65)")
 }
@@ -76,9 +76,9 @@ test('native SQLite reading states survive insert, update, list and an actual cl
   try {
     let storage = nativeStorage(db)
     await storage.init()
-    const bookId = await storage.addBook({ ...newBook, readingStatus: 'wanted' }, new Blob(['synthetic']))
-    assert.equal((await storage.getBook(bookId)).readingStatus, 'wanted')
-    for (const status of ['reading', 'finished', 'paused']) {
+    const bookId = await storage.addBook({ ...newBook, readingStatus: 'unmarked' }, new Blob(['synthetic']))
+    assert.equal((await storage.getBook(bookId)).readingStatus, 'unmarked')
+    for (const status of ['wanted', 'abandoned', 'reading', 'finished', 'paused']) {
       await storage.updateBook(bookId, { readingStatus: status })
       assert.equal((await storage.listBooks())[0].readingStatus, status)
     }

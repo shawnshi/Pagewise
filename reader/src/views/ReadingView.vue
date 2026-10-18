@@ -114,7 +114,7 @@ function getProgress(book: BookMeta) {
           :aria-selected="currentTab === 'paused'"
           @click="currentTab = 'paused'"
         >
-          {{ t("uiV02.copy.搁置 (") }}{{ pausedBooks.length }})
+          {{ t('uiV02.status.paused') }} ({{ pausedBooks.length }})
         </button>
         <button
           type="button"
@@ -124,7 +124,7 @@ function getProgress(book: BookMeta) {
           :aria-selected="currentTab === 'finished'"
           @click="currentTab = 'finished'"
         >
-          {{ t("uiV02.copy.已读完 (") }}{{ finishedBooks.length }})
+          {{ t('uiV02.status.finished') }} ({{ finishedBooks.length }})
         </button>
       </nav>
     </header>

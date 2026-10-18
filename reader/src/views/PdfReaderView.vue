@@ -2,8 +2,9 @@
 import { AUTO_SPEED_LEVELS, AUTO_SPEED_STEPS, speedPosition, secondsAtPosition } from '../services/autoReadSpeed'
 import LevelSlider from '../components/LevelSlider.vue'
 import AppIcon from '../components/AppIcon.vue'
+import PdfReadingAssistant from '../components/PdfReadingAssistant.vue'
+import { PDF_AI_CONTEXT_LIMIT } from '../services/pdfReadingAssistant'
 import { TTS_RATE_MAX, TTS_RATE_MIN, TTS_RATE_STOPS, rateText } from '../services/ttsRate'
-import { pingUsage } from '../services/usageStats'
 import { computed, nextTick, onBeforeUnmount, onMounted, ref, watch } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 import { getStorage, isTauri, type BookMeta, type AnnotationRec } from '../storage'
@@ -76,6 +77,7 @@ const thumbnailScroller = ref<HTMLElement>()
 const pdfOpenInput = ref<HTMLInputElement>()
 let openingPdf = false
 let readerAlive = true
+let pdfPositionReady = false
 
 /** PDFium 交互引擎：几何选择、链接、目录、文本与段落提取。 */
 let pdm: PdfiumDoc | null = null
@@ -979,7 +981,9 @@ watch(currentPage, cur => {
 
 function onPageSettled() {
   clearTimeout(saveTimer)
+  if (!readerAlive || !pdfPositionReady) return
   saveTimer = setTimeout(() => {
+    if (!readerAlive || !pdfPositionReady) return
     library.saveProgress(bookId, String(currentPage.value), pageCount.value ? currentPage.value / pageCount.value : 0)
   }, 400)
 }
@@ -1392,6 +1396,17 @@ function decodeLoc(cfi: string): { page: number; rects: HlRect[] } | null {
 }
 
 const highlights = computed(() => annotations.value.filter(a => a.kind !== 'bookmark'))
+const pdfBookmarks = computed(() => annotations.value.filter(a => a.kind === 'bookmark').sort((a, b) => (decodeLoc(a.cfi)?.page ?? Infinity) - (decodeLoc(b.cfi)?.page ?? Infinity)))
+const isPdfBookmarked = computed(() => pdfBookmarks.value.some(a => decodeLoc(a.cfi)?.page === currentPage.value))
+const bookmarkBusy = ref(false)
+const bookmarkError = ref('')
+let bookmarkMutation: Promise<void> | null = null
+const pdfAiOpen = ref(false)
+const pdfAiPage = ref(1)
+const pdfAiText = ref('')
+const pdfAiSourceBusy = ref(false)
+const pdfAiSourceError = ref('')
+let pdfAiTextEpoch = 0
 
 /** 按页索引的高亮矩形 (模板渲染用) */
 const pageHls = computed(() => {
@@ -2075,6 +2090,109 @@ async function removeAnnotation(a: AnnotationRec) {
   await storage.deleteAnnotation(a.id)
   annotations.value = annotations.value.filter(x => x.id !== a.id)
   activeAnnotation.value = null
+}
+
+async function editPdfBookmark(edit: () => Promise<void>) {
+  if (bookmarkBusy.value || loading.value || error.value || !pageCount.value) return
+  if (activeAnnotation.value) { toast(t('reader.pdfFinishNote'), 'info'); return }
+  bookmarkBusy.value = true
+  bookmarkError.value = ''
+  const pending = edit().catch(cause => {
+    if (!readerAlive) return
+    bookmarkError.value = cause instanceof Error ? cause.message : t('common.saveFailed')
+    toast(bookmarkError.value, 'error')
+  })
+  bookmarkMutation = pending
+  try { await pending } finally {
+    if (bookmarkMutation === pending) bookmarkMutation = null
+    if (readerAlive) bookmarkBusy.value = false
+  }
+}
+
+function togglePdfBookmark() {
+  const page = currentPage.value
+  if (!Number.isSafeInteger(page) || page < 1 || page > pageCount.value) return
+  return editPdfBookmark(async () => {
+    const storage = await getStorage()
+    const stored = await storage.listAnnotations(bookId)
+    const existing = stored.find(a => a.kind === 'bookmark' && decodeLoc(a.cfi)?.page === page)
+    if (existing) {
+      await storage.deleteAnnotation(existing.id)
+      if (readerAlive) {
+        annotations.value = annotations.value.filter(a => a.id !== existing.id)
+        toast(t('reader.bookmarkRemoved'))
+      }
+    } else {
+      const value: Omit<AnnotationRec, 'id'> = { bookId, kind: 'bookmark', cfi: encodeLoc(page, []), text: t('reader.pdfBookmarkPage', { page }), color: 'yellow', createdAt: Date.now() }
+      const id = await storage.addAnnotation(value)
+      if (readerAlive) {
+        annotations.value.push({ ...value, id })
+        toast(t('reader.bookmarkAdded'), 'success')
+      }
+    }
+  })
+}
+
+function removePdfBookmark(bookmark: AnnotationRec) {
+  return editPdfBookmark(async () => {
+    const storage = await getStorage()
+    await storage.deleteAnnotation(bookmark.id)
+    if (readerAlive) annotations.value = annotations.value.filter(a => a.id !== bookmark.id)
+  })
+}
+
+function gotoPdfBookmark(bookmark: AnnotationRec) {
+  const loc = decodeLoc(bookmark.cfi)
+  if (!loc || !Number.isSafeInteger(loc.page) || loc.page < 1 || loc.page > pageCount.value) return
+  pushBack()
+  gotoPage(loc.page, false)
+  closeDrawer()
+}
+
+function closePdfAssistant() {
+  pdfAiTextEpoch++
+  pdfAiOpen.value = false
+  pdfAiSourceBusy.value = false
+}
+
+async function openPdfAssistant() {
+  if (pdfAiOpen.value) { closePdfAssistant(); return }
+  if (loading.value || error.value || !pageCount.value) return
+  if (activeAnnotation.value) { toast(t('reader.pdfFinishNote'), 'info'); return }
+  const selected = selection.value
+  const page = selected?.text.trim() ? selected.page : currentPage.value
+  const chosen = selected?.text ?? ''
+  selection.value = null
+  liveSel.value = null
+  dragSel = null
+  window.getSelection()?.removeAllRanges()
+  closeSelTr()
+  closeDrawer()
+  closePdfSearch()
+  moreMenu.value = false
+  propertiesOpen.value = false
+  zoomMenu.value = false
+  typographyOpen.value = false
+  shortcutsOpen.value = false
+  autoPanel.value = false
+  if (autoReading.value) stopAutoRead()
+  ttsPanel.value = false
+  pdfAiPage.value = page
+  pdfAiSourceError.value = ''
+  pdfAiSourceBusy.value = true
+  pdfAiOpen.value = true
+  const epoch = ++pdfAiTextEpoch
+  try {
+    const text = chosen.trim() ? chosen : await pageTextFor(page)
+    if (readerAlive && pdfAiOpen.value && epoch === pdfAiTextEpoch) pdfAiText.value = text.slice(0, PDF_AI_CONTEXT_LIMIT)
+  } catch (cause) {
+    if (readerAlive && pdfAiOpen.value && epoch === pdfAiTextEpoch) {
+      pdfAiText.value = ''
+      pdfAiSourceError.value = cause instanceof Error ? cause.message : t('ai.pdfExtractFailed')
+    }
+  } finally {
+    if (readerAlive && epoch === pdfAiTextEpoch) pdfAiSourceBusy.value = false
+  }
 }
 
 function gotoAnnotation(a: AnnotationRec) {
@@ -2797,6 +2915,58 @@ function runPdfShortcutCommand(command: PdfReaderShortcutCommandId) {
   }
 }
 
+async function readerBack() {
+  if (bookmarkMutation) { await bookmarkMutation; return }
+  if (activeAnnotation.value) { await saveNote(); return }
+  if (selection.value || liveSel.value) {
+    selection.value = null
+    liveSel.value = null
+    dragSel = null
+    window.getSelection()?.removeAllRanges()
+    closeSelTr()
+    return
+  }
+  if (pdfAiOpen.value) { closePdfAssistant(); return }
+  if (pdfSearchOpen.value) { closePdfSearch(); return }
+  if (drawerOpen.value || moreMenu.value || propertiesOpen.value || zoomMenu.value
+    || typographyOpen.value || shortcutsOpen.value || autoPanel.value || ttsPanel.value) {
+    closeDrawer()
+    moreMenu.value = false
+    propertiesOpen.value = false
+    zoomMenu.value = false
+    typographyOpen.value = false
+    shortcutsOpen.value = false
+    autoPanel.value = false
+    ttsPanel.value = false
+    return
+  }
+  if (autoReading.value) { stopAutoRead(); return }
+  if (presentationMode.value) { await exitPresentation(); return }
+  if (isFullscreen.value) { await setFullscreen(false); return }
+  clearTimeout(settleTimer)
+  clearTimeout(saveTimer)
+  if (pdfPositionReady) await library.saveProgress(bookId, String(currentPage.value), currentPage.value / pageCount.value)
+  if (readerAlive && nativeBackHost.__pagewiseReaderBack === handleNativeReaderBack) await router.push(backTarget)
+}
+
+const nativeBackHost = window as Window & { __pagewiseReaderBack?: () => boolean }
+let nativeBackPending = false
+function handleNativeReaderBack(): boolean {
+  if (!readerAlive || nativeBackHost.__pagewiseReaderBack !== handleNativeReaderBack) return false
+  if (nativeBackPending) return true
+  nativeBackPending = true
+  void readerBack().catch(error => {
+    if (!readerAlive || nativeBackHost.__pagewiseReaderBack !== handleNativeReaderBack) return
+    console.error('Pagewise: native Back failed', error)
+    toast(t('reader.progressSaveFailed'), 'error')
+  }).finally(() => { nativeBackPending = false })
+  return true
+}
+onMounted(() => { nativeBackHost.__pagewiseReaderBack = handleNativeReaderBack })
+onBeforeUnmount(() => {
+  if (nativeBackHost.__pagewiseReaderBack === handleNativeReaderBack) delete nativeBackHost.__pagewiseReaderBack
+})
+
 function handleKeydown(e: KeyboardEvent) {
   dispatchPdfReaderShortcut(e, isMacPlatform, {
     state: {
@@ -2811,27 +2981,34 @@ function handleKeydown(e: KeyboardEvent) {
 }
 
 onMounted(async () => {
-  // 匿名使用统计: 今天打开过书 (每天一次, 设置 → 隐私 可关闭)
-  void pingUsage(true)
   window.addEventListener('keydown', handleKeydown)
   document.addEventListener('fullscreenchange', onFullscreenChange)
   document.addEventListener('webkitfullscreenchange', onFullscreenChange as EventListener)
   if (isTauri()) {
     try {
       const { getCurrentWindow } = await import('@tauri-apps/api/window')
+      if (!readerAlive) return
       const currentWindow = getCurrentWindow()
-      isFullscreen.value = await currentWindow.isFullscreen()
-      fullscreenWindowUnlisten = await currentWindow.onResized(async () => {
+      const active = await currentWindow.isFullscreen()
+      if (!readerAlive) return
+      isFullscreen.value = active
+      const unlisten = await currentWindow.onResized(async () => {
         const active = await currentWindow.isFullscreen()
+        if (!readerAlive) return
         const wasFullscreen = isFullscreen.value
         isFullscreen.value = active
         if (wasFullscreen && !active && presentationMode.value) void exitPresentation(false)
       })
+      if (!readerAlive) { unlisten(); return }
+      fullscreenWindowUnlisten = unlisten
     } catch { /* 浏览器环境或窗口权限不支持时忽略 */ }
   }
   try {
     const storage = await getStorage()
-    meta.value = await storage.getBook(bookId)
+    if (!readerAlive) return
+    const book = await storage.getBook(bookId)
+    if (!readerAlive) return
+    meta.value = book
     if (!meta.value) {
       error.value = t('reader.bookNotFound')
       return
@@ -2845,16 +3022,22 @@ onMounted(async () => {
       return
     }
     const storedAnnotations = await storage.listAnnotations(bookId)
+    if (!readerAlive) return
     annotations.value = storedAnnotations.filter(a => decodeLoc(a.cfi))
     const blob = await storage.getBookFile(bookId)
+    if (!readerAlive) return
     sourcePdfBlob = blob.slice(0, blob.size, 'application/pdf')
     const fileData = await blob.arrayBuffer()
+    if (!readerAlive) return
     sourcePdfVersion.value = new TextDecoder('latin1')
       .decode(fileData.slice(0, 16))
       .match(/%PDF-(\d\.\d)/)?.[1] ?? ''
     // 流式阅读已下线；读取旧设置时也必须回到原版 PDF。
     settings.pdf.layout = 'original'
-    pdm = await PdfiumDoc.open(fileData)
+    const opened = await PdfiumDoc.open(fileData)
+    if (!readerAlive) { opened.close(); return }
+    if (!opened.pages.length) { opened.close(); throw new Error(t('reader.cantOpenPdf')) }
+    pdm = opened
     renderBytes = settings.pdf.renderer === 'mupdf' ? new Uint8Array(fileData.slice(0)) : null
     pageCount.value = pdm.pages.length
     pageDims.value = pdm.pages.map(page => ({ w: page.w, h: page.h }))
@@ -2865,22 +3048,26 @@ onMounted(async () => {
       : 1
     loading.value = false
     await nextTick()
+    if (!readerAlive) return
     if (pdfLayout.value === 'reflow') {
       const targetPage = currentPage.value
       void ensureReflow().then(() => {
-        if (pdfLayout.value === 'reflow') nextTick(() => reflowGoto(targetPage))
+        if (readerAlive && pdfLayout.value === 'reflow') nextTick(() => { if (readerAlive) reflowGoto(targetPage) })
       })
     } else if (bookPaged.value) {
       currentPage.value = spreadOf(currentPage.value)[0]
       await nextTick()
+      if (!readerAlive) return
       await renderPaged()
     } else {
       curScale.value = typeof zoom.value === 'number' ? fixedZoomScale(zoom.value) : fitScale(zoom.value)
       attachScrollListener()
       await nextTick()
+      if (!readerAlive) return
       if (currentPage.value > 1) scrollGoto(currentPage.value)
       updateViewport()
     }
+    if (!readerAlive) return
     markLaidOut()
     buildOutline()
     resizeObserver = new ResizeObserver(() => {
@@ -2897,16 +3084,26 @@ onMounted(async () => {
       }, 200)
     })
     observeActiveViewport()
+    pdfPositionReady = true
   } catch (e: any) {
-    console.error(e)
-    error.value = e?.message ?? t('reader.cantOpenPdf')
+    if (readerAlive) {
+      console.error(e)
+      error.value = e?.message ?? t('reader.cantOpenPdf')
+    }
   } finally {
-    loading.value = false
+    if (readerAlive) loading.value = false
   }
+})
+
+watch(currentPage, () => { if (pdfAiOpen.value) closePdfAssistant() })
+watch([pdfSearchOpen, drawerOpen, typographyOpen, ttsPanel, moreMenu, propertiesOpen], flags => {
+  if (pdfAiOpen.value && flags.some(Boolean)) closePdfAssistant()
 })
 
 onBeforeUnmount(() => {
   readerAlive = false
+  pdfPositionReady = false
+  closePdfAssistant()
   reflowSession++
   window.removeEventListener('keydown', handleKeydown)
   document.removeEventListener('fullscreenchange', onFullscreenChange)
@@ -2962,7 +3159,7 @@ onBeforeUnmount(() => {
     <header class="paper-header">
       <div class="paper-bar">
         <div class="paper-document">
-          <button class="icon-btn document-back" :title="backLabel" @click="router.push(backTarget)">
+          <button class="icon-btn document-back" :title="backLabel" @click="handleNativeReaderBack">
             <AppIcon name="back" /><span>{{ backLabel }}</span>
           </button>
           <div class="paper-title">
@@ -2972,23 +3169,92 @@ onBeforeUnmount(() => {
         </div>
 
         <div class="paper-context-actions">
-          <button class="btn btn-sm change-document" @click="router.push(backTarget)">
+          <button class="btn btn-sm change-document" @click="handleNativeReaderBack">
             {{ t('reader.changeDocument') }}
           </button>
         </div>
       </div>
 
       <div class="pdf-toolbar paper-actions">
-        <div class="toolbar-group">
+        <div class="toolbar-group toolbar-primary">
           <button
-            class="icon-btn"
+            class="icon-btn pdf-action-btn"
             :class="{ 'icon-active': tocOpen }"
             :title="t('reader.toc')"
+            :aria-label="t('reader.toc')"
             :aria-pressed="tocOpen"
             @click="toggleDrawerTab('toc')"
           >
-            <AppIcon name="toc" /><span>{{ t('reader.toc') }}</span>
+            <AppIcon name="toc" :size="28" :emphasis="tocOpen" aria-hidden="true" /><span>{{ t('reader.toc') }}</span>
           </button>
+          <button
+            class="icon-btn pdf-action-btn"
+            :class="{ 'icon-active': pdfSearchOpen }"
+            :title="`${t('reader.searchInBook')} (${primaryShortcutLabel} F)`"
+            :aria-label="t('reader.searchInBook')"
+            :aria-pressed="pdfSearchOpen"
+            @click="pdfSearchOpen ? closePdfSearch() : openPdfSearch()"
+          >
+            <AppIcon name="searchInBook" :size="28" :emphasis="pdfSearchOpen" aria-hidden="true" /><span>{{ t('common.search') }}</span>
+          </button>
+          <button
+            class="icon-btn pdf-action-btn"
+            :title="isPdfBookmarked ? t('reader.removeBookmark') : t('reader.bookmark')"
+            :aria-label="isPdfBookmarked ? t('reader.removeBookmark') : t('reader.bookmark')"
+            :aria-pressed="isPdfBookmarked"
+            :class="{ 'icon-active': isPdfBookmarked }"
+            :disabled="bookmarkBusy || loading || !!error || !pageCount"
+            data-testid="pdf-bookmark-toggle"
+            @click="togglePdfBookmark"
+          >
+            <AppIcon :name="isPdfBookmarked ? 'bookmark' : 'bookmarkBorder'" :size="28" aria-hidden="true" /><span>{{ t('reader.bookmark') }}</span>
+          </button>
+          <button
+            class="icon-btn pdf-action-btn"
+            :class="{ 'icon-active': annoOpen }"
+            :title="t('reader.annotationsBookmarks')"
+            :aria-label="t('reader.annotationsBookmarks')"
+            :aria-pressed="annoOpen"
+            @click="toggleDrawerTab('annotations')"
+          >
+            <AppIcon name="annotations" :size="28" :emphasis="annoOpen" aria-hidden="true" /><span>{{ t('reader.dockNotes') }}</span>
+          </button>
+          <button
+            class="icon-btn pdf-action-btn"
+            :title="t('ai.title')"
+            :aria-label="t('ai.title')"
+            :aria-expanded="pdfAiOpen"
+            :class="{ 'icon-active': pdfAiOpen }"
+            :disabled="loading || !!error || !pageCount"
+            data-testid="pdf-assistant-toggle"
+            @click="openPdfAssistant"
+          >
+            <AppIcon name="ai" :size="28" aria-hidden="true" /><span>{{ t('ai.title') }}</span>
+          </button>
+          <button
+            class="icon-btn pdf-action-btn"
+            :class="{ 'icon-active': ttsState !== 'stopped' || ttsPanel }"
+            :title="ttsState !== 'stopped' ? t('tts.readingNow') : t('tts.title')"
+            :aria-label="t('tts.title')"
+            :aria-pressed="ttsState !== 'stopped' || ttsPanel"
+            @click="openTTSPanel"
+          >
+            <AppIcon name="audio" :size="28" :emphasis="ttsState !== 'stopped' || ttsPanel" aria-hidden="true" /><span>{{ t('tts.title') }}</span>
+          </button>
+          <button
+            class="icon-btn pdf-action-btn"
+            :class="{ 'icon-active': pdfLayout === 'reflow' ? typographyOpen : zoomMenu }"
+            :title="t('reader.typography')"
+            :aria-label="t('reader.typography')"
+            :aria-pressed="pdfLayout === 'reflow' ? typographyOpen : zoomMenu"
+            @click="pdfLayout === 'reflow' ? (typographyOpen = !typographyOpen) : (zoomMenu = !zoomMenu)"
+          >
+            <AppIcon name="typography" :size="28" :emphasis="pdfLayout === 'reflow' ? typographyOpen : zoomMenu" aria-hidden="true" /><span>{{ t('reader.dockTypography') }}</span>
+          </button>
+        </div>
+        <span class="toolbar-sep" />
+
+        <div class="toolbar-group toolbar-secondary">
           <button
             class="icon-btn"
             :class="{ 'icon-active': thumbnailOpen }"
@@ -2997,15 +3263,6 @@ onBeforeUnmount(() => {
             @click="toggleDrawerTab('thumbnails')"
           >
             <AppIcon name="thumbnails" /><span>{{ t('reader.thumbnails') }}</span>
-          </button>
-          <button
-            class="icon-btn"
-            :class="{ 'icon-active': annoOpen }"
-            :title="t('reader.highlightsTab')"
-            :aria-pressed="annoOpen"
-            @click="toggleDrawerTab('annotations')"
-          >
-            <AppIcon name="notes" /><span>{{ t('reader.highlightsTab') }}</span>
           </button>
         </div>
         <span class="toolbar-sep" />
@@ -3079,7 +3336,7 @@ onBeforeUnmount(() => {
               :aria-pressed="spreadMode === 'single'"
               @click="setSpreadMode('single')"
             >
-              <AppIcon name="reading" /><span>{{ t('reader.singlePage') }}</span>
+              <AppIcon name="singlePage" /><span>{{ t('reader.singlePage') }}</span>
             </button>
             <button
               type="button"
@@ -3089,7 +3346,7 @@ onBeforeUnmount(() => {
               :aria-pressed="spreadMode === 'facing'"
               @click="setSpreadMode('facing')"
             >
-              <AppIcon name="library" /><span>{{ t('reader.facingPages') }}</span>
+              <AppIcon name="facingPages" /><span>{{ t('reader.facingPages') }}</span>
             </button>
             <button
               type="button"
@@ -3099,7 +3356,7 @@ onBeforeUnmount(() => {
               :aria-pressed="spreadMode === 'book'"
               @click="setSpreadMode('book')"
             >
-              <AppIcon name="library" /><span>{{ t('reader.bookView') }}</span>
+              <AppIcon name="facingPages" /><span>{{ t('reader.bookView') }}</span>
             </button>
           </div>
           <button
@@ -3110,32 +3367,13 @@ onBeforeUnmount(() => {
             :title="autoReading && !autoPanel ? t('reader.expandAutoControls') : t('reader.autoRead')"
             @click="toggleAutoPanel"
           >
-            <AppIcon name="reading" />
+            <AppIcon name="readingModes" :size="28" :emphasis="autoReading || autoPanel" aria-hidden="true" />
             <span>{{ autoReading ? t('reader.autoReading') : t('reader.autoRead') }}</span>
-          </button>
-          <button
-            type="button"
-            class="reader-tool"
-            :class="{ active: ttsState !== 'stopped' || ttsPanel }"
-            :aria-pressed="ttsState !== 'stopped' || ttsPanel"
-            @click="openTTSPanel"
-          >
-            <AppIcon name="audio" />
-            <span>{{ ttsState !== 'stopped' ? t('tts.readingNow') : t('tts.title') }}</span>
           </button>
         </div>
 
         <span class="toolbar-spacer" />
         <div class="toolbar-group toolbar-end">
-          <button
-            class="icon-btn"
-            :class="{ 'icon-active': pdfSearchOpen }"
-            :title="`${t('reader.searchInBook')} (${primaryShortcutLabel} F)`"
-            :aria-pressed="pdfSearchOpen"
-            @click="pdfSearchOpen ? closePdfSearch() : openPdfSearch()"
-          >
-            <AppIcon name="search" /><span>{{ t('common.search') }}</span>
-          </button>
           <button class="icon-btn no-phone" :title="`${t('reader.print')} (${primaryShortcutLabel} P)`" @click="printDocument">
             <AppIcon name="print" /><span>{{ t('reader.print') }}</span>
           </button>
@@ -3309,6 +3547,15 @@ onBeforeUnmount(() => {
           </button>
         </div>
         <div v-show="annoOpen" class="drawer-body">
+          <section class="pdf-bookmarks" data-testid="pdf-bookmarks">
+            <p class="drawer-count">{{ t('reader.bookmarksTab') }} · {{ pdfBookmarks.length }}</p>
+            <div v-for="bookmark in pdfBookmarks" :key="bookmark.id" class="pdf-bookmark-row" :data-bookmark-id="bookmark.id">
+              <button type="button" class="btn pdf-bookmark-go" @click="gotoPdfBookmark(bookmark)">{{ bookmark.text || t('reader.pdfBookmarkPage', { page: decodeLoc(bookmark.cfi)?.page ?? '?' }) }}</button>
+              <button type="button" class="btn btn-sm" :disabled="bookmarkBusy" :aria-label="t('reader.removeBookmark')" @click="removePdfBookmark(bookmark)">{{ t('common.delete') }}</button>
+            </div>
+            <p v-if="!pdfBookmarks.length" class="drawer-empty">{{ t('reader.pdfBookmarksEmpty') }}</p>
+            <p v-if="bookmarkError" role="alert">{{ bookmarkError }}</p>
+          </section>
           <p class="drawer-count">{{ t('reader.highlightsTab') }} · {{ highlights.length }}</p>
           <div v-for="a in highlights" :key="a.id" class="anno-item" @click="gotoAnnotation(a)">
             <span class="anno-dot" :style="annotationSwatchStyle(a.color, settings.readingMode.eink.enabled)" :title="t(annotationLabelKey(a.color, settings.readingMode.eink.enabled))"><span v-if="settings.readingMode.eink.enabled">{{ t(annotationLabelKey(a.color, true)) }}</span></span>
@@ -3756,10 +4003,15 @@ onBeforeUnmount(() => {
         <button class="icon-btn" :title="t('common.stop')" @click="autoPanel = false; stopAutoRead()" :aria-label="t('common.stop')"><svg viewBox="0 0 24 24" width="16" height="16" aria-hidden="true"><path fill="currentColor" d="M6.3 6.3a1 1 0 0 1 1.4 0L12 10.58l4.3-4.3a1 1 0 1 1 1.4 1.42L13.42 12l4.3 4.3a1 1 0 0 1-1.42 1.4L12 13.42l-4.3 4.3a1 1 0 0 1-1.4-1.42L10.58 12l-4.3-4.3a1 1 0 0 1 0-1.4z"/></svg></button>
       </section>
     </Transition>
+    <PdfReadingAssistant v-if="meta && !loading && !error" :open="pdfAiOpen" :book-title="meta.title" :book-author="meta.author" :page-number="pdfAiPage" :source-text="pdfAiText" :source-loading="pdfAiSourceBusy" :source-error="pdfAiSourceError" @close="closePdfAssistant" />
   </div>
 </template>
 
 <style scoped>
+.pdf-bookmarks { border-bottom: 1px solid var(--border); padding-bottom: 12px; margin-bottom: 12px; }
+.pdf-bookmark-row { display: flex; gap: 8px; margin: 8px 0; align-items: stretch; }
+.pdf-bookmark-row button { min-height: 48px; }
+.pdf-bookmark-go { flex: 1; text-align: start; white-space: normal; }
 .tts-local-hint {
   margin: 0;
   color: var(--text-3);
@@ -4136,17 +4388,19 @@ onBeforeUnmount(() => {
   flex-shrink: 0;
   display: inline-flex;
   align-items: center;
+  flex-direction: column;
   justify-content: center;
-  gap: 6px;
-  height: 36px;
-  padding: 0 10px;
+  gap: 4px;
+  min-width: 48px;
+  min-height: 64px;
+  padding: 6px 10px;
   border: 1px solid transparent;
   border-radius: 8px;
   background: transparent;
-  color: var(--text-2);
+  color: var(--text);
   font-size: 13px;
   font-weight: 500;
-  line-height: 1;
+  line-height: 1.25;
   white-space: nowrap;
   box-shadow: none;
   transition: color 0.18s ease, border-color 0.18s ease, background-color 0.18s ease, box-shadow 0.18s ease, transform 0.12s ease;
@@ -4162,15 +4416,16 @@ onBeforeUnmount(() => {
   stroke-linejoin: round;
 }
 .reader-tool:hover {
-  color: var(--brand);
-  border-color: color-mix(in srgb, var(--brand) 25%, transparent);
-  background: var(--brand-soft);
+  color: var(--text);
+  border-color: var(--text);
+  background: var(--surface-2);
 }
 .reader-tool.active {
-  color: var(--brand);
-  border-color: rgba(22, 100, 255, 0.18);
-  background: var(--brand-light, #e8f0ff);
-  box-shadow: inset 0 0 0 1px rgba(22, 100, 255, 0.04);
+  color: var(--text);
+  border-color: var(--text);
+  background: var(--surface-2);
+  box-shadow: inset 0 -3px 0 var(--text);
+  font-weight: 700;
 }
 .reader-segment button:active,
 .reader-tool:active {
@@ -4276,8 +4531,37 @@ onBeforeUnmount(() => {
   opacity: 0.35;
 }
 .icon-active {
-  background: var(--brand-light, #e8f0ff);
-  color: var(--brand);
+  background: var(--surface-2);
+  color: var(--text);
+}
+.pdf-toolbar .icon-btn,
+.pdf-toolbar .reader-tool {
+  position: relative;
+  flex-direction: column;
+  width: auto;
+  min-width: 48px;
+  min-height: 64px;
+  height: auto;
+  gap: 4px;
+  padding: 6px 10px;
+  color: var(--text);
+}
+.pdf-toolbar .icon-active { font-weight: 700; }
+.pdf-toolbar .icon-active::after {
+  content: '';
+  position: absolute;
+  bottom: 0;
+  left: 50%;
+  width: 24px;
+  height: 3px;
+  transform: translateX(-50%);
+  background: var(--text);
+}
+.pdf-toolbar .icon-btn:focus-visible,
+.pdf-toolbar .reader-tool:focus-visible {
+  outline: 2px solid var(--text);
+  outline-offset: -2px;
+  box-shadow: none;
 }
 .btn-active {
   border-color: var(--brand);
@@ -5700,13 +5984,40 @@ onBeforeUnmount(() => {
     gap: 4px;
     min-height: 48px;
     padding: 4px 6px;
-    /* 工具条可横向滑动: 右缘渐隐提示后面还有 */
-    -webkit-mask-image: linear-gradient(to right, #000 calc(100% - 24px), transparent);
-    mask-image: linear-gradient(to right, #000 calc(100% - 24px), transparent);
+    flex-wrap: wrap;
+    overflow-x: visible;
+  }
+  .pdf-toolbar .toolbar-primary {
+    width: 100%;
+    display: flex;
+    flex-wrap: wrap;
+    gap: 2px;
+    justify-content: space-between;
+  }
+  .pdf-toolbar .toolbar-primary .pdf-action-btn {
+    flex: 1 1 calc(25% - 4px);
+    min-width: 48px;
+    min-height: 48px;
+    max-width: calc(25% - 2px);
+    padding: 4px 2px;
+    box-sizing: border-box;
+    display: inline-flex;
+    flex-direction: column;
+    align-items: center;
+    justify-content: center;
+    gap: 2px;
+  }
+  .pdf-toolbar .toolbar-primary .pdf-action-btn span {
+    font-size: 11px;
+    line-height: 1.1;
+    white-space: normal;
+    text-align: center;
   }
   .pdf-toolbar .icon-btn {
-    width: 38px;
-    height: 38px;
+    min-width: 48px;
+    min-height: 48px;
+    width: auto;
+    height: auto;
   }
   .toolbar-zoom {
     min-width: 0;

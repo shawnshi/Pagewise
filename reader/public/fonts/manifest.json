@@ -1,0 +1,382 @@
+{
+  "format": 1,
+  "packagedOn": "2026-10-18",
+  "tooling": {
+    "fonttools": "4.63.0",
+    "brotli": "1.2.0",
+    "brotliQuality": 5
+  },
+  "fonts": [
+    {
+      "file": "SourceHanSerifSC-VF.woff2",
+      "source": "https://raw.githubusercontent.com/adobe-fonts/source-han-serif/2.003R/Variable/WOFF2/OTF/SourceHanSerifSC-VF.otf.woff2",
+      "sourceSha256": "3b9451444b4a3554ab061a43cb79dc11c72c0dbc381f148c56c542dca9c0a7e3",
+      "sha256": "3b9451444b4a3554ab061a43cb79dc11c72c0dbc381f148c56c542dca9c0a7e3",
+      "bytes": 19747252,
+      "license": "SourceHanSerif-LICENSE.txt",
+      "licenseSha256": "9ff5bb567e1b92c801fc1069e5fbf992ff8efccacb9db94e5959a5b3ba9bb903",
+      "family": "Source Han Serif SC VF",
+      "style": "Regular",
+      "version": "Version 2.003;hotconv 1.1.1;makeotfexe 2.6.0",
+      "italic": false,
+      "glyphs": 65535,
+      "encodedCodepoints": 44779,
+      "axes": {
+        "wght": [
+          250.0,
+          250.0,
+          900.0
+        ]
+      },
+      "haniLanguages": [
+        "JAN",
+        "KOR",
+        "ZHH",
+        "ZHS",
+        "ZHT"
+      ],
+      "features": [
+        "aalt",
+        "calt",
+        "ccmp",
+        "dlig",
+        "fwid",
+        "hist",
+        "hwid",
+        "liga",
+        "ljmo",
+        "locl",
+        "pwid",
+        "ruby",
+        "tjmo",
+        "vert",
+        "vjmo",
+        "vrt2"
+      ],
+      "missingSamples": {
+        "han": "",
+        "rare_han": "𠮶𠀀",
+        "latin_greek": "ẞά",
+        "symbols": "₀₁₂₃⁰əɪʃʒŋɜ"
+      }
+    },
+    {
+      "file": "SourceHanSansSC-VF.woff2",
+      "source": "https://raw.githubusercontent.com/adobe-fonts/source-han-sans/2.005R/Variable/WOFF2/OTF/SourceHanSansSC-VF.otf.woff2",
+      "sourceSha256": "085cc88c530b9c434165ab926f81608a55b24e60e05719f3d41340ac45d9c62f",
+      "sha256": "085cc88c530b9c434165ab926f81608a55b24e60e05719f3d41340ac45d9c62f",
+      "bytes": 14270432,
+      "license": "SourceHanSans-LICENSE.txt",
+      "licenseSha256": "fcac737e761ec63dbfbdce11030a1780161920d80315edba9c8beff1c2bac5a2",
+      "family": "Source Han Sans SC VF",
+      "style": "Regular",
+      "version": "Version 2.005;addfeatures 5.0.0b21",
+      "italic": false,
+      "glyphs": 65535,
+      "encodedCodepoints": 44853,
+      "axes": {
+        "wght": [
+          250.0,
+          250.0,
+          900.0
+        ]
+      },
+      "haniLanguages": [
+        "JAN",
+        "KOR",
+        "ZHH",
+        "ZHS",
+        "ZHT"
+      ],
+      "features": [
+        "aalt",
+        "calt",
+        "ccmp",
+        "dlig",
+        "fwid",
+        "hist",
+        "hwid",
+        "liga",
+        "ljmo",
+        "locl",
+        "pwid",
+        "ruby",
+        "tjmo",
+        "vert",
+        "vjmo",
+        "vrt2"
+      ],
+      "missingSamples": {
+        "han": "",
+        "rare_han": "𠮶𠀀",
+        "latin_greek": "ẞά",
+        "symbols": "₀₁₂₃⁰əɪʃʒŋɜ"
+      }
+    },
+    {
+      "file": "Literata-Regular.woff2",
+      "source": "https://raw.githubusercontent.com/googlefonts/literata/main/fonts/variable/Literata%5Bopsz,wght%5D.ttf",
+      "sourceSha256": "b41138c9373112f32abb589cc22e8674b06ed4048b0c513be922bdd26f274440",
+      "sha256": "f8b8199c3486343abe39c5c82ae52e9d3140f464841d58c597d27b2a5cff45db",
+      "bytes": 454060,
+      "license": "Literata-OFL.txt",
+      "licenseSha256": "8742963604cd89dc81437811a850018fc03b2bfad686d7422c8235967c87614e",
+      "family": "Literata",
+      "style": "Regular",
+      "version": "Version 3.103;gftools[0.9.29]",
+      "italic": false,
+      "glyphs": 1789,
+      "encodedCodepoints": 1163,
+      "axes": {
+        "opsz": [
+          7.0,
+          12.0,
+          72.0
+        ],
+        "wght": [
+          200.0,
+          400.0,
+          900.0
+        ]
+      },
+      "haniLanguages": [],
+      "features": [
+        "aalt",
+        "c2sc",
+        "case",
+        "ccmp",
+        "dlig",
+        "dnom",
+        "frac",
+        "liga",
+        "lnum",
+        "locl",
+        "numr",
+        "onum",
+        "ordn",
+        "pnum",
+        "rvrn",
+        "sinf",
+        "smcp",
+        "ss01",
+        "ss02",
+        "subs",
+        "sups",
+        "tnum",
+        "zero"
+      ],
+      "missingSamples": {
+        "han": "阅读閱讀藏繁鬱龘赵趙臺台里裏骨令遍直返边邊，。！？、；：",
+        "rare_han": "𠮷𡃁𠮶𠀀𰻞",
+        "latin_greek": "",
+        "symbols": "ɪʃʒɜ"
+      }
+    },
+    {
+      "file": "Literata-Italic.woff2",
+      "source": "https://raw.githubusercontent.com/googlefonts/literata/main/fonts/variable/Literata-Italic%5Bopsz,wght%5D.ttf",
+      "sourceSha256": "d483dfaeba9cbf4ce71d32a52ee65df82f7e35b15fff8d1011cdb242d1fcd465",
+      "sha256": "99a53c08ea79c24758b12ce32affb860daf5a0ea9601b5fcbbf78942e8a47be8",
+      "bytes": 453632,
+      "license": "Literata-OFL.txt",
+      "licenseSha256": "8742963604cd89dc81437811a850018fc03b2bfad686d7422c8235967c87614e",
+      "family": "Literata",
+      "style": "Italic",
+      "version": "Version 3.103;gftools[0.9.29]",
+      "italic": true,
+      "glyphs": 1769,
+      "encodedCodepoints": 1163,
+      "axes": {
+        "opsz": [
+          7.0,
+          12.0,
+          72.0
+        ],
+        "wght": [
+          200.0,
+          400.0,
+          900.0
+        ]
+      },
+      "haniLanguages": [],
+      "features": [
+        "aalt",
+        "c2sc",
+        "case",
+        "ccmp",
+        "dlig",
+        "dnom",
+        "frac",
+        "liga",
+        "lnum",
+        "locl",
+        "numr",
+        "onum",
+        "ordn",
+        "pnum",
+        "rvrn",
+        "sinf",
+        "smcp",
+        "ss01",
+        "ss02",
+        "subs",
+        "sups",
+        "tnum",
+        "zero"
+      ],
+      "missingSamples": {
+        "han": "阅读閱讀藏繁鬱龘赵趙臺台里裏骨令遍直返边邊，。！？、；：",
+        "rare_han": "𠮷𡃁𠮶𠀀𰻞",
+        "latin_greek": "",
+        "symbols": "ɪʃʒɜ"
+      }
+    },
+    {
+      "file": "LXGWWenKaiScreen.woff2",
+      "source": "https://github.com/lxgw/LxgwWenKai-Screen/releases/download/v1.522/LXGWWenKaiScreen.ttf",
+      "sourceSha256": "cd1a6fa39c4ea42fd8f4e289945789b0e510cf7016435640f8893cdad9b220f3",
+      "sha256": "0df865c564cfad8f2117c216fe5b96f37aa1290f269f21721e215321fb29f6c3",
+      "bytes": 11346884,
+      "license": "LXGWWenKaiScreen-OFL.txt",
+      "licenseSha256": "4d72e3080cdb3be63638bb7197c7caae55b6e4cbe1bab1ded2830bdff0c9b438",
+      "family": "LXGW WenKai Screen",
+      "style": "Regular",
+      "version": "Version 1.522;March 19,2026",
+      "italic": false,
+      "glyphs": 47871,
+      "encodedCodepoints": 47449,
+      "axes": {},
+      "haniLanguages": [],
+      "features": [
+        "afrc",
+        "calt",
+        "ccmp",
+        "dlig",
+        "frac",
+        "salt",
+        "subs",
+        "sups",
+        "vert"
+      ],
+      "missingSamples": {
+        "han": "",
+        "rare_han": "𠀀",
+        "latin_greek": "",
+        "symbols": ""
+      }
+    },
+    {
+      "file": "SourceSerif4-Regular.woff2",
+      "source": "https://raw.githubusercontent.com/adobe-fonts/source-serif/4.005R/VAR/SourceSerif4Variable-Roman.otf",
+      "sourceSha256": "867b73c6a954a4a64616906d179f94572a748790a1d022ebeeff07f56ea0221a",
+      "sha256": "5d97133aa4fa0374ae119aac327f8d308a45f2d11063abfe126d1502ef430c6e",
+      "bytes": 488876,
+      "license": "SourceSerif4-LICENSE.md",
+      "licenseSha256": "75784a295293a8992f5a8d99210566e0064a012e6dab6731305e3787f15896c7",
+      "family": "Source Serif 4 Variable",
+      "style": "Regular",
+      "version": "Version 4.005;hotconv 1.1.0;makeotfexe 2.6.0",
+      "italic": false,
+      "glyphs": 1464,
+      "encodedCodepoints": 919,
+      "axes": {
+        "wght": [
+          200.0,
+          400.0,
+          900.0
+        ],
+        "opsz": [
+          8.0,
+          20.0,
+          60.0
+        ]
+      },
+      "haniLanguages": [],
+      "features": [
+        "aalt",
+        "c2sc",
+        "case",
+        "ccmp",
+        "dnom",
+        "frac",
+        "liga",
+        "lnum",
+        "locl",
+        "numr",
+        "onum",
+        "ordn",
+        "pnum",
+        "sinf",
+        "smcp",
+        "ss01",
+        "ss02",
+        "subs",
+        "sups",
+        "tnum",
+        "zero"
+      ],
+      "missingSamples": {
+        "han": "阅读閱讀藏繁鬱龘赵趙臺台里裏骨令遍直返边邊，。！？、；：",
+        "rare_han": "𠮷𡃁𠮶𠀀𰻞",
+        "latin_greek": "",
+        "symbols": "ɪʃʒɜ"
+      }
+    },
+    {
+      "file": "SourceSerif4-Italic.woff2",
+      "source": "https://raw.githubusercontent.com/adobe-fonts/source-serif/4.005R/VAR/SourceSerif4Variable-Italic.otf",
+      "sourceSha256": "68220a94535e9cffb9b7d844140583ac2a3195eabdd4890b15f83272c8bfcfe4",
+      "sha256": "b1cee92835aecf0bb77a65ec7f16c0009ba516b9d9329bb243e61a456f53ea60",
+      "bytes": 368676,
+      "license": "SourceSerif4-LICENSE.md",
+      "licenseSha256": "75784a295293a8992f5a8d99210566e0064a012e6dab6731305e3787f15896c7",
+      "family": "Source Serif 4 Variable",
+      "style": "Italic",
+      "version": "Version 4.005;hotconv 1.1.0;makeotfexe 2.6.0",
+      "italic": true,
+      "glyphs": 1093,
+      "encodedCodepoints": 918,
+      "axes": {
+        "wght": [
+          200.0,
+          400.0,
+          900.0
+        ],
+        "opsz": [
+          8.0,
+          20.0,
+          60.0
+        ]
+      },
+      "haniLanguages": [],
+      "features": [
+        "aalt",
+        "case",
+        "ccmp",
+        "dnom",
+        "frac",
+        "liga",
+        "lnum",
+        "locl",
+        "numr",
+        "onum",
+        "ordn",
+        "pnum",
+        "sinf",
+        "ss01",
+        "ss02",
+        "ss03",
+        "subs",
+        "sups",
+        "tnum",
+        "zero"
+      ],
+      "missingSamples": {
+        "han": "阅读閱讀藏繁鬱龘赵趙臺台里裏骨令遍直返边邊，。！？、；：",
+        "rare_han": "𠮷𡃁𠮶𠀀𰻞",
+        "latin_greek": "",
+        "symbols": "ɪʃʒɜ"
+      }
+    }
+  ]
+}

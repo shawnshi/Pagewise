@@ -2,6 +2,7 @@ import { defineConfig, type Plugin } from 'vite'
 import vue from '@vitejs/plugin-vue'
 import { readFileSync } from 'node:fs'
 import { fileURLToPath } from 'node:url'
+import { isolatedCacheDir } from './scripts/vite-isolated.mjs'
 
 import { BROWSER_TARGET, legacyCssFallbacks, legacyRegexRewrite } from './vite.legacy.ts'
 
@@ -27,6 +28,7 @@ function foliatePaginatorFork(): Plugin {
 }
 
 export default defineConfig({
+  cacheDir: isolatedCacheDir(),
   define: {
     __APP_VERSION__: JSON.stringify(pkg.version),
   },

@@ -4,19 +4,15 @@ import { mkdtemp, readFile, rm, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { fileURLToPath } from 'node:url'
-import { spawn } from 'node:child_process'
+import { createServer } from './vite-isolated.mjs'
 import { zipSync, unzipSync, strFromU8, strToU8 } from 'fflate'
 import { parse } from 'yaml'
 import { chromium } from 'playwright'
 
-const port = 4177
-const base = `http://127.0.0.1:${port}`
 const temp = await mkdtemp(join(tmpdir(), 'lightread-okf-'))
-const server = spawn(
-  process.execPath,
-  [fileURLToPath(new URL('../node_modules/vite/bin/vite.js', import.meta.url)), '--host', '127.0.0.1', '--port', String(port), '--strictPort'],
-  { cwd: fileURLToPath(new URL('..', import.meta.url)), stdio: ['ignore', 'ignore', 'inherit'], detached: process.platform !== 'win32' },
-)
+const server = await createServer({ root: fileURLToPath(new URL('..', import.meta.url)), logLevel: 'error', server: { host: '127.0.0.1', port: 0 } })
+await server.listen()
+const base = `http://127.0.0.1:${server.httpServer.address().port}`
 
 async function isolatedContext() {
   const context = await browser.newContext({ serviceWorkers: 'block' })
@@ -24,17 +20,6 @@ async function isolatedContext() {
     ? route.continue()
     : route.abort('blockedbyclient'))
   return context
-}
-
-async function waitForServer() {
-  for (let attempt = 0; attempt < 100; attempt++) {
-    try {
-      const response = await fetch(base)
-      if (response.ok) return
-    } catch { /* Vite 尚未监听 */ }
-    await new Promise(resolve => setTimeout(resolve, 100))
-  }
-  throw new Error('Vite 启动超时')
 }
 
 function frontmatter(bytes) {
@@ -64,7 +49,6 @@ async function expectOneBook(page, title) {
 
 let browser
 try {
-  await waitForServer()
   browser = await chromium.launch({ headless: true, ...(process.platform === 'win32' ? { channel: 'msedge' } : {}), args: ['--disable-background-networking'] })
 
   const sourceContext = await isolatedContext()
@@ -87,9 +71,10 @@ try {
   })
   await sourcePage.goto(`${base}/#/settings`, { waitUntil: 'networkidle' })
 
-  const downloadPromise = sourcePage.waitForEvent('download')
-  await sourcePage.getByRole('button', { name: '导出藏书包' }).click()
-  const download = await downloadPromise
+  const [download] = await Promise.all([
+    sourcePage.waitForEvent('download'),
+    sourcePage.getByRole('button', { name: '导出书库包', exact: true }).click(),
+  ])
   if (!download.suggestedFilename().endsWith('.okf.zip')) {
     throw new Error(`导出扩展名错误: ${download.suggestedFilename()}`)
   }
@@ -283,9 +268,6 @@ try {
   console.log('OKF 藏书协议测试通过：标准结构、可选兼容 manifest、OKF 权威优先、往返 (含书单与待找条目)、第三方导入、幂等、完整性、JSON v1/v2 兼容')
 } finally {
   await browser?.close()
-  try {
-    if (process.platform === 'win32') server.kill('SIGTERM')
-    else process.kill(-server.pid, 'SIGTERM')
-  } catch { /* 已退出 */ }
+  await server.close()
   await rm(temp, { recursive: true, force: true })
 }

@@ -113,6 +113,7 @@ test('actual settings load applies migration before merging defaults using synth
     '../services/readingModes/eyeCare.ts': { DIM_MAX },
     '../services/readingModes/retiredSettings.ts': { normalizeRetiredLyricSettings },
     '../services/aiProviders.ts': await import('../src/services/aiProviders.ts'),
+    '../services/readerTypographyProfiles.ts': await import('../src/services/readerTypographyProfiles.ts'),
   }
   vm.runInNewContext(output, {
     exports, require: id => { assert.ok(id in imports, `unexpected import ${id}`); return imports[id] },

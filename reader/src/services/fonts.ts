@@ -4,12 +4,33 @@
  *  - 自定义字体文件: 复制到应用数据目录, 阅读时以 FontFace 注入各章节文档
  */
 import { isTauri } from '../storage/types'
+import { automaticFontFamily, BUNDLED_READER_FAMILIES, type TypographyProfile } from './readerTypographyProfiles.ts'
 
 export interface CustomFont {
   /** 展示名与 CSS font-family 名 (取自文件名) */
   name: string
   /** 应用数据目录内的字体文件路径 */
   file: string
+}
+
+/** Probe only the app/calibration document; book documents use the non-mutating root-size path. */
+export function measureTextScale(doc: Document, declaredRootFontSize?: number): number | null {
+  const win = doc.defaultView
+  if (!win) return null
+  let probe: HTMLSpanElement | undefined
+  try {
+    let actual: number
+    if (declaredRootFontSize && declaredRootFontSize > 0) actual = parseFloat(win.getComputedStyle(doc.documentElement).fontSize) / declaredRootFontSize
+    else {
+      if (!doc.body) return null
+      probe = doc.createElement('span')
+      probe.style.cssText = 'position:fixed;visibility:hidden;pointer-events:none;font-size:100px!important;line-height:1;'
+      probe.textContent = 'M'
+      doc.body.append(probe)
+      actual = parseFloat(win.getComputedStyle(probe).fontSize) / 100
+    }
+    return Number.isFinite(actual) && actual >= 0.5 && actual <= 3 ? actual : null
+  } finally { probe?.remove() }
 }
 
 let systemFontsCache: string[] | null = null
@@ -55,22 +76,72 @@ function loadFontBytes(file: string): Promise<ArrayBuffer> {
   return bytesCache.get(file)!
 }
 
-/** 把自定义字体注入章节 iframe 文档; FontFace 需在目标 realm 构造 */
-export async function injectFontIntoDoc(doc: Document, font: CustomFont) {
-  try {
-    const win = doc.defaultView as any
-    if (!win?.FontFace || (doc as any).__lrFonts?.has(font.file)) return
-    const face = new win.FontFace(font.name, await loadFontBytes(font.file))
-    await face.load()
-    ;(doc.fonts as any).add(face)
-    ;((doc as any).__lrFonts ??= new Set()).add(font.file)
-  } catch (e) {
-    console.warn('自定义字体加载失败:', font.name, e)
+const documentFontLoads = new WeakMap<Document, Map<string, Promise<void>>>()
+
+/** Register in the target document and expose completion/errors to the reader transaction. */
+export function injectFontIntoDoc(doc: Document, font: CustomFont): Promise<void> {
+  let loads = documentFontLoads.get(doc)
+  if (!loads) { loads = new Map(); documentFontLoads.set(doc, loads) }
+  if (!loads.has(font.file)) {
+    const work = async () => {
+      const win = doc.defaultView as (Window & { FontFace?: typeof FontFace }) | null
+      if (!win?.FontFace) throw new Error('FontFace unavailable')
+      const face = new win.FontFace(font.name, await loadFontBytes(font.file))
+      await face.load()
+      doc.fonts.add(face)
+    }
+    loads.set(font.file, work())
   }
+  return loads.get(font.file)!
 }
 
-/** 阅读设置里存的字体值 → 实际 CSS font-family (custom:Name → "Name") */
-export function resolveFontFamily(value: string): string {
+const bundledDocumentLoads = new WeakMap<Document, Promise<void>>()
+const bundledStylesheetLoads = new Map<string, Promise<string>>()
+
+function loadBundledFontCSS(href: string): Promise<string> {
+  const prior = bundledStylesheetLoads.get(href)
+  if (prior) return prior
+  const controller = new AbortController()
+  const timer = setTimeout(() => controller.abort(), 8000)
+  const work = fetch(href, { signal: controller.signal }).then(async response => {
+    if (!response.ok) throw new Error(`Bundled font stylesheet HTTP ${response.status}`)
+    const css = await response.text()
+    if (!css.includes('@font-face')) throw new Error('Invalid bundled font stylesheet')
+    return css.replace(/url\(["']?\.\/([\w.-]+)["']?\)/g, (_match, file: string) => `url("${new URL(file, href).href}")`)
+  }).finally(() => clearTimeout(timer))
+  bundledStylesheetLoads.set(href, work)
+  void work.catch(() => { if (bundledStylesheetLoads.get(href) === work) bundledStylesheetLoads.delete(href) })
+  return work
+}
+
+/** Use absolute app asset URLs, never the EPUB's blob/relative asset base. */
+export function injectBundledFontsIntoDoc(doc: Document): Promise<void> {
+  const prior = bundledDocumentLoads.get(doc)
+  if (prior) return prior
+  const work = (async () => {
+    const source = document.querySelector<HTMLLinkElement>('link[data-pw-bundled-fonts]')
+    if (!source) throw new Error('Bundled font stylesheet unavailable')
+    if (doc === document) return
+    const css = await loadBundledFontCSS(source.href)
+    // Inline the cached face declarations: repeated iframe navigation must not
+    // depend on a cached <link>'s load event before pagination can settle.
+    const style = doc.createElement('style')
+    style.dataset.pwBundledFonts = ''
+    style.textContent = css
+    ;(doc.head || doc.documentElement).append(style)
+  })()
+  bundledDocumentLoads.set(doc, work)
+  void work.catch(() => { if (bundledDocumentLoads.get(doc) === work) bundledDocumentLoads.delete(doc) })
+  return work
+}
+
+/** Stored font value to a real family stack; unavailable custom faces retain a visible generic fallback. */
+export function resolveFontFamily(value: string, opts: { profile?: TypographyProfile; language?: string } = {}): string {
+  if (value === 'auto') return automaticFontFamily(opts.profile ?? 'zh', opts.language)
+  if (Object.hasOwn(BUNDLED_READER_FAMILIES, value)) {
+    const family = BUNDLED_READER_FAMILIES[value]
+    if (family) return family
+  }
   const m = value.match(/^custom:(.+)$/)
-  return m ? `"${m[1]}"` : value
+  return m ? `${JSON.stringify(m[1])}, serif` : value
 }

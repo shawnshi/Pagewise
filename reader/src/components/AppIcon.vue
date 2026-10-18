@@ -1,39 +1,39 @@
 <script setup lang="ts">
 import { computed } from 'vue'
+import { iconMarkup, markedBookmarkMarkup, type PagewiseIconName } from './menuIcons'
 
-const props = withDefaults(
-  defineProps<{
-    name: string
-    size?: number | string
-    ariaHidden?: boolean | 'true' | 'false'
-  }>(),
-  {
-    size: 24,
-    ariaHidden: true,
-  },
-)
+const props = withDefaults(defineProps<{
+  name: string
+  size?: number | string
+  ariaHidden?: boolean | 'true' | 'false'
+  emphasis?: boolean
+  marked?: boolean
+}>(), { ariaHidden: true, emphasis: false, marked: false })
 
-const iconSize = computed(() => (typeof props.size === 'number' ? `${props.size}px` : props.size))
+const MENU_ICONS: Record<string, PagewiseIconName> = {
+  library: 'library',
+  reading: 'currently-reading',
+  notes: 'notes',
+  annotations: 'annotations',
+  history: 'reading-history',
+  stats: 'reading-history',
+  settings: 'settings',
+  toc: 'table-of-contents',
+  typography: 'typography',
+  search: 'search-library',
+  searchInBook: 'search-in-book',
+  ai: 'reading-assistant',
+  audio: 'read-aloud',
+  readingModes: 'reading-modes',
+  bookmarks: 'bookmarks',
+  bookmark: 'bookmarks',
+  bookmarkBorder: 'bookmarks',
+}
 
-// 24x24 monochrome cohesive Pagewise e-ink SVG paths
 const ICONS: Record<string, string> = {
-  // 藏书 / Library
-  library:
-    'M4 19.5A2.5 2.5 0 0 1 6.5 17H20M6.5 2H20v20H6.5A2.5 2.5 0 0 1 4 19.5v-15A2.5 2.5 0 0 1 6.5 2zM9 7h7M9 11h5',
-  // 在读 / Reading
-  reading:
-    'M18 2H6c-1.1 0-2 .9-2 2v16l7-3 7 3V4c0-1.1-.9-2-2-2zm0 15-5-2.18L8 17V4h10v13z',
-  // 笔记 / Notes
-  notes:
-    'M3 17.25V21h3.75L17.81 9.94l-3.75-3.75L3 17.25zM20.71 7.04c.39-.39.39-1.02 0-1.41l-2.34-2.34c-.39-.39-1.02-.39-1.41 0l-1.83 1.83 3.75 3.75 1.83-1.83z',
-  // 记录 / History / Stats
-  history:
-    'M12 2a10 10 0 1 0 10 10A10 10 0 0 0 12 2zm0 18a8 8 0 1 1 8-8 8 8 0 0 1-8 8zm.5-13H11v6l5.25 3.15.75-1.23-4.5-2.67z',
-  stats:
-    'M4 13a1.5 1.5 0 0 1 3 0v5.5a1.5 1.5 0 0 1-3 0V13zm6.5-5a1.5 1.5 0 0 1 3 0v10.5a1.5 1.5 0 0 1-3 0V8zM17 4.5a1.5 1.5 0 0 1 3 0v14a1.5 1.5 0 0 1-3 0v-14z',
-  // 设置 / Settings
-  settings:
-    'M10.83 3.28a1.5 1.5 0 0 1 2.34 0l.94 1.16c.24.3.62.45 1 .4l1.47-.2a1.5 1.5 0 0 1 1.69 1.61l-.12 1.49c-.03.38.14.75.46.97l1.23.85a1.5 1.5 0 0 1 .4 2.3l-.86 1.22c-.22.31-.26.72-.1 1.07l.6 1.36a1.5 1.5 0 0 1-1.17 2.03l-1.47.24c-.38.06-.7.32-.83.68l-.52 1.4a1.5 1.5 0 0 1-2.2.8l-1.28-.77a1.13 1.13 0 0 0-1.08 0l-1.28.76a1.5 1.5 0 0 1-2.2-.79l-.52-1.4a1.13 1.13 0 0 0-.83-.68l-1.47-.24a1.5 1.5 0 0 1-1.17-2.03l.6-1.36c.16-.35.12-.76-.1-1.07l-.87-1.22a1.5 1.5 0 0 1 .41-2.3l1.23-.85c.32-.22.49-.59.46-.97l-.12-1.5a1.5 1.5 0 0 1 1.69-1.6l1.48.2c.37.05.75-.1.99-.4l.94-1.16zM12 15.5a3.5 3.5 0 1 0 0-7 3.5 3.5 0 0 0 0 7z',
+  // PDF page-layout controls are not navigation destinations.
+  singlePage: 'M18 2H6c-1.1 0-2 .9-2 2v16l7-3 7 3V4c0-1.1-.9-2-2-2zm0 15-5-2.18L8 17V4h10v13z',
+  facingPages: 'M4 19.5A2.5 2.5 0 0 1 6.5 17H20M6.5 2H20v20H6.5A2.5 2.5 0 0 1 4 19.5v-15A2.5 2.5 0 0 1 6.5 2zM9 7h7M9 11h5',
   // 监测文件夹 / Folder
   folder:
     'M10 4H4c-1.1 0-1.99.9-1.99 2L2 18c0 1.1.9 2 2 2h16c1.1 0 2-.9 2-2V8c0-1.1-.9-2-2-2h-8l-2-2z',
@@ -46,21 +46,6 @@ const ICONS: Record<string, string> = {
   // 返回 / Back
   back:
     'M20 11H7.83l5.59-5.59L12 4l-8 8 8 8 1.41-1.41L7.83 13H20v-2z',
-  // 目录 / TOC
-  toc:
-    'M3 6a1 1 0 0 1 1-1h1a1 1 0 0 1 0 2H4a1 1 0 0 1-1-1zm5 0a1 1 0 0 1 1-1h11a1 1 0 1 1 0 2H9a1 1 0 0 1-1-1zM3 12a1 1 0 0 1 1-1h1a1 1 0 1 1 0 2H4a1 1 0 0 1-1-1zm5 0a1 1 0 0 1 1-1h11a1 1 0 1 1 0 2H9a1 1 0 0 1-1-1zM3 18a1 1 0 0 1 1-1h1a1 1 0 1 1 0 2H4a1 1 0 0 1-1-1zm5 0a1 1 0 0 1 1-1h11a1 1 0 1 1 0 2H9a1 1 0 0 1-1-1z',
-  // 排版 / Typography
-  typography:
-    'M11.1 4.55a1 1 0 0 1 1.8 0l5.6 12.02a1 1 0 1 1-1.81.86L15.3 14.5H8.7l-1.39 2.93a1 1 0 1 1-1.8-.86L11.1 4.55zM9.64 12.5h4.72L12 7.36 9.64 12.5z',
-  // 搜索 / Search
-  search:
-    'M10.5 3a7.5 7.5 0 0 1 5.96 12.06l4.24 4.24a1 1 0 0 1-1.42 1.4l-4.24-4.23A7.5 7.5 0 1 1 10.5 3zm0 2a5.5 5.5 0 1 0 0 11 5.5 5.5 0 0 0 0-11z',
-  // AI 随页理解 / AI
-  ai:
-    'M12 2.5a1 1 0 0 1 .95.69l1.4 4.3a3 3 0 0 0 1.92 1.92l4.3 1.4a1 1 0 0 1 0 1.9l-4.3 1.4a3 3 0 0 0-1.92 1.92l-1.4 4.3a1 1 0 0 1-1.9 0l-1.4-4.3a3 3 0 0 0-1.92-1.92l-4.3-1.4a1 1 0 0 1 0-1.9l4.3-1.4a3 3 0 0 0 1.92-1.92l1.4-4.3A1 1 0 0 1 12 2.5zm7.5 12.7a.8.8 0 0 1 .76.55l.42 1.28a1.6 1.6 0 0 0 1.02 1.02l1.28.42a.8.8 0 0 1 0 1.52l-1.28.42a1.6 1.6 0 0 0-1.02 1.02l-.42 1.28a.8.8 0 0 1-1.52 0l-.42-1.28a1.6 1.6 0 0 0-1.02-1.02l-1.28-.42a.8.8 0 0 1 0-1.52l1.28-.42a1.6 1.6 0 0 0 1.02-1.02l.42-1.28a.8.8 0 0 1 .76-.55z',
-  // 听书 / 朗读 / Audio
-  audio:
-    'M12 3a7 7 0 0 0-7 7v1.1A3.5 3.5 0 0 0 3 14.5v2A3.5 3.5 0 0 0 6.5 20H8a1 1 0 0 0 1-1v-7a1 1 0 0 0-1-1h-.9A5 5 0 0 1 12 5a5 5 0 0 1 4.9 6H16a1 1 0 0 0-1 1v7a1 1 0 0 0 1 1h1.5a3.5 3.5 0 0 0 3.5-3.5v-2a3.5 3.5 0 0 0-2-3.16V10a7 7 0 0 0-7-7z',
   // 全屏 / Fullscreen
   fullscreen:
     'M7 14H5v5h5v-2H7v-3zm-2-4h2V7h3V5H5v5zm12 7h-3v2h5v-5h-2v3zM14 5v2h3v3h2V5h-5z',
@@ -81,30 +66,52 @@ const ICONS: Record<string, string> = {
   // 删除 / Delete
   delete:
     'M6 19c0 1.1.9 2 2 2h8c1.1 0 2-.9 2-2V7H6v12zM19 4h-3.5l-1-1h-5l-1 1H5v2h14V4z',
-  // 书签 / Bookmark
-  bookmark:
-    'M17 3H7c-1.1 0-1.99.9-1.99 2L5 21l7-3 7 3V5c0-1.1-.9-2-2-2z',
-  bookmarkBorder:
-    'M17 3H7c-1.1 0-1.99.9-1.99 2L5 21l7-3 7 3V5c0-1.1-.9-2-2-2zm0 15-5-2.18L7 18V5h10v13z',
   // 置顶 / Pin
   pin:
     'M16 9V4h1c.55 0 1-.45 1-1s-.45-1-1-1H7c-.55 0-1 .45-1 1s.45 1 1 1h1v5c0 1.66-1.34 3-3 3v2h5.97v7l1 1 1-1v-7H19v-2c-1.66 0-3-1.34-3-3z',
 }
 
-const pathData = computed(() => ICONS[props.name] || ICONS.info)
+const menuIcon = computed(() => {
+  if (Object.hasOwn(MENU_ICONS, props.name)) return MENU_ICONS[props.name]
+  return Object.hasOwn(iconMarkup, props.name) ? props.name as PagewiseIconName : undefined
+})
+const iconSize = computed(() => {
+  const size = props.size ?? (menuIcon.value ? 28 : 24)
+  return typeof size === 'number' ? `${size}px` : size
+})
+const menuMarkup = computed(() => {
+  if (!menuIcon.value) return ''
+  return menuIcon.value === 'bookmarks' && (props.marked || props.name === 'bookmark')
+    ? markedBookmarkMarkup
+    : iconMarkup[menuIcon.value]
+})
+const menuStyle = computed(() => menuIcon.value ? {
+  width: iconSize.value,
+  height: iconSize.value,
+  strokeWidth: props.emphasis ? 2.25 : 2,
+} : undefined)
+const pathData = computed(() => Object.hasOwn(ICONS, props.name) ? ICONS[props.name] : ICONS.info)
 </script>
 
 <template>
   <svg
     class="app-icon"
-    :class="[`app-icon--${name}`]"
+    :class="[`app-icon--${name}`, { 'app-icon--menu': menuIcon }]"
+    :data-icon="menuIcon"
     :width="iconSize"
     :height="iconSize"
     viewBox="0 0 24 24"
+    fill="none"
+    :stroke="menuIcon ? 'currentColor' : undefined"
+    :stroke-width="emphasis ? 2.25 : 2"
+    stroke-linecap="round"
+    stroke-linejoin="round"
+    :style="menuStyle"
     :aria-hidden="ariaHidden === true || ariaHidden === 'true' ? 'true' : undefined"
     focusable="false"
   >
-    <path fill="currentColor" :d="pathData" />
+    <g v-if="menuIcon" v-html="menuMarkup" />
+    <path v-else fill="currentColor" :d="pathData" />
   </svg>
 </template>
 

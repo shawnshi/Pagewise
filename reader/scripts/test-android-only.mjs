@@ -38,7 +38,7 @@ test('desktop/PWA/iOS publication entries and resources are absent', () => {
   const pkg = json('package.json')
   for (const name of ['tauri', 'deploy']) assert.equal(pkg.scripts[name], undefined)
   assert.match(pkg.scripts.android, /^tauri android$/)
-  assert.match(pkg.scripts.preview, /^vite preview$/)
+  assert.match(pkg.scripts.preview, /^vite preview --configLoader runner$/)
   for (const name of ['vite-plugin-pwa', '@cloudflare/vite-plugin', 'wrangler']) assert.equal(pkg.devDependencies[name], undefined)
   assert.equal(existsSync(join(root, 'wrangler.jsonc')), false)
   for (const path of ['src-tauri/icons/ios', 'src-tauri/icons/icon.ico', 'src-tauri/icons/icon.icns', 'public/icon-192.png', 'public/icon-512.png', 'public/icon-maskable-512.png']) {
@@ -116,12 +116,15 @@ test('legacy schemas and TTS stay stable except approved additive metadata/state
   assert.match(books, /reading_status TEXT, /)
   assert.equal(statements.filter(statement => statement.includes('reading_status')).length, 2)
   const migration = 'ALTER TABLE books ADD COLUMN reading_status TEXT'
+  const classificationMigration = 'ALTER TABLE books ADD COLUMN classification TEXT'
+  assert.equal(statements.filter(statement => statement.includes('classification')).length, 1)
   assert.equal(statements.filter(statement => statement === migration).length, 1)
+  assert.equal(statements.filter(statement => statement === classificationMigration).length, 1)
   const metadataMigrations = ['publisher', 'publication_date', 'source_ref', 'file_availability']
     .map(column => `ALTER TABLE books ADD COLUMN ${column} TEXT`)
   for (const ddl of metadataMigrations) assert.equal(statements.filter(statement => statement === ddl).length, 1)
-  const originalSchemas = statements.filter(statement => statement !== migration && !metadataMigrations.includes(statement))
-    .map(statement => statement === books ? statement.replace('reading_status TEXT, ', '') : statement)
+  const originalSchemas = statements.filter(statement => statement !== migration && statement !== classificationMigration && !metadataMigrations.includes(statement))
+    .map(statement => statement === books ? statement.replace('reading_status TEXT, ', '').replace('classification TEXT, ', '') : statement)
   assert.deepEqual(originalSchemas, baseline.sqliteDDL)
   for (const path of ['sync-server/src/index.ts', 'library-server/uploads.py', 'src/services/sync/index.ts']) {
     assert.equal(existsSync(join(root, path)), false, path)

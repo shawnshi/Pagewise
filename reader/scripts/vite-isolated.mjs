@@ -52,12 +52,29 @@ export function isolatedCacheDir(base = resolve(workspace, '.cache/vite'), root 
   return child
 }
 
-export async function createServer(inlineConfig = {}) {
+function guardedConfig(inlineConfig) {
   const root = inlineConfig.root === undefined ? readerRoot : resolve(inlineConfig.root)
   // Validate before loading a config or allowing any cache mkdir.
   const cacheDir = isolatedCacheDir(inlineConfig.cacheDir, root)
+  return { ...inlineConfig, root, configLoader: 'runner', cacheDir }
+}
+
+export async function createServer(inlineConfig = {}) {
+  const config = guardedConfig(inlineConfig)
   const { createServer: viteCreateServer } = await import('vite')
-  return viteCreateServer({ ...inlineConfig, root, configLoader: 'runner', cacheDir })
+  return viteCreateServer(config)
+}
+
+export async function build(inlineConfig = {}) {
+  const config = guardedConfig(inlineConfig)
+  const { build: viteBuild } = await import('vite')
+  return viteBuild(config)
+}
+
+export async function preview(inlineConfig = {}) {
+  const config = guardedConfig(inlineConfig)
+  const { preview: vitePreview } = await import('vite')
+  return vitePreview(config)
 }
 
 // The retirement fixture also uses Vite's path utility, not another startup API.

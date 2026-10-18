@@ -83,6 +83,7 @@ export interface UseDianjingOptions {
   /** djThemeName(正文主题, 墨水屏) */
   getThemeName: () => string
   isEink?: () => boolean
+  presentationSuppressed?: () => boolean
   getChapterTitle?: (section: number) => string
   /** 「我也觉得」/「写想法」: 转成用户自己的划线 */
   adoptHighlight?: (a: { index: number; range: Range; text: string; withNote: boolean }) => void | Promise<void>
@@ -215,8 +216,8 @@ export function useDianjing(opts: UseDianjingOptions) {
   /** 选的版本: 基础 (按词着色) / 智能 (AI) */
   const level = computed<DjLevel>(() => normalizeLevel(prefs.value.level))
   /** 智能版在本书开着 (只在选了智能版时为 true; AI 引擎随它启停) */
-  const enabled = computed(() => level.value === 'smart' && smartOnFor(prefs.value, opts.bookId))
-  const basicOn = computed(() => level.value === 'basic' && !!opts.basic?.isOn())
+  const enabled = computed(() => !opts.presentationSuppressed?.() && level.value === 'smart' && smartOnFor(prefs.value, opts.bookId))
+  const basicOn = computed(() => !opts.presentationSuppressed?.() && level.value === 'basic' && !!opts.basic?.isOn())
   /** 点睛阅读开着 (按所选版本) */
   const on = computed(() => basicOn.value || enabled.value)
   const basicSupported = computed(() => opts.basic?.supported() ?? true)
@@ -258,6 +259,7 @@ export function useDianjing(opts: UseDianjingOptions) {
 
   /** 走一步开关状态机 (services/dianjing/level.ts), 把变化写回设置; 返回 false 表示先弹了同意说明 */
   function apply(action: DjAction): boolean {
+    if (opts.presentationSuppressed?.()) return false
     const p = prefs.value
     const before: DjSwitchState = {
       level: level.value,

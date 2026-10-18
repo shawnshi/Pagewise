@@ -21,9 +21,10 @@ function fixture() {
   const storage = { getItem: key => values.get(key) ?? null, setItem(key, value) { writes++; values.set(key, value) } }
   const history = createMemoryHistory()
   const router = createRouter({ history, routes: [{ path: '/library', component: {} }, { path: '/read/:id', component: {} }, { path: '/notes', component: {} }] })
-  const callback = new Function('rememberView', 'localStorage', 'console', `return (${callbacks[0]})`)(rememberView, storage, console)
+  const librarySessions = []
+  const callback = new Function('rememberView', 'localStorage', 'console', 'saveLibrarySession', `return (${callbacks[0]})`)(rememberView, storage, console, value => librarySessions.push(value))
   router.afterEach(callback)
-  return { router, history, storage, writes: () => writes }
+  return { router, history, storage, librarySessions, writes: () => writes }
 }
 
 test('successful navigation commits the actual current restorable view', async () => {
@@ -33,6 +34,7 @@ test('successful navigation commits the actual current restorable view', async (
   assert.equal(restoreView(f.storage), '/read/synthetic-book')
   await f.router.push('/notes')
   assert.equal(restoreView(f.storage), '/notes')
+  assert.deepEqual(f.librarySessions, [{ returnedFromReader: true, lastViewedBookId: 'synthetic-book' }])
 })
 
 test('aborted navigation must not replace the saved reader with the canceled target', async () => {
@@ -45,6 +47,7 @@ test('aborted navigation must not replace the saved reader with the canceled tar
   assert.equal(f.router.currentRoute.value.path, '/read/synthetic-book')
   assert.equal(restoreView(f.storage), '/read/synthetic-book')
   assert.equal(f.writes(), before)
+  assert.deepEqual(f.librarySessions, [])
 })
 
 test('a consumed Back/pop navigation keeps the live and saved reader aligned', async () => {

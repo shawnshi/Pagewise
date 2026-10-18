@@ -11,7 +11,7 @@ const artifacts = resolve(root, '../artifacts/android-only')
 mkdirSync(artifacts, { recursive: true })
 const port = 4178
 const base = `http://127.0.0.1:${port}`
-const server = spawn(process.execPath, ['node_modules/vite/bin/vite.js', 'preview', '--host', '127.0.0.1', '--port', String(port), '--strictPort'], { cwd: root, stdio: ['ignore', 'pipe', 'pipe'] })
+const server = spawn(process.execPath, ['node_modules/vite/bin/vite.js', 'preview', '--configLoader', 'runner', '--host', '127.0.0.1', '--port', String(port), '--strictPort'], { cwd: root, stdio: ['ignore', 'pipe', 'pipe'] })
 let serverLog = ''
 server.stdout.on('data', chunk => { serverLog += chunk })
 server.stderr.on('data', chunk => { serverLog += chunk })
@@ -49,7 +49,7 @@ try {
     return route.continue()
   })
   await context.addInitScript(() => {
-    if (!localStorage.getItem('lightread-settings')) localStorage.setItem('lightread-settings', JSON.stringify({ language: 'zh', usageStats: false, sync: { autoSync: false } }))
+    if (!localStorage.getItem('lightread-settings')) localStorage.setItem('lightread-settings', JSON.stringify({ language: 'zh', sync: { autoSync: false } }))
   })
   const page = await context.newPage()
   page.on('pageerror', error => errors.push(error.message))

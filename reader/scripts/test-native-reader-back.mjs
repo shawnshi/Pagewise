@@ -12,7 +12,7 @@ function fixture(readerBack) {
   const node = findFunction('handleNativeReaderBack')
   assert.ok(node, 'the native adapter must delegate to the production reader Back entry')
   const errors = [], notices = []
-  const handler = new Function('readerBack', 'toast', 't', 'console', `let nativeBackPending = false; ${compile(node.getText(ast))}; return handleNativeReaderBack`)(readerBack, (...args) => notices.push(args), key => key, { error: (...args) => errors.push(args) })
+  const handler = new Function('readerBack', 'toast', 't', 'console', `let nativeBackPending = false, nativeBackAlive = true; const nativeBackHost = {}; ${compile(node.getText(ast))}; nativeBackHost.__pagewiseReaderBack = handleNativeReaderBack; return handleNativeReaderBack`)(readerBack, (...args) => notices.push(args), key => key, { error: (...args) => errors.push(args) })
   return { handler, errors, notices }
 }
 const settle = () => new Promise(resolve => setImmediate(resolve))
@@ -51,7 +51,7 @@ test('mount registers the actual reader owner; cleanup never deletes a newer own
   assert.equal(hooks.onMounted.length, 1)
   assert.equal(hooks.onBeforeUnmount.length, 1)
   const host = {}, own = () => true
-  const hook = source => new Function('nativeBackHost', 'handleNativeReaderBack', `${compile(`const callback = ${source}`)};return callback`)(host, own)
+  const hook = source => new Function('nativeBackHost', 'handleNativeReaderBack', `let nativeBackAlive = true; ${compile(`const callback = ${source}`)};return callback`)(host, own)
   const mount = hook(hooks.onMounted[0]), unmount = hook(hooks.onBeforeUnmount[0])
   mount(); assert.equal(host.__pagewiseReaderBack, own)
   unmount(); assert.equal(host.__pagewiseReaderBack, undefined)
@@ -59,10 +59,38 @@ test('mount registers the actual reader owner; cleanup never deletes a newer own
   unmount(); assert.equal(host.__pagewiseReaderBack, replacement)
 })
 
+test('actual PDF Back awaits note acknowledgement and leaves the editor intact on rejection', async () => {
+  const source = readFileSync(new URL('../src/views/PdfReaderView.vue', import.meta.url), 'utf8').match(/<script setup lang="ts">([\s\S]*?)<\/script>/)[1]
+  const pdf = ts.createSourceFile('PdfReaderView.ts', source, ts.ScriptTarget.Latest, true)
+  const bodies = ['readerBack', 'saveNote'].map(name => {
+    const node = pdf.statements.find(node => ts.isFunctionDeclaration(node) && node.name?.text === name)
+    assert.ok(node, name)
+    return node.getText(pdf)
+  }).join('\n')
+  const state = { activeAnnotation: { value: { id: 'owned', note: '' } }, noteDraft: { value: 'retain input' }, annotations: { value: [{ id: 'owned' }] } }
+  let reject, resolve
+  const storage = { updateAnnotation: () => new Promise((yes, no) => { resolve = yes; reject = no }) }
+  const back = new Function('activeAnnotation', 'noteDraft', 'annotations', 'getStorage', 'toast', 't', `const bookmarkMutation = null; ${compile(bodies)}; return readerBack`)(state.activeAnnotation, state.noteDraft, state.annotations, async () => storage, () => {}, key => key)
+  const failed = back()
+  await settle()
+  assert.equal(state.activeAnnotation.value.id, 'owned')
+  reject(new Error('synthetic PDF note failure'))
+  await assert.rejects(failed, /synthetic PDF note failure/)
+  assert.equal(state.noteDraft.value, 'retain input')
+  assert.equal(state.activeAnnotation.value.id, 'owned')
+  const retry = back()
+  await settle(); resolve(); await retry
+  assert.equal(state.activeAnnotation.value, null)
+  assert.equal(state.annotations.value[0].note, 'retain input')
+})
+
 test('Android forwards Back first and disables only its own callback during original-dispatcher fallback', () => {
   const kotlin = readFileSync(new URL('../src-tauri/android/MainActivity.kt', import.meta.url), 'utf8')
   assert.match(kotlin, /OnBackPressedCallback/)
-  assert.match(kotlin, /onBackPressedDispatcher\.addCallback\(this, nativeBackCallback\)/)
+  const create = kotlin.slice(kotlin.indexOf('override fun onCreate'), kotlin.indexOf('override fun onWebViewCreate'))
+  assert.doesNotMatch(create, /addCallback/)
+  const webViewCreate = kotlin.slice(kotlin.indexOf('override fun onWebViewCreate'), kotlin.indexOf('private var barsDark'))
+  assert.match(webViewCreate, /nativeBackCallback\.remove\(\)[\s\S]*onBackPressedDispatcher\.addCallback\(this, nativeBackCallback\)/)
   assert.match(kotlin, /__pagewiseReaderBack/)
   assert.match(kotlin, /evaluateJavascript/)
   assert.match(kotlin, /handled != "true"/)

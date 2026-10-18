@@ -1,0 +1,9 @@
+# Font and license SHA-256 receipts describe the exact vendored resource bytes.
+# Preserve them across Windows autocrlf checkouts and application packaging.
+reader/public/fonts/*.woff2 -text
+# Upstream license text is verbatim, including intentional trailing spaces.
+reader/public/fonts/*-OFL.txt -text -whitespace
+reader/public/fonts/*-LICENSE.txt -text -whitespace
+reader/public/fonts/*-LICENSE.md -text -whitespace
+reader/public/fonts/fonts.css text eol=lf
+reader/public/fonts/manifest.json text eol=lf

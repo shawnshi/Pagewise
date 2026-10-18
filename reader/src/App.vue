@@ -1,5 +1,4 @@
 <script setup lang="ts">
-import { pingUsage } from './services/usageStats'
 import { localPack, localTtsAvailable, refreshLocalPack } from './services/localTts'
 import { useRoute, useRouter } from 'vue-router'
 import { computed, onBeforeUnmount, onMounted, watch } from 'vue'
@@ -47,8 +46,6 @@ watch(() => folderLibrary.status.value.generation, async () => {
 onMounted(async () => {
   stopFolderLibrary = folderLibrary.start()
   if (isTauri()) stopExternalOpen = await startExternalOpen(router)
-  // 匿名使用统计: 每天一次, 后台进行
-  void pingUsage()
   void recoverFromLocalTtsCrash()
 
 })
@@ -74,7 +71,7 @@ const navs = [
   {
     path: '/library',
     labelKey: 'nav.library',
-    fallback: '藏书',
+    fallback: '书库',
     icon: 'library',
   },
   {
@@ -121,7 +118,7 @@ function navLabel(item: { labelKey: string; fallback?: string }): string {
           class="nav-item"
           :title="navLabel(n)"
         >
-          <AppIcon :name="n.icon" :size="20" aria-hidden="true" />
+          <AppIcon :name="n.icon" :size="28" :emphasis="route.path === n.path" aria-hidden="true" />
           <span class="nav-label">{{ navLabel(n) }}</span>
         </router-link>
       </div>
@@ -131,14 +128,14 @@ function navLabel(item: { labelKey: string; fallback?: string }): string {
           class="nav-item sidebar-stats"
           :title="navLabel(statsNav)"
         >
-          <AppIcon :name="statsNav.icon" :size="20" aria-hidden="true" />
+          <AppIcon :name="statsNav.icon" :size="28" :emphasis="route.path === statsNav.path" aria-hidden="true" />
           <span class="nav-label">{{ navLabel(statsNav) }}</span>
         </router-link>
       </div>
       <div class="sidebar-bottom">
         <router-link :to="settingsNav.path" class="nav-item sidebar-settings" :title="navLabel(settingsNav)">
           <span class="sidebar-settings-icon">
-            <AppIcon :name="settingsNav.icon" :size="20" aria-hidden="true" />
+            <AppIcon :name="settingsNav.icon" :size="28" :emphasis="route.path === settingsNav.path" aria-hidden="true" />
           </span>
           <span class="nav-label">{{ t(settingsNav.labelKey) }}</span>
         </router-link>
@@ -199,7 +196,7 @@ function navLabel(item: { labelKey: string; fallback?: string }): string {
   width: 100%;
   padding: 6px 4px;
   border-radius: var(--radius);
-  color: var(--text-2);
+  color: var(--text);
   font-size: 14px;
   font-weight: 500;
   text-align: center;
@@ -214,13 +211,13 @@ function navLabel(item: { labelKey: string; fallback?: string }): string {
   background: var(--surface-3);
 }
 .nav-item:focus-visible {
-  outline: none;
-  box-shadow: var(--ring);
+  outline: 2px solid var(--text);
+  box-shadow: none;
 }
 .nav-item.router-link-active {
-  background: var(--brand-light);
+  background: var(--surface-2);
   color: var(--text);
-  font-weight: 600;
+  font-weight: 700;
 }
 .nav-item.router-link-active::before {
   content: '';
@@ -231,7 +228,7 @@ function navLabel(item: { labelKey: string; fallback?: string }): string {
   height: 3px;
   transform: translateX(-50%);
   border-radius: 0 0 3px 3px;
-  background: var(--brand);
+  background: var(--text);
 }
 .nav-item svg,
 .sidebar-settings-icon {

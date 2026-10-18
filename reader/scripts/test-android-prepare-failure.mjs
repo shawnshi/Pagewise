@@ -143,6 +143,7 @@ test('native allowlist is exact and Android bridge excludes only updater functio
   assert.deepEqual([...list.matchAll(/"([^"]+)"/g)].map(match => match[1]), ['epub', 'mobi', 'pdf', 'txt', 'md', 'markdown'])
   assert.doesNotMatch(lib.slice(lib.indexOf('fn is_supported_path'), lib.indexOf('fn supported_paths')), /fb2|ends_with/)
   const kotlin = readFileSync(join(root, template), 'utf8')
-  assert.doesNotMatch(kotlin, /Updater|[Ii]nstall|updatesDir|FileProvider|\bThread\s*\{/)
+  const executableKotlin = kotlin.replace(/\/\/[^\r\n]*|\/\*[\s\S]*?\*\//g, '')
+  assert.doesNotMatch(executableKotlin, /Updater|[Ii]nstall|updatesDir|FileProvider|\bThread\s*\{/)
   for (const value of ['LightReadInsets', 'setImmersive', 'setKeepScreenOn', 'setBarsDark', 'onApplyWindowInsets']) assert.ok(kotlin.includes(value), value)
 })

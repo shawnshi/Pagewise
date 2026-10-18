@@ -1,5 +1,5 @@
 // 调试单个语料文件：用应用同款 MuPDF 渲染并输出全部控制台消息
-import { createServer } from 'vite'
+import { createServer } from '../vite-isolated.mjs'
 import { chromium } from 'playwright'
 import { createReadStream } from 'node:fs'
 

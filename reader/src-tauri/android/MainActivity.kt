@@ -56,11 +56,14 @@ class MainActivity : TauriActivity() {
     override fun onCreate(savedInstanceState: Bundle?) {
         enableEdgeToEdge()
         super.onCreate(savedInstanceState)
-        onBackPressedDispatcher.addCallback(this, nativeBackCallback)
     }
 
     override fun onWebViewCreate(webView: WebView) {
         nativeBackView = webView
+        // Wry installs its history callback during setWebView, before this hook.
+        // PW-NATIVE-BACK-01: the reader must own the later dispatcher position.
+        nativeBackCallback.remove()
+        onBackPressedDispatcher.addCallback(this, nativeBackCallback)
         webView.addJavascriptInterface(InsetsBridge(), "LightReadInsets")
 
         ViewCompat.setOnApplyWindowInsetsListener(webView) { view, insets ->

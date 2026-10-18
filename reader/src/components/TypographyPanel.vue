@@ -19,7 +19,7 @@
  *   - .theme-btn (5 个, 第 3 个护眼绿)
  *   - .seg 按钮文案「翻页」「滚动」
  */
-import { computed, nextTick, onMounted, ref, type CSSProperties } from 'vue'
+import { computed, nextTick, onMounted, ref, watch, type CSSProperties } from 'vue'
 import { t } from '../i18n'
 import { useSettings, type ReaderPrefs } from '../stores/settings'
 import {
@@ -38,7 +38,9 @@ import {
   type TypographyScope,
   type TypographySettings,
 } from '../services/readerTypography'
-import { listSystemFonts, importFontFile } from '../services/fonts'
+import { listSystemFonts, importFontFile, resolveFontFamily, injectFontIntoDoc, measureTextScale } from '../services/fonts'
+import type { BookTypographyContext } from '../services/readerTypographyContext'
+import { bundledFontWeight, type TypographyProfile } from '../services/readerTypographyProfiles'
 import { isTauri } from '../storage/types'
 import { toast } from '../services/toast'
 import { DIM_MAX } from '../services/readingModes/eyeCare'
@@ -60,10 +62,11 @@ interface Props {
   bookId?: string
   /** 原书声明或已确认的语言；缺失时不能修改某种语言的默认值。 */
   bookLanguage?: string
+  context?: BookTypographyContext
   /** 当前书籍标题 (可选, 用于作用域提示) */
   bookTitle?: string
   /** 初始生效排版配置 (可选, 缺失时由 store 解析) */
-  initialTypography?: TypographySettings
+  initialTypography?: TypographySettings & Partial<Omit<ResolvedTypography, 'profile'>>
   /** 外部传入的应用回调 (Promise 成功返回 true 或 { success: true }) */
   applyTypography: (payload: TypographyApplyPayload) => Promise<{ success: boolean; error?: string }>
 }
@@ -90,6 +93,9 @@ const root = ref<HTMLElement>()
 
 // ---- 本地草稿状态 ----
 interface LocalDraft {
+  publicationBaseline: boolean
+  profile: TypographyProfile | 'auto'
+  maxLineLength: number
   displayMode: TypographyDisplayMode
   fontSize: number
   lineHeight: number
@@ -114,32 +120,25 @@ interface LocalDraft {
 const normLang = computed(() => normalizeLanguageTag(props.bookLanguage))
 const initialResolved = ref<ResolvedTypography>(resolveCurrentEffective())
 
+function resolutionOptions() {
+  return { profile: props.context?.profile, protectedLayout: !!props.context?.protectedLayout,
+    textScale: props.initialTypography?.textScale ?? measureTextScale(document) ?? 1,
+    viewportWidth: props.initialTypography?.viewportWidth ?? Math.min(window.innerWidth, window.screen.width || Infinity, window.screen.height || Infinity) }
+}
+
 function resolveCurrentEffective(): ResolvedTypography {
-  if (props.initialTypography) {
-    return {
-      displayMode: props.initialTypography.displayMode ?? 'optimized',
-      fontSize: props.initialTypography.fontSize ?? settings.reader.fontSize,
-      lineHeight: props.initialTypography.lineHeight ?? settings.reader.lineHeight,
-      gap: props.initialTypography.gap ?? settings.reader.gap,
-      fontFamily: props.initialTypography.fontFamily ?? settings.reader.fontFamily,
-      justify: props.initialTypography.justify ?? settings.reader.justify,
-      letterSpacing: props.initialTypography.letterSpacing ?? settings.reader.letterSpacing,
-      paragraphSpacing: props.initialTypography.paragraphSpacing ?? 0.4,
-      textIndent: props.initialTypography.textIndent ?? 2,
-      source: props.bookId && settings.typographyBooks[props.bookId] ? 'book' : 'base',
-      hasBookOverride: Boolean(props.bookId && settings.typographyBooks[props.bookId]),
-      hasLanguageOverride: Boolean(settings.typographyLanguages[normLang.value]),
-      appliedLanguage: normLang.value,
-      bookId: props.bookId || undefined,
-    }
-  }
-  return settings.getEffectiveTypography(props.bookId, props.bookLanguage)
+  const resolved = settings.getEffectiveTypography(props.bookId, props.bookLanguage, resolutionOptions())
+  return props.initialTypography ? { ...resolved, ...props.initialTypography,
+    profile: props.initialTypography.profile && props.initialTypography.profile !== 'auto' ? props.initialTypography.profile : resolved.profile } : resolved
 }
 
 function initDraft(): LocalDraft {
   const eff = resolveCurrentEffective()
   initialResolved.value = eff
   return {
+    publicationBaseline: !!eff.publicationBaseline,
+    profile: eff.profilePreference,
+    maxLineLength: eff.maxLineLength ?? 0,
     displayMode: eff.displayMode,
     fontSize: eff.fontSize,
     lineHeight: eff.lineHeight,
@@ -149,13 +148,13 @@ function initDraft(): LocalDraft {
     letterSpacing: eff.letterSpacing,
     paragraphSpacing: eff.paragraphSpacing,
     textIndent: eff.textIndent,
-    theme: settings.reader.theme,
+    theme: eff.theme ?? settings.reader.theme,
     dim: settings.readingMode.eyeCare.dim,
-    flow: settings.reader.flow,
-    continuousScroll: settings.reader.continuousScroll,
-    maxColumnCount: settings.reader.maxColumnCount,
-    portraitScroll: settings.reader.portraitScroll,
-    progressDisplay: settings.reader.progressDisplay,
+    flow: eff.flow ?? settings.reader.flow,
+    continuousScroll: eff.continuousScroll ?? settings.reader.continuousScroll,
+    maxColumnCount: eff.maxColumnCount ?? settings.reader.maxColumnCount,
+    portraitScroll: eff.portraitScroll ?? settings.reader.portraitScroll,
+    progressDisplay: eff.progressDisplay ?? settings.reader.progressDisplay,
     scope: props.bookId ? 'book' : 'language',
   }
 }
@@ -167,6 +166,8 @@ const hasBookOverride = computed(() => Boolean(props.bookId && settings.typograp
 
 // 恢复自动优化预览状态 (非即时删除，先在预览中展示，点击应用才提交)
 const isRestoreAutoPreview = ref(false)
+// Programmatic restore sets this flag last; every subsequent user edit cancels deletion-only semantics.
+watch(draft, () => { isRestoreAutoPreview.value = false }, { deep: true, flush: 'sync' })
 
 // 拟真预览语言切换 (方便对比中英文实际排版效果)
 const previewLang = ref<'zh' | 'en'>(normLang.value === 'en' ? 'en' : 'zh')
@@ -203,14 +204,23 @@ function setFontSize(raw: string | number) {
 
 // 步进控制: 行距 (1.0..3.0)
 function setLineHeight(delta: number) {
-  const next = Math.round((draft.value.lineHeight + delta) * 10) / 10
+  const next = Math.round((draft.value.lineHeight + delta) * 100) / 100
   draft.value.lineHeight = Math.min(3.0, Math.max(1.0, next))
   isRestoreAutoPreview.value = false
 }
 
-// 步进控制: 边距 (2..20)
+const calibratedMarginMm = computed(() => {
+  const p = draft.value.profile === 'auto' ? initialResolved.value.profile : draft.value.profile
+  if (props.fixedLayout || props.context?.protectedLayout || window.innerWidth > window.innerHeight) return 0
+  if (initialResolved.value.calibration !== 'calibrated' || initialResolved.value.overriddenFields.includes('gap')
+    || settings.reader.gap !== 6 || draft.value.gap !== initialResolved.value.gap || draft.value.displayMode !== 'optimized' || p === 'original') return 0
+  return p === 'en' ? 14 : 12
+})
+// Percent overrides are stepped from the actual ruler edge, not from its uncalibrated placeholder.
 function setGap(delta: number) {
-  const next = draft.value.gap + delta
+  const calibration = settings.typographyCalibration
+  const current = calibratedMarginMm.value && calibration ? calibratedMarginMm.value * calibration.cssPxPerMm / Math.max(1, initialResolved.value.viewportWidth) * 100 : draft.value.gap
+  const next = delta > 0 ? Math.ceil(current + delta) : Math.floor(current + delta)
   draft.value.gap = Math.min(20, Math.max(2, next))
   isRestoreAutoPreview.value = false
 }
@@ -222,42 +232,64 @@ function setDisplayMode(mode: TypographyDisplayMode) {
 }
 
 // 恢复自动优化 (预览态)
+function useText(target: TypographySettings) {
+  Object.assign(draft.value, {
+    displayMode: target.displayMode, fontSize: target.fontSize, lineHeight: target.lineHeight,
+    gap: target.gap, fontFamily: target.fontFamily, justify: target.justify,
+    letterSpacing: target.letterSpacing, paragraphSpacing: target.paragraphSpacing,
+    textIndent: target.textIndent, maxLineLength: target.maxLineLength ?? 0,
+  })
+}
+function onProfileChange() {
+  const selected = draft.value.profile
+  const target = selected === 'auto'
+    ? settings.getEffectiveTypography(props.bookId, props.bookLanguage, { ...resolutionOptions(), ignoreBook: true })
+    : getDefaultTypographyForLanguage(normLang.value, { ...resolutionOptions(), profile: selected, base: settings.reader, calibration: settings.typographyCalibration, dpr: devicePixelRatio })
+  useText(target)
+  draft.value.profile = selected
+}
 function onPreviewRestoreAuto() {
-  const langDef = getDefaultTypographyForLanguage(normLang.value)
-  const langOv = settings.typographyLanguages[normLang.value] ?? {}
-  const target = {
-    ...langDef,
-    fontSize: settings.reader.fontSize,
-    lineHeight: settings.reader.lineHeight,
-    gap: settings.reader.gap,
-    fontFamily: settings.reader.fontFamily,
-    justify: settings.reader.justify,
-    letterSpacing: settings.reader.letterSpacing,
-    ...langOv,
-  }
-
-  draft.value.displayMode = target.displayMode ?? 'optimized'
-  draft.value.fontSize = target.fontSize
-  draft.value.lineHeight = target.lineHeight
-  draft.value.gap = target.gap
-  draft.value.fontFamily = target.fontFamily
-  draft.value.justify = target.justify
-  draft.value.letterSpacing = target.letterSpacing
-  draft.value.paragraphSpacing = target.paragraphSpacing ?? 0.4
-  draft.value.textIndent = target.textIndent ?? 2
-
+  const target = settings.getEffectiveTypography(props.bookId, props.bookLanguage, {
+    ...resolutionOptions(), ignoreBook: true,
+  })
+  useText(target)
+  Object.assign(draft.value, {
+    profile: 'auto', publicationBaseline: !!target.publicationBaseline, theme: target.theme ?? settings.reader.theme,
+    flow: target.flow ?? settings.reader.flow, continuousScroll: target.continuousScroll ?? settings.reader.continuousScroll,
+    maxColumnCount: target.maxColumnCount ?? settings.reader.maxColumnCount,
+    portraitScroll: target.portraitScroll ?? settings.reader.portraitScroll,
+    progressDisplay: target.progressDisplay ?? settings.reader.progressDisplay,
+  })
   isRestoreAutoPreview.value = true
 }
+const profileName = computed(() => {
+  const profile = draft.value.profile === 'auto'
+    ? settings.getEffectiveTypography(props.bookId, props.bookLanguage, { profile: props.context?.profile, ignoreBook: true }).profile : draft.value.profile
+  return t('reader.profile.' + profile)
+})
 
 // 系统字体
 const systemFonts = sharedSystemFonts
+const fontEnumerationWarning = ref(false)
+const previewFontWarning = ref(false)
+const unknownFont = computed(() => !!draft.value.fontFamily && !FONT_FAMILIES.some(f => f.value === draft.value.fontFamily) && !settings.customFonts.some(f => `custom:${f.name}` === draft.value.fontFamily) && !systemFonts.value.some(name => `'${name}'` === draft.value.fontFamily))
+watch(() => draft.value.fontFamily, async (value, _old, onCleanup) => {
+  let current = true
+  onCleanup(() => { current = false })
+  previewFontWarning.value = false
+  if (!value.startsWith('custom:')) return
+  const font = settings.customFonts.find(f => `custom:${f.name}` === value)
+  if (!font) { previewFontWarning.value = true; return }
+  try { await injectFontIntoDoc(document, font) }
+  catch { if (current) previewFontWarning.value = true }
+}, { immediate: true })
 async function loadSystemFonts() {
   if (!desktop || systemFonts.value.length || systemFontsLoading) return
   systemFontsLoading = true
   try {
     systemFonts.value = await listSystemFonts()
   } catch {
-    /* 忽略枚举失败 */
+    fontEnumerationWarning.value = true
   } finally {
     systemFontsLoading = false
   }
@@ -329,7 +361,7 @@ const isDark = computed(() => {
 
 const previewColors = computed(() => {
   const resolvedTheme = resolveReaderTheme(draft.value.theme, isDark.value)
-  return resolveReaderColors(resolvedTheme, isDark.value, props.modes.readerStyle.value)
+  return resolveReaderColors(resolvedTheme, isDark.value, { ...props.modes.readerStyle.value, publication: draft.value.publicationBaseline })
 })
 
 const previewStyles = computed<CSSProperties>(() => {
@@ -337,11 +369,14 @@ const previewStyles = computed<CSSProperties>(() => {
   const isPublisher = draft.value.displayMode === 'publisher'
   return {
     fontSize: `${draft.value.fontSize}px`,
+    fontWeight: bundledFontWeight(draft.value.fontFamily),
+    fontOpticalSizing: draft.value.fontFamily === 'source-serif4' ? 'none' : 'auto',
+    fontSynthesis: 'none',
     lineHeight: String(draft.value.lineHeight),
-    letterSpacing: `${draft.value.letterSpacing}em`,
-    fontFamily: draft.value.fontFamily || 'inherit',
+    letterSpacing: `${draft.value.letterSpacing * draft.value.fontSize * initialResolved.value.textScale}px`,
+    fontFamily: resolveFontFamily(draft.value.fontFamily, { profile: draft.value.profile === 'auto' ? initialResolved.value.profile : draft.value.profile, language: props.bookLanguage }) || 'inherit',
     textAlign: isPublisher ? 'start' : draft.value.justify ? 'justify' : 'start',
-    textIndent: isRepair ? '0' : `${draft.value.textIndent}em`,
+    textIndent: isRepair ? '0' : `${draft.value.textIndent * draft.value.fontSize * initialResolved.value.textScale}px`,
     padding: `${Math.max(6, Math.round(draft.value.gap * 0.8))}px`,
     backgroundColor: previewColors.value.bg,
     color: previewColors.value.fg,
@@ -361,6 +396,9 @@ async function onApply() {
   applyError.value = ''
 
   const typographyPayload: TypographySettings = {
+    publicationBaseline: draft.value.publicationBaseline,
+    profile: draft.value.profile,
+    maxLineLength: draft.value.maxLineLength,
     displayMode: draft.value.displayMode,
     fontSize: draft.value.fontSize,
     lineHeight: draft.value.lineHeight,
@@ -377,17 +415,7 @@ async function onApply() {
     language: normLang.value,
     scope: draft.value.scope,
     settings: typographyPayload,
-    previousSettings: {
-      displayMode: initialResolved.value.displayMode,
-      fontSize: initialResolved.value.fontSize,
-      lineHeight: initialResolved.value.lineHeight,
-      gap: initialResolved.value.gap,
-      fontFamily: initialResolved.value.fontFamily,
-      justify: initialResolved.value.justify,
-      letterSpacing: initialResolved.value.letterSpacing,
-      paragraphSpacing: initialResolved.value.paragraphSpacing,
-      textIndent: initialResolved.value.textIndent,
-    },
+    previousSettings: { ...initialResolved.value },
     isRestoreAuto: isRestoreAutoPreview.value,
     readerPatch: {
       theme: draft.value.theme,
@@ -442,6 +470,30 @@ let systemFontsLoading = false
       </button>
     </header>
 
+    <p class="set-note tp-profile-source" role="note">
+      {{ profileName }} · {{ t('reader.typographySource.' + initialResolved.source) }} ·
+      {{ initialResolved.calibration === 'calibrated' ? t('reader.typographyCalibrated') : t('reader.typographyUncalibrated') }}
+    </p>
+    <label v-if="bookId && !fixedLayout && !context?.protectedLayout" class="set-row tp-publication-baseline">
+      <span class="tp-label">{{ t('reader.publicationBaseline') }}</span>
+      <input v-model="draft.publicationBaseline" type="checkbox" :aria-label="t('reader.publicationBaseline')" />
+    </label>
+    <p v-if="bookId && !fixedLayout && !context?.protectedLayout" class="set-note">{{ t('reader.publicationBaselineHelp') }}</p>
+    <p v-if="draft.displayMode === 'optimized' && !context?.protectedLayout" class="set-note">{{ t('reader.typographyPageEdges') }}</p>
+    <p v-if="draft.profile === 'mixed' || (draft.profile === 'auto' && context?.profile === 'mixed')" class="set-note">{{ t('reader.typographyMixedHint') }}</p>
+    <p v-if="context?.warnings.length" class="set-note" role="note">{{ t('reader.typographyLanguageWarning') }}</p>
+    <p v-if="fixedLayout || context?.protectedLayout" class="set-note">{{ t('reader.typographyLayoutProtected') }}</p>
+    <label class="set-row">
+      <span class="tp-label">{{ t('reader.typographyProfile') }}</span>
+      <select v-model="draft.profile" class="input tp-profile-select" :disabled="fixedLayout || !!context?.protectedLayout" :aria-label="t('reader.typographyProfile')" @change="onProfileChange">
+        <option value="auto">{{ t('reader.profile.auto') }}</option>
+        <option value="zh">{{ t('reader.profile.zh') }}</option>
+        <option value="en">{{ t('reader.profile.en') }}</option>
+        <option value="mixed">{{ t('reader.profile.mixed') }}</option>
+        <option value="original">{{ t('reader.profile.original') }}</option>
+      </select>
+    </label>
+
     <!-- 场景提示 -->
     <p v-if="sceneNames" class="tp-scenes" role="note">
       <span>{{ t('reader.scenesOn', { names: sceneNames }) }}</span>
@@ -480,6 +532,7 @@ let systemFontsLoading = false
       </div>
     </section>
 
+    <fieldset class="tp-text-controls" :disabled="fixedLayout || !!context?.protectedLayout">
     <!-- 显示模式: 自动优化 / 出版原貌 / 兼容修复 (REAL CSS) -->
     <section class="tp-group" data-section="mode" :aria-label="t('uiV02.copy.显示模式')">
       <h3 class="tp-title">{{ t("uiV02.copy.显示模式") }}</h3>
@@ -524,26 +577,27 @@ let systemFontsLoading = false
       <!-- 行距 -->
       <div class="set-row">
         <span class="tp-label">{{ t('reader.lineHeight') }}</span>
-        <button type="button" class="step-btn" :title="t('uiV02.copy.减小行距')" :aria-label="t('uiV02.copy.减小行距')" @click="setLineHeight(-0.1)">−</button>
-        <input v-model.number="draft.lineHeight" type="range" min="1.0" max="2.6" step="0.1" :aria-label="t('reader.lineHeight')" />
-        <button type="button" class="step-btn" :title="t('uiV02.copy.增加行距')" :aria-label="t('uiV02.copy.增加行距')" @click="setLineHeight(0.1)">+</button>
-        <span class="tp-unit-val">{{ draft.lineHeight.toFixed(1) }}</span>
+        <button type="button" class="step-btn" :title="t('uiV02.copy.减小行距')" :aria-label="t('uiV02.copy.减小行距')" @click="setLineHeight(-0.05)">−</button>
+        <input v-model.number="draft.lineHeight" type="range" min="1.0" max="3.0" step="0.05" :aria-label="t('reader.lineHeight')" />
+        <button type="button" class="step-btn" :title="t('uiV02.copy.增加行距')" :aria-label="t('uiV02.copy.增加行距')" @click="setLineHeight(0.05)">+</button>
+        <span class="tp-unit-val">{{ draft.lineHeight.toFixed(2) }}</span>
       </div>
 
       <!-- 边距 -->
       <div class="set-row">
         <span class="tp-label">{{ t('reader.margin') }}</span>
         <button type="button" class="step-btn" :title="t('uiV02.copy.减小边距')" :aria-label="t('uiV02.copy.减小边距')" @click="setGap(-1)">−</button>
-        <input v-model.number="draft.gap" type="range" min="2" max="16" step="1" :aria-label="t('reader.margin')" />
+        <input v-model.number="draft.gap" type="range" min="2" max="20" step="1" :aria-label="t('reader.margin')" />
         <button type="button" class="step-btn" :title="t('uiV02.copy.增加边距')" :aria-label="t('uiV02.copy.增加边距')" @click="setGap(1)">+</button>
-        <span class="tp-unit-val">{{ draft.gap }}%</span>
+        <span class="tp-unit-val">{{ calibratedMarginMm ? calibratedMarginMm + ' mm' : draft.gap + '%' }}</span>
       </div>
 
       <!-- 字体 -->
       <div class="set-row">
         <span class="tp-label">{{ t('reader.font') }}</span>
         <select v-model="draft.fontFamily" class="input" :aria-label="t('reader.font')">
-          <option v-for="f in FONT_FAMILIES" :key="f.labelKey" :value="f.value">{{ t(f.labelKey) }}</option>
+          <option v-for="f in FONT_FAMILIES" :key="f.value" :value="f.value">{{ 'label' in f ? f.label : t(f.labelKey) }}</option>
+          <option v-if="unknownFont" :value="draft.fontFamily">{{ draft.fontFamily }}</option>
           <optgroup v-if="settings.customFonts.length" :label="t('reader.customFonts')">
             <option v-for="f in settings.customFonts" :key="f.file" :value="`custom:${f.name}`">{{ f.name }}</option>
           </optgroup>
@@ -553,6 +607,8 @@ let systemFontsLoading = false
         </select>
       </div>
 
+      <p class="set-note">{{ t('reader.typographyFontHint') }}</p>
+      <p v-if="previewFontWarning || fontEnumerationWarning" class="set-note" role="status">{{ t('reader.typographyFontFallback') }}</p>
       <details class="tp-more" :open="more.text" @toggle="onMoreToggle('text', $event)">
         <summary>
           <span>{{ t('reader.more') }}</span>
@@ -580,6 +636,21 @@ let systemFontsLoading = false
               <button type="button" :class="{ active: !draft.justify }" :aria-pressed="!draft.justify" @click="draft.justify = false">{{ t('reader.justifyOff') }}</button>
             </div>
           </div>
+          <div class="set-row">
+            <span class="tp-label">{{ t('reader.paragraphSpacing') }}</span>
+            <input v-model.number="draft.paragraphSpacing" type="range" min="0" max="2" step="0.05" :aria-label="t('reader.paragraphSpacing')" />
+            <span class="tp-unit-val">{{ draft.paragraphSpacing.toFixed(2) }}em</span>
+          </div>
+          <div class="set-row">
+            <span class="tp-label">{{ t('reader.textIndent') }}</span>
+            <input v-model.number="draft.textIndent" type="range" min="0" max="4" step="0.1" :aria-label="t('reader.textIndent')" />
+            <span class="tp-unit-val">{{ draft.textIndent.toFixed(1) }}em</span>
+          </div>
+          <label class="set-row">
+            <span class="tp-label">{{ t('reader.maxLineLength') }}</span>
+            <input v-model.number="draft.maxLineLength" class="input" type="number" min="0" max="120" step="1" :aria-label="t('reader.maxLineLength')" />
+          </label>
+          <p class="set-note">{{ t('reader.maxLineLengthHint') }}</p>
           <div v-if="desktop" class="set-row">
             <span class="tp-label"></span>
             <button type="button" class="btn btn-sm" @click="importFont">{{ t('reader.importFont') }}</button>
@@ -589,6 +660,7 @@ let systemFontsLoading = false
       </details>
     </section>
 
+    </fieldset>
     <!-- 配色 -->
     <section class="tp-group" data-section="color" :aria-label="t('reader.groupColor')">
       <h3 class="tp-title">{{ t('reader.groupColor') }}</h3>
@@ -610,7 +682,7 @@ let systemFontsLoading = false
         </div>
       </div>
       <div class="set-row">
-        <span class="tp-label">{{ t('reader.dim') }}</span>
+        <span class="tp-label">{{ t('reader.dim') }} · {{ t('reader.devicePreference') }}</span>
         <input
           type="range"
           min="0"
@@ -698,7 +770,7 @@ let systemFontsLoading = false
             type="button"
             :class="{ active: draft.scope === 'language' }"
             :aria-pressed="draft.scope === 'language'"
-            :disabled="normLang === 'und' || applying"
+            :disabled="normLang === 'und' || applying || !!props.context?.protectedLayout || props.fixedLayout"
             @click="draft.scope = 'language'"
           >{{ normLang === 'zh' ? t("uiV02.copy.\u4E2D\u6587\u9ED8\u8BA4") : normLang.toUpperCase() + t("uiV02.copy. \u9ED8\u8BA4") }}</button>
         </div>
@@ -707,7 +779,7 @@ let systemFontsLoading = false
         {{ draft.scope === 'book' ? t("uiV02.copy.\u4EC5\u6539\u53D8\u672C\u4E66\u6392\u7248\uFF0C\u5176\u4ED6\u4E66\u7C4D\u4FDD\u7559\u5404\u81EA\u4E13\u5C5E\u8BBE\u7F6E\u3002") : t("uiV02.copy.\u4F5C\u4E3A{v0}\u4E66\u7C4D\u7684\u9ED8\u8BA4\u6392\u7248\u5E76\u5E94\u7528\u5230\u672C\u4E66\uFF1B\u5176\u4ED6\u4E66\u5DF2\u6709\u4E13\u5C5E\u8BBE\u7F6E\u4E0D\u53D7\u5F71\u54CD\u3002", { v0: normLang === 'zh' ? t("uiV02.copy.\u4E2D\u6587") : normLang }) }}
       </p>
 
-      <p class="tp-scope-hint">{{ t("uiV02.copy.主题、滚动与分栏属于通用阅读设置；正文排版按上方范围保存。未知语言不能设置语言默认。") }}</p>
+      <p class="tp-scope-hint">{{ t('reader.typographyScopeHint') }}</p>
       <div class="tp-actions">
         <button
           v-if="hasBookOverride"
@@ -737,6 +809,9 @@ let systemFontsLoading = false
 </template>
 
 <style scoped>
+.tp-text-controls { border: 0; padding: 0; margin: 0; min-inline-size: 0; }
+.tp-profile-source { line-height: 1.5; }
+.tp-profile-select { min-width: 0; max-width: 100%; }
 .settings-pop {
   position: absolute;
   top: calc(52px + var(--safe-top, 0px));

@@ -1,0 +1,21 @@
+// Static glyphs from Pagewise_menu_icons_v1 v1.0; never populate this map with remote or user SVG.
+export const iconMarkup = {
+  "library": "<rect x=\"3\" y=\"5\" width=\"4\" height=\"15\" rx=\".8\"/><rect x=\"9\" y=\"3\" width=\"4\" height=\"17\" rx=\".8\"/><path d=\"M16 5.8l3.8-.7L22 19.2l-3.8.7Z\"/><path d=\"M3 16h4M9 16h4\"/>",
+  "currently-reading": "<path d=\"M12 6C9 3.9 5.7 4 2.8 5.1v15C6.1 18.7 9.1 18.9 12 20.6c2.9-1.7 5.9-1.9 9.2-.5v-15C18.3 4 15 3.9 12 6Z\"/><path d=\"M12 6v14.6\"/>",
+  "notes": "<rect x=\"5\" y=\"3\" width=\"15\" height=\"18\" rx=\"1.5\"/><path d=\"M9 3v18M3 7h4M3 12h4M3 17h4M12 8h5M12 12h5M12 16h3\"/>",
+  "reading-history": "<path d=\"M3.3 9.2a9 9 0 1 1 1.5 8.9\"/><path d=\"M3.3 4.6v4.6h4.6M12 7v5l3.1 2\"/>",
+  "settings": "<path d=\"M8.844 5.529L10.046 2.805L13.954 2.805L15.156 5.529L16.026 6.031L18.986 5.710L20.940 9.095L19.182 11.498L19.182 12.502L20.940 14.905L18.986 18.290L16.026 17.969L15.156 18.471L13.954 21.195L10.046 21.195L8.844 18.471L7.974 17.969L5.014 18.290L3.060 14.905L4.818 12.502L4.818 11.498L3.060 9.095L5.014 5.710L7.974 6.031Z\"/><circle cx=\"12\" cy=\"12\" r=\"3\"/>",
+  "table-of-contents": "<circle cx=\"3.5\" cy=\"6\" r=\"1\" fill=\"currentColor\" stroke=\"none\"/><circle cx=\"3.5\" cy=\"12\" r=\"1\" fill=\"currentColor\" stroke=\"none\"/><circle cx=\"3.5\" cy=\"18\" r=\"1\" fill=\"currentColor\" stroke=\"none\"/><path d=\"M7.5 6H21M7.5 12H21M7.5 18h10\"/>",
+  "annotations": "<path d=\"M14.5 2.8l6.3 6.3-7.2 7.2-6.3-6.3Z\"/><path d=\"M7.3 10l-2.8 6 3 3 6.1-2.7M12.2 5.1l6.3 6.3M3 21h18\"/>",
+  "bookmarks": "<path d=\"M7 3h10a1 1 0 0 1 1 1v17l-6-4-6 4V4a1 1 0 0 1 1-1Z\"/>",
+  "read-aloud": "<path d=\"M3.5 13v-2a8.5 8.5 0 0 1 17 0v2\"/><rect x=\"3\" y=\"12\" width=\"4\" height=\"8\" rx=\"1.2\"/><rect x=\"17\" y=\"12\" width=\"4\" height=\"8\" rx=\"1.2\"/><path d=\"M10 12h4M10 16h3\"/>",
+  "reading-assistant": "<path d=\"M12 4H6a3 3 0 0 0-3 3v9a3 3 0 0 0 3 3h1v3l4-3h7a3 3 0 0 0 3-3v-4\"/><path d=\"M7 11h5M7 15h7\"/><path d=\"M18.5 2.5l1.3 2.7 2.7 1.3-2.7 1.3-1.3 2.7-1.3-2.7-2.7-1.3 2.7-1.3Z\" fill=\"currentColor\" stroke=\"none\"/>",
+  "search-in-book": "<path d=\"M14 3H4v18h6M14 3l5 5h-5ZM19 8v.5M7 7h3M7 11h2\"/><circle cx=\"15\" cy=\"14\" r=\"4.2\"/><path d=\"M18.1 17.1l3.4 3.4\"/>",
+  "reading-modes": "<rect x=\"3\" y=\"4\" width=\"18\" height=\"16\" rx=\"1.5\"/><path d=\"M12 4v16M6 8h3M6 12h3M15 8h3M15 12h3\"/>",
+  "typography": "<path d=\"M3 20 8 4l5 16M4.9 14h6.2M16 6h5M16 12h5M16 18h3\"/>",
+  "search-library": "<circle cx=\"10.5\" cy=\"10.5\" r=\"6.5\"/><path d=\"M15.3 15.3 21 21\"/>"
+} as const
+
+export type PagewiseIconName = keyof typeof iconMarkup
+
+export const markedBookmarkMarkup = "<path d=\"M7 3h10a1 1 0 0 1 1 1v17l-6-4-6 4V4a1 1 0 0 1 1-1Z\" fill=\"currentColor\"/>"

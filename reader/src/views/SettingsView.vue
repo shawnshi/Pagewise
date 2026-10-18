@@ -13,6 +13,7 @@ import { loadLibrarySession, saveLibrarySession } from '../services/librarySessi
 import { providerById, chatStream } from '../services/ai'
 import AppIcon from '../components/AppIcon.vue'
 import AiProviderSelector from '../components/AiProviderSelector.vue'
+import TypographyCalibration from '../components/TypographyCalibration.vue'
 import { useFolderLibrary } from '../services/folderLibrary'
 
 const settings = useSettings()
@@ -318,10 +319,6 @@ const APPEARANCE_OPTIONS = [
           </button>
         </div>
       </div>
-      <label class="toggle-row">
-        <span class="toggle-text"><span class="row-title">{{ t('settings.usageStats') }}</span><span class="row-desc">{{ t('settings.usageStatsDesc') }}</span></span>
-        <span class="switch"><input v-model="settings.usageStats" type="checkbox" role="switch" :aria-checked="settings.usageStats" /><span class="switch-track" aria-hidden="true"></span></span>
-      </label>
     </section>
 
     <section id="settings-folder" class="card section" aria-labelledby="settings-folder-heading">
@@ -396,6 +393,7 @@ const APPEARANCE_OPTIONS = [
         <div class="row-text"><div class="row-title">{{ t('settings.resetTypography') }}</div><div class="row-desc">{{ t('settings.resetTypographyDesc') }}</div></div>
         <button class="btn" @click="settings.resetReader(); toast(t('settings.resetDone'), 'success')">{{ t('settings.restoreDefault') }}</button>
       </div>
+      <TypographyCalibration />
     </section>
 
     <section id="settings-ai" class="card section" aria-labelledby="settings-ai-heading">

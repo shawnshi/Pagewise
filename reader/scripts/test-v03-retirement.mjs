@@ -160,7 +160,7 @@ import { useSettings } from '/src/stores/settings.ts';
 import { useLibrary } from '/src/stores/library.ts';
 import '/src/styles/main.css';
 const pinia = createPinia(); setActivePinia(pinia);
-const settings = useSettings(); settings.language='en'; settings.usageStats=false; settings.reader.portraitScroll=false;
+const settings = useSettings(); settings.language='en'; settings.reader.portraitScroll=false;
 settings.pdf.mode='paged'; settings.pdf.spreadMode='single'; settings.pdf.renderer=new URL(location.href).searchParams.get('renderer') || 'pdfium';
 const storage = await getStorage();
 const bytes = Uint8Array.from(atob('${syntheticPdf()}'), c => c.charCodeAt(0));
@@ -177,7 +177,7 @@ const selectedPdfRenderer = process.env.PAGEWISE_TEST_PDF_RENDERER
 const pdfCaseName = selectedPdfRenderer === 'mupdf' ? 'MuPDF only' : 'both PDF engines'
 test(`synthetic browser: ${pdfCaseName}, legacy progress/annotations, controls, TXT/Markdown adaptation`, { timeout: 120_000 }, async () => {
   assert.ok(selectedPdfRenderer === undefined || selectedPdfRenderer === 'mupdf', 'Only the explicit MuPDF-only selection or default both-engine coverage is supported')
-  const { createServer, normalizePath } = await import('vite')
+  const { createServer, normalizePath } = await import('./vite-isolated.mjs')
   const { default: vue } = await import('@vitejs/plugin-vue')
   const { chromium } = await import('playwright')
   const executablePath = process.env.PAGEWISE_TEST_BROWSER || [chromium.executablePath(),
@@ -225,9 +225,17 @@ test(`synthetic browser: ${pdfCaseName}, legacy progress/annotations, controls, 
         assert.equal(await page.locator('.p-canvas canvas').first().getAttribute('data-renderer'), renderer, 'no hidden engine fallback')
         assert.equal(await page.locator('.page-input').inputValue(), '2', 'legacy saved page restored')
         assert.equal(await page.getByText('Translate', { exact: true }).count(), 0)
-        await page.getByTitle('Highlights', { exact: true }).click()
+        const glyphs = await page.locator('.pdf-toolbar svg[data-icon]').evaluateAll(icons => icons.map(svg => ({ name: svg.dataset.icon, width: svg.getBoundingClientRect().width, height: svg.getBoundingClientRect().height, stroke: parseFloat(getComputedStyle(svg).strokeWidth) })))
+        assert.deepEqual(glyphs.map(x => x.name), ['table-of-contents', 'search-in-book', 'bookmarks', 'annotations', 'reading-assistant', 'read-aloud', 'typography', 'reading-modes'])
+        assert.ok(glyphs.every(x => x.width === 28 && x.height === 28 && x.stroke === 2))
+        await page.getByTitle('Annotations', { exact: true }).click()
         await page.getByText('PRESERVED NOTE', { exact: true }).waitFor()
-        await page.getByTitle('Highlights', { exact: true }).click()
+        await page.waitForFunction(() => {
+          const svg = document.querySelector('svg[data-icon="annotations"]')
+          return svg?.parentElement?.getAttribute('aria-pressed') === 'true' && parseFloat(getComputedStyle(svg).strokeWidth) === 2.25
+        }, undefined, { timeout: 5000 })
+        assert.equal(await page.locator('svg[data-icon="annotations"]').evaluate(svg => parseFloat(getComputedStyle(svg).strokeWidth)), 2.25)
+        await page.getByTitle('Annotations', { exact: true }).click()
         await page.getByTitle('Next page', { exact: true }).click()
         await page.waitForFunction(async () => (await window.__fixture.storage.getBook(window.__fixture.id)).location === '3')
         await page.getByTitle(/Zoom in/).click()
@@ -257,6 +265,8 @@ test(`synthetic browser: ${pdfCaseName}, legacy progress/annotations, controls, 
         const data = await page.evaluate(async () => ({ book: await window.__fixture.storage.getBook(window.__fixture.id), notes: await window.__fixture.storage.listAnnotations(window.__fixture.id) }))
         assert.equal(data.book.kind, 'paper', 'legacy data not rewritten')
         assert.equal(data.notes[0].note, 'PRESERVED NOTE')
+        await page.keyboard.press('Escape')
+        await page.locator('.pdf-search-input').waitFor({ state: 'hidden' })
         await page.locator('.document-back').click()
         await page.getByText('LIBRARY', { exact: true }).waitFor()
         assert.deepEqual(errors, [])
