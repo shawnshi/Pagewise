@@ -16,6 +16,7 @@
 import { computed, onBeforeUnmount, onMounted, ref } from 'vue'
 import { onBeforeRouteLeave, useRouter } from 'vue-router'
 import { t } from '../i18n'
+import { useNativeBack } from '../composables/useNativeBack'
 import { getStorage } from '../storage'
 import { toast } from '../services/toast'
 import {
@@ -226,6 +227,13 @@ function cancelEditing(_note?: GlobalNoteItem): void {
   editingErrorMsg.value = ''
   refreshUnsavedDrafts()
 }
+
+// Android 返回键: 先关删除确认，再退出编辑，最后才让路由回退。
+useNativeBack(() => {
+  if (deletingNote.value) { deletingNote.value = null; return true }
+  if (editingNoteId.value) { cancelEditing(); return true }
+  return false
+})
 
 // 放弃当前笔记的草稿
 function discardCurrentDraft(note: GlobalNoteItem): void {

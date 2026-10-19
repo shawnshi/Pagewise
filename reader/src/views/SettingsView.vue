@@ -4,7 +4,8 @@ import { useRoute } from 'vue-router'
 import { getStorage, isTauri } from '../storage'
 import { useSettings } from '../stores/settings'
 import { useLibrary } from '../stores/library'
-import { exportBackup, importBackup, LIBRARY_ARCHIVE_EXTENSION } from '../services/backup'
+import { exportBackup, exportBackupToSink, importBackup, LIBRARY_ARCHIVE_EXTENSION } from '../services/backup'
+import { downloadArchiveBlob, exportLibraryArchiveToDevice } from '../services/archiveExport'
 import { fetchRemote } from '../services/net'
 import { toast } from '../services/toast'
 import { CURRENT_VERSION } from '../services/appVersion'
@@ -190,11 +191,19 @@ const aiDocsUrl = computed(() => {
 })
 
 async function openAiDocs() {
-  if (isTauri()) {
-    const { openUrl } = await import('@tauri-apps/plugin-opener')
-    await openUrl(aiDocsUrl.value)
-  } else {
-    window.open(aiDocsUrl.value, '_blank', 'noopener,noreferrer')
+  await openExternal(aiDocsUrl.value)
+}
+
+async function openExternal(url: string) {
+  try {
+    if (isTauri()) {
+      const { openUrl } = await import('@tauri-apps/plugin-opener')
+      await openUrl(url)
+    } else {
+      window.open(url, '_blank', 'noopener,noreferrer')
+    }
+  } catch {
+    toast(t('settings.openLinkFailed'))
   }
 }
 
@@ -259,12 +268,15 @@ function resetLibraryRoot() {
 async function doExport() {
   busy.value = t('settings.preparingExport')
   try {
-    const blob = await exportBackup(msg => (busy.value = msg))
-    const a = document.createElement('a')
-    a.href = URL.createObjectURL(blob)
-    a.download = `lightread-library-${new Date().toISOString().slice(0, 10)}${LIBRARY_ARCHIVE_EXTENSION}`
-    a.click()
-    URL.revokeObjectURL(a.href)
+    const fileName = `lightread-library-${new Date().toISOString().slice(0, 10)}${LIBRARY_ARCHIVE_EXTENSION}`
+    if (isTauri()) {
+      // 先选目标再流式构建, 数百 MB 书库不在 JS 中保留完整 zip。
+      const result = await exportLibraryArchiveToDevice(fileName, write => exportBackupToSink(write, msg => (busy.value = msg)))
+      if (result === 'cancelled') return
+    } else {
+      const blob = await exportBackup(msg => (busy.value = msg))
+      downloadArchiveBlob(blob, fileName)
+    }
     toast(t('settings.backupExported'), 'success')
   } catch (e: any) {
     toast(t('settings.exportFailed', { msg: e?.message }), 'error', 5000)
@@ -460,8 +472,9 @@ const APPEARANCE_OPTIONS = [
         <div class="about-actions"><button class="btn" @click="$router.push('/manual')">{{ t('manual.title') }}</button></div>
       </div>
       <p class="section-desc about-formats">{{ t('settings.aboutFormats') }}</p>
+      <p class="section-desc about-privacy">{{ t('settings.privacyNote') }}</p>
       <p class="section-desc about-formats">{{ t('settings.author') }}: 云中江树 ({{ t('settings.wechat') }}: 云中江树) · {{ t('settings.license') }}: GNU AGPL v3.0+</p>
-      <p class="about-links"><a href="https://github.com/yzfly/LightRead" target="_blank" rel="noopener noreferrer">{{ t('settings.repoLink') }}</a></p>
+      <p class="about-links"><button class="link-btn" type="button" @click="openExternal('https://github.com/yzfly/LightRead')">{{ t('settings.repoLink') }}</button><span class="about-sep" aria-hidden="true"> · </span><button class="link-btn" type="button" @click="openExternal('https://github.com/shawnshi/Pagewise')">{{ t('settings.pagewiseRepo') }}</button></p>
     </section>
   </div>
 </template>
@@ -528,6 +541,10 @@ h2 { font-size: 17px; margin: 0 0 18px; }
 .version-chip, .env-chip { border-radius: var(--radius-pill); padding: 3px 7px; background: var(--surface-2); color: var(--text-2); font-size: 11px; font-weight: 400; }
 .app-tagline { margin-top: 6px; font-size: 12px; line-height: 1.6; color: var(--text-3); }
 .about-formats { margin: 20px 0 0; }
+.about-privacy { margin: 12px 0 0; }
+.about-sep { color: var(--text-3); }
+.link-btn { display: inline-block; min-height: 32px; padding: 4px 0; border: 0; background: none; color: var(--brand); font: inherit; cursor: pointer; }
+.link-btn:hover { text-decoration: underline; text-underline-offset: 2px; }
 button:focus-visible, a:focus-visible { outline: 2px solid var(--brand); outline-offset: 3px; }
 @media (max-width: 600px) {
   .settings { padding: 16px 12px calc(40px + var(--lr-safe-bottom)); }

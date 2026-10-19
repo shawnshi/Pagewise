@@ -96,7 +96,7 @@ onBeforeUnmount(() => {
       </template>
 
       <p v-if="state.translation" class="dj-card-tr">{{ state.translation }}</p>
-      <p v-else-if="state.translating" class="dj-card-muted">{{ t('dianjing.translating') }}</p>
+      <p v-if="state.translating" class="dj-card-muted">{{ t('dianjing.translating') }}</p>
       <p v-else-if="state.translateError" class="dj-card-muted">{{ t('dianjing.translateFailed') }}</p>
 
       <p class="dj-card-source">
@@ -108,7 +108,7 @@ onBeforeUnmount(() => {
         <button type="button" class="btn btn-sm" @click="emit('inspect')">{{ t('reader.viewSource') }}</button>
         <template v-if="kind === 'term'">
           <button type="button" class="btn btn-sm" @click="dj.expand()">{{ t('dianjing.expand') }}</button>
-          <button type="button" class="btn btn-sm" :disabled="state.translating || !!state.translation" @click="dj.translate()">{{ t('dianjing.translate') }}</button>
+          <button type="button" class="btn btn-sm" :disabled="state.translating || (!!state.translation && !state.translateError)" @click="dj.translate()">{{ t('dianjing.translate') }}</button>
           <button type="button" class="btn btn-ghost btn-sm" @click="dj.dismiss()">{{ t('dianjing.notThis') }}</button>
         </template>
         <template v-else-if="kind === 'note'">
@@ -118,7 +118,7 @@ onBeforeUnmount(() => {
         <template v-else>
           <button type="button" class="btn btn-sm btn-primary" :title="t('dianjing.agreeHint')" @click="dj.adopt(false)">{{ t('dianjing.agree') }}</button>
           <button type="button" class="btn btn-sm" @click="dj.adopt(true)">{{ t('dianjing.addNote') }}</button>
-          <button type="button" class="btn btn-sm" :disabled="state.translating || !!state.translation" @click="dj.translate()">{{ t('dianjing.translate') }}</button>
+          <button type="button" class="btn btn-sm" :disabled="state.translating || (!!state.translation && !state.translateError)" @click="dj.translate()">{{ t('dianjing.translate') }}</button>
           <button type="button" class="btn btn-ghost btn-sm" @click="dj.dismiss()">{{ t('dianjing.notKey') }}</button>
         </template>
       </div>

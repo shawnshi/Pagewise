@@ -36,6 +36,7 @@ export function useReadingTimer(
   onMounted(() => {
     clock.input(Date.now())
     for (const ev of ACTIVITY_EVENTS) window.addEventListener(ev, ping, { capture: true, passive: true })
+    document.addEventListener('visibilitychange', onVisibilityCheckpoint)
     timer = setInterval(() => {
       const now = Date.now()
       // 跨零点: 先把昨天的时长按昨天落库
@@ -45,9 +46,15 @@ export function useReadingTimer(
     }, 15_000)
   })
 
+  // 切后台后进程可能被回收: 已确认但未满一分钟的时长先落库。
+  function onVisibilityCheckpoint() {
+    if (document.visibilityState === 'hidden') flush()
+  }
+
   onBeforeUnmount(() => {
     clearInterval(timer)
     for (const ev of ACTIVITY_EVENTS) window.removeEventListener(ev, ping, { capture: true })
+    document.removeEventListener('visibilitychange', onVisibilityCheckpoint)
     flush()
   })
 

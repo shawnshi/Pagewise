@@ -1,7 +1,6 @@
 import assert from 'node:assert/strict'
 import { before, after, test } from 'node:test'
-import { mkdtemp, rm } from 'node:fs/promises'
-import { tmpdir } from 'node:os'
+import { mkdir, mkdtemp, rm } from 'node:fs/promises'
 import { join, resolve } from 'node:path'
 import { DatabaseSync } from 'node:sqlite'
 import { createServer } from './vite-isolated.mjs'
@@ -32,11 +31,13 @@ export const readFile = async p => { if (!window.__files.has(p)) throw Error('EN
 export const remove = async p => {window.__removed.push(p); window.__files.delete(p)};
 `
 before(async () => {
-  temp = await mkdtemp(join(tmpdir(), 'pagewise-metadata-'))
+  const fixtures = resolve(root, '../.cache/performance-20261019/metadata')
+  await mkdir(fixtures, { recursive: true })
+  temp = await mkdtemp(join(fixtures, 'pagewise-metadata-'))
   server = await createServer({
     root, configFile: false, logLevel: 'error', cacheDir: resolve(root, '../.cache/v03/vite'),
     optimizeDeps: { noDiscovery: true, include: ['vue', 'dexie'] },
-    server: { host: '127.0.0.1', port: 0, strictPort: false },
+    server: { host: '127.0.0.1', port: 14243, strictPort: true },
     plugins: [{ name: 'synthetic-metadata-contract', enforce: 'pre',
       resolveId(source) {
         if (/(?:^|\/)monitoredFolder(?:\.ts)?$/.test(source)) return '\0metadata-native'
@@ -376,6 +377,60 @@ test('folder failures: incomplete enumeration, dependency crash, unknown version
   })
 })
 
+test('foreground reader defers parse and missing detection; resumes one coalesced pass', async () => {
+  await isolated(async page => {
+    await setupController(page)
+    const result = await page.evaluate(async () => {
+      const p = window.__provider, c = window.__controller, s = window.__store
+      p.folder = { id: 'f', label: 'Fake', permission: 'granted' }; p.files = [{ ...window.__file }]
+      await c.rescan(); const first = (await s.listBooks())[0]
+      let release; p.waitRead = new Promise(resolve => { release = resolve })
+      const started = new Promise(resolve => { p.onRead = resolve })
+      p.files[0].modifiedAt = 2
+      const scanning = c.rescan(); await started
+      c.setReadingActive(true)
+      for (let i = 0; i < 100; i++) void c.rescan()
+      p.waitRead = null; release(); await scanning
+      const paused = { parses: p.parses, version: (await s.getBook(first.id)).sourceRef.version,
+        availability: (await s.getBook(first.id)).fileAvailability, enumerations: p.enumerations }
+      const before = p.enumerations
+      c.setReadingActive(false); await c.rescan()
+      const resumed = { parses: p.parses, version: (await s.getBook(first.id)).sourceRef.version, passes: p.enumerations - before }
+      c.setReadingActive(true); p.files = []
+      for (let i = 0; i < 100; i++) await c.rescan()
+      const deferred = (await s.getBook(first.id)).fileAvailability
+      c.setReadingActive(false); await c.rescan()
+      return { paused, resumed, deferred, final: (await s.getBook(first.id)).fileAvailability }
+    })
+    assert.equal(result.paused.parses, 1); assert.equal(result.paused.version, '[15,1]')
+    assert.equal(result.paused.availability, 'available'); assert.equal(result.paused.enumerations, 2)
+    assert.equal(result.resumed.parses, 2); assert.equal(result.resumed.version, '[15,2]')
+    assert.ok(result.resumed.passes <= 2)
+    assert.equal(result.deferred, 'available'); assert.equal(result.final, 'missing')
+  })
+})
+
+test('notification storms retain confirmed writes and do not repeatedly abandon parsing', async () => {
+  await isolated(async page => {
+    await setupController(page)
+    const result = await page.evaluate(async () => {
+      const p = window.__provider, c = window.__controller, s = window.__store
+      p.folder = { id: 'f', label: 'Fake', permission: 'granted' }
+      p.files = [{ ...window.__file }, { ...window.__file, documentId: 'second', name: 'b.txt', relativePath: 'b.txt' }]
+      let release; p.waitParse = new Promise(resolve => { release = resolve })
+      const started = new Promise(resolve => { p.onParse = resolve })
+      const stop = c.start(); const running = c.rescan(); await started
+      for (let i = 0; i < 100; i++) for (const listener of p.listeners) listener()
+      p.waitParse = null; release(); await running
+      const result = { books: (await s.listBooks()).length, parses: p.parses, passes: p.enumerations,
+        generation: c.status.value.generation, peak: p.peak }
+      stop(); return result
+    })
+    assert.equal(result.books, 2); assert.equal(result.parses, 2)
+    assert.ok(result.passes <= 2); assert.equal(result.peak, 1); assert.ok(result.generation >= 1)
+  })
+})
+
 test('serial/coalesced indexer rejects stale folder and disposed parse results; lifecycle is ref-counted', async () => {
   await isolated(async page => {
     await setupController(page)
@@ -511,3 +566,29 @@ test('amendment 01: lost config notifications cannot commit stale parse or missi
     assert.equal(result.status.folderLabel, 'Newer'); assert.equal(result.status.state, 'idle'); assert.equal(result.subscriptions, 0)
   })
 })
+
+for (const backend of ['DexieStorage', 'TauriStorage']) {
+  test(`${backend}: reading seconds use an atomic increment across concurrent credits`, async () => {
+    await isolated(async page => {
+      const result = await page.evaluate(async backend => {
+        const storage = new window.__modules[backend](); await storage.init()
+        const id = await storage.addBook({ title: 'Concurrent', author: '', format: 'txt', fileName: 'c.txt',
+          addedAt: 1, tags: [], readingSeconds: 5 }, new Blob(['bytes']))
+        const first = await storage.incrementReadingSeconds(id, 7)
+        // 10 个并发冲账: 每次 +3; 读-改-写会互相覆盖, 原子累加必须得到 5+7+30。
+        const totals = await Promise.all(Array.from({ length: 10 }, () => storage.incrementReadingSeconds(id, 3)))
+        const final = await storage.getBook(id)
+        let missing = ''
+        try { await storage.incrementReadingSeconds('missing-book', 3) } catch (error) { missing = error.message }
+        let invalid = ''
+        try { await storage.incrementReadingSeconds(id, Number.NaN) } catch (error) { invalid = error.message }
+        return { first, totals, seconds: final.readingSeconds, missing, invalid }
+      }, backend)
+      assert.equal(result.first, 12)
+      assert.equal(result.seconds, 42)
+      assert.equal(result.totals.at(-1), 42)
+      assert.equal(result.missing, 'Book not found')
+      assert.equal(result.invalid, 'Invalid reading seconds')
+    })
+  })
+}

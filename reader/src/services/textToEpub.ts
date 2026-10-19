@@ -136,7 +136,7 @@ function chapterXhtml(title: string, body: string): string {
 }
 
 /** 将文本类文件封装为 EPUB Blob */
-export async function convertToEpub(
+export async function convertToEpubLocal(
   blob: Blob,
   fileName: string,
   format: 'txt' | 'md',
@@ -219,4 +219,69 @@ export async function convertToEpub(
 
   const zipped = zipSync(files, { level: 0 })
   return { epub: new Blob([zipped.buffer as ArrayBuffer], { type: 'application/epub+zip' }), title }
+}
+
+/** Bibliography does not need section packing or a ZIP round trip. */
+export async function readTextTitle(blob: Blob, fileName: string, format: 'txt' | 'md'): Promise<string> {
+  const baseName = fileName.replace(/\.[^.]+$/, '')
+  if (format === 'txt') return baseName
+  if (format !== 'md') throw new Error('Unsupported text format')
+  return splitMdChapters(await decodeText(blob), baseName)[0]?.title || baseName
+}
+
+type ConvertedText = { epub: Blob; title: string }
+const CONVERTER_VERSION = `text-${TEXT_EPUB_LAYOUT}-1`
+const CACHE_BYTES = 32 * 1024 * 1024
+const converted = new Map<Blob, { key: string; result: ConvertedText; bytes: number }>()
+let converting = false
+
+/** Blob identity is immutable; filename/format/version also participate in session reuse. */
+export async function convertToEpub(blob: Blob, fileName: string, format: 'txt' | 'md', signal?: AbortSignal): Promise<ConvertedText> {
+  if (signal?.aborted) throw new DOMException('Conversion cancelled', 'AbortError')
+  if (format !== 'txt' && format !== 'md') throw new Error('Unsupported text format')
+  if (blob.size > 64 * 1024 * 1024) throw new Error('Text file exceeds 64 MiB conversion budget')
+  const key = JSON.stringify([fileName, format, CONVERTER_VERSION])
+  const cached = converted.get(blob)
+  if (cached?.key === key) {
+    converted.delete(blob); converted.set(blob, cached)
+    return cached.result
+  }
+  if (converting) throw new Error('Text conversion busy')
+  converting = true
+  try {
+    // Measured worker startup dominates tiny files; reserve off-thread conversion for heavy TXT.
+    const result = format === 'md' || blob.size < 256 * 1024
+      ? await convertToEpubLocal(blob, fileName, format)
+      : await new Promise<ConvertedText>((resolve, reject) => {
+        let worker: Worker | undefined
+        let timer: ReturnType<typeof setTimeout> | undefined
+        const cleanup = () => { clearTimeout(timer); signal?.removeEventListener('abort', abort); worker?.terminate() }
+        const fail = (error: Error) => { cleanup(); reject(error) }
+        const abort = () => fail(new DOMException('Conversion cancelled', 'AbortError'))
+        try {
+          worker = new Worker(new URL('./textEpub.worker.ts', import.meta.url), { type: 'module' })
+          worker.onmessage = event => {
+            const value = event.data
+            if (value?.error) { fail(new Error(value.error)); return }
+            if (!(value?.epub instanceof Blob) || typeof value.title !== 'string') { fail(new Error('Invalid text worker result')); return }
+            cleanup(); resolve(value)
+          }
+          worker.onerror = () => fail(new Error('Text conversion worker failed'))
+          worker.onmessageerror = () => fail(new Error('Text conversion worker message failed'))
+          signal?.addEventListener('abort', abort, { once: true })
+          timer = setTimeout(() => fail(new Error('Text conversion timeout')), 30000)
+          worker.postMessage({ blob, fileName, format })
+        } catch (error) { cleanup(); reject(error) }
+      })
+    if (signal?.aborted) throw new DOMException('Conversion cancelled', 'AbortError')
+    const bytes = blob.size + result.epub.size
+    if (bytes <= CACHE_BYTES) {
+      converted.delete(blob)
+      while (converted.size && (converted.size >= 2 || [...converted.values()].reduce((n, e) => n + e.bytes, 0) + bytes > CACHE_BYTES)) {
+        converted.delete(converted.keys().next().value!)
+      }
+      converted.set(blob, { key, result, bytes })
+    }
+    return result
+  } finally { converting = false }
 }

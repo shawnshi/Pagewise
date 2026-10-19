@@ -17,6 +17,12 @@ type SqlDatabase = {
   select<T>(sql: string, values?: unknown[]): Promise<T>
 }
 
+import { blobChunks } from './blobStream'
+import { toBase64Chunk } from '../services/base64'
+
+/** 超过该大小的复制导入改用 ReadableStream, 避免整本数组穿过 IPC。 */
+const LARGE_WRITE_BYTES = 8 * 1024 * 1024
+
 interface BookRow {
   id: string
   title: string
@@ -264,14 +270,36 @@ export class TauriStorage implements LibraryStorage {
     return this.insertBook(meta, undefined, cover)
   }
 
+  /** 大文件: base64 分块写入 cache, 再由原生一次性发布到 books/。 */
+  private async writeLargeBookFile(id: string, fileName: string, file: Blob) {
+    const { invoke } = await import('@tauri-apps/api/core')
+    const relative = `cache/import-${crypto.randomUUID()}.bin`
+    await invoke('begin_import_file', { path: relative })
+    try {
+      const reader = blobChunks(file).getReader()
+      for (;;) {
+        const { done, value } = await reader.read()
+        if (done) break
+        await invoke('append_import_file', { path: relative, data: toBase64Chunk(value) })
+      }
+      await invoke('publish_import_file', { path: relative, target: this.bookPath(id, fileName) })
+    } finally {
+      await invoke('delete_import_file', { path: relative }).catch(() => { /* 发布成功或原生已清理 */ })
+    }
+  }
+
   private async insertBook(meta: NewBookMeta, file?: Blob, cover?: Blob) {
     meta = validatedBookClassification(meta)
     if (meta.readingStatus !== undefined && !isReadingStatus(meta.readingStatus)) throw new Error('Invalid reading status')
     validateAvailability(meta.fileAvailability)
     const id = newId()
     if (file) {
-      const [path, opts] = this.loc(this.bookPath(id, meta.fileName))
-      await this.fs.writeFile(path, new Uint8Array(await file.arrayBuffer()), opts)
+      if (file.size > LARGE_WRITE_BYTES) {
+        await this.writeLargeBookFile(id, meta.fileName, file)
+      } else {
+        const [path, opts] = this.loc(this.bookPath(id, meta.fileName))
+        await this.fs.writeFile(path, new Uint8Array(await file.arrayBuffer()), opts)
+      }
     }
     if (cover) {
       const [path, opts] = this.loc(this.coverPath(id))
@@ -302,6 +330,7 @@ export class TauriStorage implements LibraryStorage {
     if (patch.sourceRef !== undefined) validateSourceRef(patch.sourceRef)
     validateAvailability(patch.fileAvailability)
     // 文件路径的扩展名取自 fileName: 同步改了文件名 (扩展名不同) 时把文件挪到新路径
+    let staleFile: { path: string; opts: { baseDir?: number } } | undefined
     if (typeof patch.fileName === 'string') {
       const old = await this.getBook(id)
       const from = old && !old.sourceRef && this.bookPath(id, old.fileName)
@@ -309,11 +338,15 @@ export class TauriStorage implements LibraryStorage {
       if (from && from !== to) {
         const [fromPath, fromOpts] = this.loc(from)
         const [toPath, toOpts] = this.loc(to)
-        const bytes = await this.fs.readFile(fromPath, fromOpts).catch(() => null)
-        if (bytes) {
-          await this.fs.writeFile(toPath, bytes, toOpts)
-          await this.fs.remove(fromPath, fromOpts).catch(() => { /* 旧文件残留不影响使用 */ })
-        }
+        try {
+          // 原生复制不在 JS 保留整本书字节; 大文件改名不再形成 40 MB 数组。
+          await this.fs.copyFile(fromPath, toPath, {
+            ...(fromOpts.baseDir !== undefined ? { fromPathBaseDir: fromOpts.baseDir as any } : {}),
+            ...(toOpts.baseDir !== undefined ? { toPathBaseDir: toOpts.baseDir as any } : {}),
+          })
+          // 旧的先保留: 数据库提交失败时仍能按原路径定位文件。
+          staleFile = { path: fromPath, opts: fromOpts }
+        } catch { /* 原文件缺失时仍允许仅更新元数据 */ }
       }
     }
     const sets: string[] = []
@@ -332,6 +365,22 @@ export class TauriStorage implements LibraryStorage {
     const result = await this.db.execute(
       `UPDATE books SET ${sets.join(', ')} WHERE id = $${values.length}${hasTags ? ' AND classification IS NULL' : ''}`, values)
     if (result.rowsAffected === 0) throw new Error('Book not found')
+    if (staleFile) {
+      // 提交成功后才清理旧路径; 失败时最多留下一个未引用的副本, 不丢原文件。
+      await this.fs.remove(staleFile.path, staleFile.opts).catch(() => { /* 旧文件残留不影响使用 */ })
+    }
+  }
+
+  async incrementReadingSeconds(id: string, seconds: number) {
+    const delta = Math.round(Number(seconds))
+    if (!Number.isFinite(delta) || delta <= 0) throw new Error('Invalid reading seconds')
+    // 单条 UPDATE 完成读-加-写, 与进度/元数据更新只触碰各自列。
+    const result = await this.db.execute(
+      'UPDATE books SET reading_seconds = coalesce(reading_seconds, 0) + $1 WHERE id = $2', [delta, id])
+    if (result.rowsAffected === 0) throw new Error('Book not found')
+    const rows = await this.db.select<Array<{ reading_seconds: number | null }>>(
+      'SELECT reading_seconds FROM books WHERE id = $1', [id])
+    return Math.max(0, Math.round(rows[0]?.reading_seconds ?? 0))
   }
 
   async updateBookClassifications(updates: readonly BookClassificationUpdate[], legacyUpdates: readonly LegacyBookTagsUpdate[] = []) {
@@ -366,9 +415,12 @@ export class TauriStorage implements LibraryStorage {
 
   async deleteBook(id: string) {
     const meta = await this.getBook(id)
-    await this.db.execute('DELETE FROM annotations WHERE book_id = $1', [id])
-    await this.db.execute('DELETE FROM booklist_items WHERE book_id = $1', [id])
+    // 先删书目行: 后续清理失败最多留下不可见的孤立关系行, 不会出现“批注已消失、书还在”的状态。
     await this.db.execute('DELETE FROM books WHERE id = $1', [id])
+    await this.db.execute('DELETE FROM annotations WHERE book_id = $1', [id])
+      .catch(error => console.warn('Pagewise: annotation cleanup failed', error))
+    await this.db.execute('DELETE FROM booklist_items WHERE book_id = $1', [id])
+      .catch(error => console.warn('Pagewise: booklist cleanup failed', error))
     if (meta) {
       if (!meta.sourceRef) {
         const [bookPath, bookOpts] = this.loc(this.bookPath(id, meta.fileName))

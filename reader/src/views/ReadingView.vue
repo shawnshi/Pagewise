@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { computed, onMounted, ref } from 'vue'
+import { computed, onMounted, ref, watch } from 'vue'
 import { useRouter } from 'vue-router'
 import { useLibrary } from '../stores/library'
 import type { BookMeta } from '../storage'
@@ -8,13 +8,14 @@ import { FORMAT_LABELS, isSupportedBookFormat } from '../services/format'
 import { readerPath } from '../services/readerRoute'
 import { formatReadingTime } from '../composables/useReadingTimer'
 import { saveLibrarySession } from '../services/librarySession'
+import { acquireLibraryCover } from '../services/libraryCovers'
 import AppIcon from '../components/AppIcon.vue'
 import { t } from '../i18n'
 
 const router = useRouter()
 const library = useLibrary()
 
-type TabKind = 'reading' | 'recent' | 'paused' | 'finished'
+type TabKind = 'reading' | 'recent' | 'wanted' | 'paused' | 'finished' | 'abandoned'
 const currentTab = ref<TabKind>('reading')
 
 onMounted(async () => {
@@ -38,6 +39,13 @@ const recentBooks = computed(() => {
     .sort((a, b) => (b.lastReadAt ?? 0) - (a.lastReadAt ?? 0))
 })
 
+const wantedBooks = computed(() => {
+  return books.value.filter(b => {
+    const status = resolveReadingStatus(b)
+    return status.effective === 'wanted'
+  }).sort((a, b) => (b.lastReadAt ?? b.addedAt) - (a.lastReadAt ?? a.addedAt))
+})
+
 const pausedBooks = computed(() => {
   return books.value.filter(b => {
     const status = resolveReadingStatus(b)
@@ -52,14 +60,66 @@ const finishedBooks = computed(() => {
   }).sort((a, b) => (b.lastReadAt ?? b.addedAt) - (a.lastReadAt ?? a.addedAt))
 })
 
+const abandonedBooks = computed(() => {
+  return books.value.filter(b => {
+    const status = resolveReadingStatus(b)
+    return status.effective === 'abandoned'
+  }).sort((a, b) => (b.lastReadAt ?? b.addedAt) - (a.lastReadAt ?? a.addedAt))
+})
+
 const displayedBooks = computed(() => {
   switch (currentTab.value) {
     case 'reading': return readingBooks.value
     case 'recent': return recentBooks.value
+    case 'wanted': return wantedBooks.value
     case 'paused': return pausedBooks.value
     case 'finished': return finishedBooks.value
+    case 'abandoned': return abandonedBooks.value
   }
 })
+
+// 分类可能包含数百本; 首屏只挂载一页, 墨水屏滚动和新书封面解码都不再随全库线性变慢。
+const PAGE_SIZE = 24
+const visibleCount = ref(PAGE_SIZE)
+watch(currentTab, () => { visibleCount.value = PAGE_SIZE })
+const visibleBooks = computed(() => displayedBooks.value.slice(0, visibleCount.value))
+const hasMore = computed(() => displayedBooks.value.length > visibleBooks.value.length)
+function showMore() { visibleCount.value += PAGE_SIZE }
+
+// 进度与状态在 computed 里每本求一次, 模板不再重复解折
+const progressById = computed(() => {
+  const map = new Map<string, number>()
+  for (const book of displayedBooks.value) {
+    if (book.progress == null) continue
+    map.set(book.id, Math.min(100, Math.max(0, Math.round(book.progress * 100))))
+  }
+  return map
+})
+const statusById = computed(() => {
+  const map = new Map<string, string>()
+  for (const book of displayedBooks.value) {
+    const effective = resolveReadingStatus(book).effective
+    if (effective) map.set(book.id, effective)
+  }
+  return map
+})
+
+const coverUrls = ref<Record<string, string>>({})
+watch(() => visibleBooks.value.filter(book => book.hasCover).map(book => book.id), (ids, _previous, onCleanup) => {
+  let active = true
+  coverUrls.value = {}
+  const leases = ids.map(id => {
+    const lease = acquireLibraryCover(id)
+    void lease.ready.then(url => {
+      if (active && url) coverUrls.value[id] = url
+    }).catch(error => console.warn('Pagewise: cover read failed', error))
+    return lease
+  })
+  onCleanup(() => {
+    active = false
+    leases.forEach(lease => lease.release())
+  })
+}, { immediate: true })
 
 function openDetail(book: BookMeta) {
   saveLibrarySession({ lastViewedBookId: book.id })
@@ -72,8 +132,7 @@ function openReader(book: BookMeta) {
 }
 
 function getProgress(book: BookMeta) {
-  if (book.progress == null) return null
-  return Math.min(100, Math.max(0, Math.round(book.progress * 100)))
+  return progressById.value.get(book.id) ?? null
 }
 </script>
 
@@ -109,6 +168,16 @@ function getProgress(book: BookMeta) {
         <button
           type="button"
           class="segmented-btn"
+          :class="{ active: currentTab === 'wanted' }"
+          role="tab"
+          :aria-selected="currentTab === 'wanted'"
+          @click="currentTab = 'wanted'"
+        >
+          {{ t('uiV02.status.wanted') }} ({{ wantedBooks.length }})
+        </button>
+        <button
+          type="button"
+          class="segmented-btn"
           :class="{ active: currentTab === 'paused' }"
           role="tab"
           :aria-selected="currentTab === 'paused'"
@@ -126,6 +195,16 @@ function getProgress(book: BookMeta) {
         >
           {{ t('uiV02.status.finished') }} ({{ finishedBooks.length }})
         </button>
+        <button
+          type="button"
+          class="segmented-btn"
+          :class="{ active: currentTab === 'abandoned' }"
+          role="tab"
+          :aria-selected="currentTab === 'abandoned'"
+          @click="currentTab = 'abandoned'"
+        >
+          {{ t('uiV02.status.abandoned') }} ({{ abandonedBooks.length }})
+        </button>
       </nav>
     </header>
 
@@ -142,7 +221,7 @@ function getProgress(book: BookMeta) {
 
     <div v-else class="book-list">
       <article
-        v-for="book in displayedBooks"
+        v-for="book in visibleBooks"
         :key="book.id"
         class="card reading-card"
         tabindex="0"
@@ -153,7 +232,7 @@ function getProgress(book: BookMeta) {
         @keydown.space.prevent="openDetail(book)"
       >
         <div class="card-cover">
-          <img v-if="library.coverUrls[book.id]" :src="library.coverUrls[book.id]" alt="" class="cover-image" loading="lazy" />
+          <img v-if="coverUrls[book.id]" :src="coverUrls[book.id]" alt="" class="cover-image" loading="lazy" decoding="async" />
           <div v-else class="cover-fallback">
             <span>{{ book.title }}</span>
           </div>
@@ -164,11 +243,11 @@ function getProgress(book: BookMeta) {
           <div class="card-header-row">
             <h2 class="book-title">{{ book.title }}</h2>
             <span
-              v-if="resolveReadingStatus(book).effective"
+              v-if="statusById.get(book.id)"
               class="status-pill"
-              :class="resolveReadingStatus(book).effective"
+              :class="statusById.get(book.id)"
             >
-              {{ t('uiV02.status.' + (resolveReadingStatus(book).effective!)) }}
+              {{ t('uiV02.status.' + statusById.get(book.id)) }}
             </span>
           </div>
           <p class="book-author">
@@ -211,6 +290,14 @@ function getProgress(book: BookMeta) {
           </button>
         </div>
       </article>
+      <button
+        v-if="hasMore"
+        type="button"
+        class="btn load-more"
+        @click="showMore"
+      >
+        {{ t('catalog.loadMore') }}
+      </button>
     </div>
   </div>
 </template>
@@ -245,8 +332,12 @@ function getProgress(book: BookMeta) {
   border-radius: var(--radius);
   gap: 2px;
   align-self: flex-start;
+  max-width: 100%;
+  overflow-x: auto;
 }
 .segmented-btn {
+  flex-shrink: 0;
+  white-space: nowrap;
   background: transparent;
   border: none;
   padding: 6px 14px;
@@ -269,6 +360,11 @@ function getProgress(book: BookMeta) {
   display: flex;
   flex-direction: column;
   gap: 14px;
+}
+.load-more {
+  align-self: center;
+  min-height: 44px;
+  margin-top: 4px;
 }
 .reading-card {
   display: flex;

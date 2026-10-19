@@ -8,6 +8,9 @@ package io.pagewise.reader
 
 import android.graphics.Color
 import android.os.Bundle
+import android.util.Log
+import java.util.Locale
+import java.util.concurrent.atomic.AtomicInteger
 import android.view.WindowManager
 import android.webkit.JavascriptInterface
 import android.webkit.WebView
@@ -53,9 +56,19 @@ class MainActivity : TauriActivity() {
     @Volatile
     private var insetsJson = "{\"top\":0,\"right\":0,\"bottom\":0,\"left\":0}"
 
+    @Volatile
+    private var performanceProbe = false
+    private val performanceRecords = AtomicInteger(0)
+
     override fun onCreate(savedInstanceState: Bundle?) {
+        performanceProbe = intent?.getBooleanExtra("io.pagewise.reader.PERF_PROBE", false) ?: false
         enableEdgeToEdge()
         super.onCreate(savedInstanceState)
+    }
+
+    override fun onDestroy() {
+        synchronized(performanceRecords) { performanceProbe = false }
+        super.onDestroy()
     }
 
     override fun onWebViewCreate(webView: WebView) {
@@ -118,6 +131,29 @@ class MainActivity : TauriActivity() {
     }
 
     private inner class InsetsBridge {
+        @JavascriptInterface
+        fun performanceProbeEnabled(): Boolean = performanceProbe
+
+        // Explicit synthetic-fixture opt-in, not authentication: WebView exposes bridges to all frames.
+        @JavascriptInterface
+        fun recordPerformance(actionCode: Int, engineCode: Int, elapsedMs: Double, completed: Boolean): Boolean =
+            synchronized(performanceRecords) {
+                if (!performanceProbe || performanceRecords.get() >= 512 ||
+                    !elapsedMs.isFinite() || elapsedMs < 0.0 || elapsedMs > 60000.0) return@synchronized false
+                val action = when (actionCode) {
+                    0 -> if (engineCode == 0) "ready" else return@synchronized false
+                    1 -> if (engineCode == 1 || engineCode == 2) "open" else return@synchronized false
+                    2 -> if (engineCode == 1 || engineCode == 2) "turn" else return@synchronized false
+                    else -> return@synchronized false
+                }
+                val engine = when (engineCode) { 0 -> "probe"; 1 -> "reflow"; else -> "pdf" }
+                performanceRecords.incrementAndGet()
+                Log.i("PagewisePerf", String.format(Locale.US,
+                    "PWPERF action=%s engine=%s completed=%d ms=%.3f",
+                    action, engine, if (completed) 1 else 0, elapsedMs))
+                true
+            }
+
         @JavascriptInterface
         fun setImmersive(on: Boolean) {
             runOnUiThread { applyImmersive(on) }

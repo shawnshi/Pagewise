@@ -49,10 +49,11 @@ test('提示词: 系统提示含规则, 用户消息含书名章名与编号正�
   assert.match(msgs[0].content, /一字不差/)
   assert.match(msgs[0].content, /简体中文/)
   assert.doesNotMatch(msgs[0].content, /\{LANG\}/)
-  assert.match(msgs[1].content, /《经济学原理》 曼昆/)
-  assert.match(msgs[1].content, /章：第一章/)
-  assert.match(msgs[1].content, /已解释过的概念.*稀缺/)
-  assert.match(msgs[1].content, /\[1\.1\] 经济学研究的是/)
+  const data = JSON.parse(msgs[1].content)
+  assert.deepEqual(data.book, { title: '经济学原理', author: '曼昆' })
+  assert.equal(data.chapter, '第一章')
+  assert.deepEqual(data.knownTerms, ['稀缺'])
+  assert.match(data.text, /\[1\.1\] 经济学研究的是/)
 })
 
 test('提示词: 叙事类加防剧透, 首块问体裁, 外语书加译文, 英文界面用英文模板', () => {
@@ -62,7 +63,7 @@ test('提示词: 叙事类加防剧透, 首块问体裁, 外语书加译文, 英
   assert.match(buildMessages({ ...base, lang: 'zh', bookLang: 'en-US' })[0].content, /"t":"tr"/)
   assert.doesNotMatch(buildMessages({ ...base, lang: 'zh', bookLang: 'zh-CN' })[0].content, /"t":"tr"/)
   const en = buildMessages({ ...base, lang: 'en', fiction: true })[0].content
-  assert.match(en, /never mention, hint at/)
+  assert.match(en, /never mention, hint at/i)
   assert.match(en, /in English/)
   assert.equal(needsTranslation('', 'zh'), false)
   assert.equal(needsTranslation('ja', 'en'), true)
@@ -72,7 +73,8 @@ test('提示词: 要义与翻译模式; 调用参数 (关思考, 低温, 流式,
   const sum = buildMessages({ promptVersion: PROMPT_VERSION, mode: 'summary', lang: 'zh', book: {}, text: '要句：\n[1] x', fiction: true })
   assert.match(sum[0].content, /"t":"sum"/)
   assert.match(sum[0].content, /不预测后文/)
-  assert.match(sum[1].content, /段意与要句/)
+  assert.match(sum[0].content, /段意与要句/)
+  assert.equal(JSON.parse(sum[1].content).text, '要句：\n[1] x')
   const tr = buildMessages({ promptVersion: PROMPT_VERSION, mode: 'translate', lang: 'en', book: {}, text: '[1.1] 你好' })
   assert.match(tr[0].content, /into English/)
   const body = buildChatBody({ promptVersion: PROMPT_VERSION, mode: 'mark', lang: 'zh', book: {}, text: '[1.1] x' })
@@ -435,9 +437,9 @@ test('同意「所有书开启」: 智能版对其他书也开着; 在某本书�
 
 // ---- 重点词 (dj2) ----
 
-test('重点词: 提示词版本升到 dj2 (旧版 dj1 的缓存仍可用于要句); 只有 keywords 时才加 kw 行要求', () => {
-  assert.equal(PROMPT_VERSION, 'dj2')
-  assert.deepEqual([...LEGACY_PROMPT_VERSIONS], ['dj1'])
+test('重点词: dj3 不复用旧证据合同缓存; 只有 keywords 时才加 kw 行要求', () => {
+  assert.equal(PROMPT_VERSION, 'dj3')
+  assert.deepEqual([...LEGACY_PROMPT_VERSIONS], [])
   const base = { promptVersion: PROMPT_VERSION, mode: 'mark', book: {}, text: '[1.1] 阿Q走进未庄。' }
   assert.doesNotMatch(buildMessages({ ...base, lang: 'zh' })[0].content, /"t":"kw"/)
   const zh = buildMessages({ ...base, lang: 'zh', keywords: true })[0].content

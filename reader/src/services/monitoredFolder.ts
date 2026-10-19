@@ -137,6 +137,17 @@ export function createMonitoredFolderService(transport: MonitoredFolderTransport
   }
 }
 
+/**
+ * atob 输出按码元转字节。`Uint8Array.from(str, char => char.charCodeAt(0))`
+ * 每字符一次回调, 20 MB 文件在目标 WebView 上约需 1 秒; 紧密循环是线性的。
+ */
+export function decodeBase64Bytes(encoded: string): Uint8Array {
+  const decoded = atob(encoded)
+  const bytes = new Uint8Array(decoded.length)
+  for (let i = 0; i < decoded.length; i++) bytes[i] = decoded.charCodeAt(i)
+  return bytes
+}
+
 const native = () => typeof window !== 'undefined' && '__TAURI_INTERNALS__' in window
 export function monitoredFolderCapabilities() {
   return { supported: native(), persistence: native() ? 'android-saf' : 'none', changes: native() ? 'foreground-best-effort' : 'none' } as const
@@ -157,10 +168,21 @@ const service = createMonitoredFolderService({
   select: () => invoke('select_monitored_folder'),
   list: id => invoke('list_monitored_files', { folderId: id }),
   read: async (id, documentId) => {
-    const result = await invoke<{ data: string }>('read_monitored_file', { folderId: id, documentId })
+    const result = await invoke<{ data?: string; path?: string }>('read_monitored_file', { folderId: id, documentId })
+    if (object(result) && typeof result.path === 'string') {
+      // 大文件由原生写入 app cache, 再用 plugin-fs 二进制读取; 路径由原生生成, 仍做白名单校验。
+      if (!/^cache\/pagewise-read\/[A-Za-z0-9-]{1,64}\.bin$/.test(result.path)) return badResponse()
+      const fs = await import('@tauri-apps/plugin-fs')
+      try {
+        const bytes = await fs.readFile(result.path, { baseDir: fs.BaseDirectory.AppData })
+        if (!(bytes instanceof Uint8Array) || bytes.byteLength > MONITORED_FOLDER_LIMITS.readBytes) return badResponse()
+        return bytes
+      } finally {
+        await fs.remove(result.path, { baseDir: fs.BaseDirectory.AppData }).catch(() => { /* 过期文件由原生兜底清理 */ })
+      }
+    }
     if (!object(result) || typeof result.data !== 'string' || result.data.length > Math.ceil(MONITORED_FOLDER_LIMITS.readBytes / 3) * 4) return badResponse()
-    const decoded = atob(result.data)
-    return Uint8Array.from(decoded, char => char.charCodeAt(0))
+    return decodeBase64Bytes(result.data)
   },
   watch: async listener => {
     if (!native()) return () => {}

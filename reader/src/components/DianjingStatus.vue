@@ -19,13 +19,14 @@ const message = computed(() => {
   if (status.value === 'quota') return t(code === 'budget' ? 'dianjing.statusBudget' : 'dianjing.statusQuota')
   if (status.value === 'offline') return t('dianjing.statusOffline')
   if (status.value === 'error') {
+    if (code === 'version') return t('dianjing.statusVersion')
     if (code === 'config') return t('dianjing.statusConfig')
     if (code === 'auth') return t('dianjing.statusAuth')
     return t('dianjing.statusError')
   }
   return t('dianjing.statusLoading', { pct: Math.round(props.dj.progress.value * 100) })
 })
-const canFix = computed(() => status.value === 'quota' || ['config', 'auth'].includes(props.dj.errorCode.value ?? ''))
+const canFix = computed(() => status.value === 'quota' || ['config', 'auth', 'version'].includes(props.dj.errorCode.value ?? ''))
 /** 智能版眼下用不了: 一步换成点睛阅读基础版 (不联网) */
 const offerBasic = computed(() => canFix.value || status.value === 'offline')
 </script>

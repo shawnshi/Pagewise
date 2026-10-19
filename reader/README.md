@@ -1,29 +1,31 @@
 # 知页阅读器 · Pagewise
 
-基于 [LightRead v1.15.0](https://github.com/yzfly/LightRead/tree/v1.15.0) 的 Android 阅读应用，面向文石 Note X3 Pro。源码版本沿用 `1.15.0`，不代表已正式发行。
+面向 Android 墨水屏设备的本地阅读应用，基于 LightRead v1.15.0 二次开发。当前源码版本 **1.1.0**；Android Release 与独立 Debug 已完成安装和启动检查，完整的实体面板与长时间听书验收仍未完成。
 
-**当前仅面向 Android。浏览器是开发预览与测试环境，不是独立 Web/PWA 产品；没有正式发行的知页 APK。**
+## 开始阅读
 
-## 当前产品边界
+1. 授权需要监测的书籍目录，应用按源文件引用建立书库。请只授权你希望阅读器访问的范围。
+2. 在书库中搜索、按标签或阅读状态筛选并打开书籍。当前支持 EPUB、MOBI、PDF、TXT 和 Markdown。
+3. 阅读时主导航隐藏；使用目录、进度、书内搜索、排版设置、划线与笔记。返回列表后恢复筛选和位置。
+4. 源目录权限失效或扫描失败会保留错误状态，不据此清空书库、笔记或手工标签。阅读器不提供删除或修改源书籍的接口。
 
-- Android SAF 只读目录授权、持久化授权描述、前台增量监测和源文件引用。不提供源文件写入/删除接口，不用“空目录”掩盖权限或 IO 错误。
-- EPUB、MOBI、PDF、TXT、Markdown 阅读；TXT/Markdown 通过保留的内部适配路径进入阅读器。普通 PDF 保留 PDFium 与 MuPDF 引擎。
-- 搜索、标签、组合筛选、分页、独立阅读状态与进度，以及列表返回状态恢复。书籍信息包含作者、标签、出版社和精度不扩充的出版日期。
-- 中英文排版、书内搜索、划线/笔记、阅读锚点与草稿保护。源文件缺失不删除书目、笔记或手工标签。
-- 所有常规页面采用底部五入口，图标与文字常显，内容独立滚动并避让安全区；阅读路由隐藏主导航。阅读工具栏窄屏分行，采用不透明背景。
-- AI 端点和提供商配置相互隔离；Gemini 预设默认模型为 `gemini-3.8-flash`。保留听书和阅读模式，但真实服务可用性不由配置或 mock 测试保证。
+当前不提供桌面/iOS 产品、账号或云同步。手动导入入口、书单、显式 EPUB 转换和论文专用工作区已退役；旧数据兼容及 TXT/Markdown 的内部阅读适配仍保留。浏览器只是开发和合成测试入口，不是独立 Web/PWA 产品。
 
-已退役书单、手动导入、显式 EPUB 转换和论文专用工作区，也不提供桌面/iOS、账号与云端同步产品。旧数据库、归档字段和必要路由兼容并未随入口退役而删除；普通 PDF 与 TXT/Markdown 阅读适配仍然保留。
+## 听书、阅读模式与 PDF
 
-## 目录与存储
+系统听书使用 Android 原生队列与后台串行状态处理；阅读模式提供大字、排版和墨水屏适配。系统音色的可用性取决于设备 TTS 引擎，在线音色另需网络。连续息屏长听、故障恢复与耗电尚未完成最终验收。
 
-首次使用从藏书页或设置授权监测目录。监测目录是书籍源，不是数据库根目录。来源书籍通过受目录授权约束的引用读取，不整本复制进应用；重复扫描不重建相同文档的书目，不覆盖已有手工信息。
+PDF 保留 PDFium 与 MuPDF 双引擎。1.1.0 将栅格化移入 Worker，限制并发和位图/几何缓存，并保护可见页；部分初始化、文本和交互仍在主线程，不能保证所有 PDF 的打开或翻页延迟。大文本转换同样使用 Worker，书库查询和页面生命周期也已做定向优化。
 
-完整、无错误且来源身份未变的扫描才能将未发现的文件标记为缺失。权限丢失、部分枚举和读取失败均保留错误语义。跨设备恢复归档不会重绑定另一台设备的 SAF 引用，需在目标设备重新授权目录。
+## 阅读助手与点睛
 
-## 开发
+端点、密钥和模型需自行配置并核验可用性。内置点睛通道要求匹配的服务端提示词版本；协议不兼容时明确拒绝，不自动切换服务。API、在线音色及用户配置的远端端点可能发送所选内容，本地阅读和测试通过不代表远端服务或输出已验证。
 
-建议 Node.js 24+；Vite 的实际要求为 `^20.19.0 || >=22.12.0`。在本目录运行：
+更新 APK 或源码不会自动部署 relay。运行配置、账户字段、签名材料和真实书库不提交源码仓库。
+
+## 开发与验证
+
+Vue/Tauri 应用、Android 模板和测试脚本位于本目录。`src-tauri/gen/` 是生成工程，不提交；原生模板位于 `src-tauri/android/`。
 
 ```sh
 npm ci
@@ -31,35 +33,12 @@ npm run dev
 npm run build
 ```
 
-`build` 执行 Vue/TypeScript 检查及前端打包。Android 还需要 JDK 21、SDK API 36、兼容 NDK 和 Rust Android ARM64 目标：
+Android 还需要 JDK 21、Android SDK API 36、兼容 NDK 和 Rust Android 目标；当前 Gradle 8.14 不支持 Java 25。Release 与 Debug 使用不同包名和私有数据；正式包升级必须保持包名、原证书及递增 versionCode，不能用卸载、清数据或复制真实书库来替代。
 
-```sh
-npm run android:init -- --ci --skip-targets-install
-npm run android:prepare
-npm run android:dev
-npm run android:build
-```
+[完整构建与验证说明](https://github.com/shawnshi/Pagewise/blob/main/readme.md)
 
-常规调试包为 `io.pagewise.reader.debug`。合成验收使用单独的 `io.pagewise.reader.acceptance.v03.debug`，不覆盖原应用、不恢复其数据。通用构建命令不会自动建立此隔离身份；不要把普通调试包当作隔离验收包。
+[部署与签名](https://github.com/shawnshi/Pagewise/blob/main/docs/deployment.md) · [1.1.0 安装记录](https://github.com/shawnshi/Pagewise/blob/main/docs/deployment-1.1-status.md) · [性能状态与未完成项](https://github.com/shawnshi/Pagewise/blob/main/docs/performance-implementation.md) · [阅读协议](https://github.com/shawnshi/Pagewise/blob/main/docs/reading-assistant-prompts.md)
 
-`src-tauri/gen/`、构建输出、依赖、缓存和本地验收报告不作为源码交付。初始化/准备步骤生成 Android 工程；原生模板位于 `src-tauri/android/`。
+## 许可
 
-## 测试
-
-```sh
-npm run test:android-only
-npm run test:library
-npm run test:feature-trim
-node --experimental-strip-types --test scripts/test-ui-v02-navigation.mjs scripts/test-ui-v02-transactions.mjs scripts/test-ui-v02-review-fixes.mjs
-node --test scripts/test-ui-label-visibility.mjs
-```
-
-真实页面测试使用 Playwright 与本机 Edge、新浏览器上下文和合成数据，阻止外部请求，不使用个人浏览器配置；按脚本配置准备浏览器，不自动安装或升级依赖。`UI_LABEL_RUN` 可指定未使用过的结果目录名，避免覆盖旧证据。
-
-最新底部导航改动通过 63 项定向 host 回归、10 个真实页面场景与目标机 3 项检查。覆盖宽窄屏、中英文、明暗主题、墨水屏布局、安全区、内容滚动不遮挡、选中态、阅读时隐藏导航和阅读锚点。
-
-其他功能的基线结果与尚未验证项目见 [验证状态](../docs/validation-status.md)。历史流程记录见 [UI v0.2 历史快照](../docs/ui-v02-implementation.md)，不将其视为当前安装包的完整验收。正式安装前遵循 [设备准入](../docs/device-admission.md)。
-
-## 来源与许可
-
-保留 LightRead（yzfly / 云中江树）署名、[AGPL-3.0-or-later](LICENSE) 和第三方许可。移除退役服务的本地源码不等于修改上游已部署服务或历史发行物；不复用上游签名材料、账号或部署配置。更多项目边界见 [根目录说明](../readme.md)。
+保留上游作者 yzfly／云中江树署名，阅读器沿用 [AGPL-3.0-or-later](https://github.com/shawnshi/Pagewise/blob/main/reader/LICENSE) 与第三方许可。分发 APK 时应提供对应源码。外围文档或脚本许可不替代上游阅读器许可。

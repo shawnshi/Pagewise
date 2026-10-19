@@ -3,10 +3,11 @@ import { AUTO_SPEED_LEVELS, AUTO_SPEED_STEPS, speedPosition, secondsAtPosition }
 import LevelSlider from '../components/LevelSlider.vue'
 import AppIcon from '../components/AppIcon.vue'
 import PdfReadingAssistant from '../components/PdfReadingAssistant.vue'
-import { PDF_AI_CONTEXT_LIMIT } from '../services/pdfReadingAssistant'
+import { buildPdfAssistantMessages, PDF_AI_CONTEXT_LIMIT } from '../services/pdfReadingAssistant'
 import { TTS_RATE_MAX, TTS_RATE_MIN, TTS_RATE_STOPS, rateText } from '../services/ttsRate'
-import { computed, nextTick, onBeforeUnmount, onMounted, ref, watch } from 'vue'
+import { computed, inject, nextTick, onBeforeUnmount, onMounted, ref, watch } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
+import { readerActivityKey } from '../services/readerActivity'
 import { getStorage, isTauri, type BookMeta, type AnnotationRec } from '../storage'
 import {
   extractParagraphsFromItems,
@@ -14,7 +15,7 @@ import {
   restorePlaceholders,
   type PaperParagraph,
 } from '../services/paperText'
-import { aiConfigured, chatStream, explainPrompt, readerSystemPrompt, type AiMessage } from '../services/ai'
+import { aiConfigured, chatStream, explainPrompt } from '../services/ai'
 import {
   PdfiumDoc,
   hitBoundary,
@@ -22,8 +23,11 @@ import {
   rangeText,
   wordRange,
   textRuns,
+  type TextModel,
 } from '../services/pdfium'
-import { initMupdf } from '../services/mupdf'
+import { PdfRasterClient } from '../services/pdfRasterClient'
+import { PdfByteLru, PDF_BITMAP_BYTES } from '../services/pdfResources'
+import { pdfRenderTarget } from '../services/pdfRenderBudget'
 import { importFile } from '../services/importer'
 import { detectFormat, isSupportedBookFormat } from '../services/format'
 import { FONT_FAMILIES, HIGHLIGHT_COLORS, READER_THEME_CHOICES, resolveReaderColors, resolveReaderTheme, annotationLineStyle, annotationLabelKey, annotationSwatchStyle } from '../services/readerTheme'
@@ -46,6 +50,8 @@ import {
   resetEdgeFailure,
   listVoicesSorted,
 } from '../services/tts'
+import { systemTts, isNativeSystemTts, systemVoiceHintKey, systemTtsErrorKey } from '../services/systemTts'
+import { NativeSpeechSession, speechSourceVersion, type NativeSpeechSnapshot, type NativeSpeechFeed } from '../services/nativeSpeechSession'
 import { EDGE_VOICES, edgeAvailable, playAudio } from '../services/edgeTts'
 import { KOKORO_VOICES, DEFAULT_KOKORO_SID, kokoroVoiceLabel } from '../services/kokoroVoices'
 import { localPack, localTtsSynthesize, refreshLocalPack, localTtsAvailable } from '../services/localTts'
@@ -68,6 +74,8 @@ const bookId = String(route.params.id)
 const meta = ref<BookMeta>()
 const loading = ref(true)
 const error = ref('')
+const reportReaderFailure = inject(readerActivityKey, () => () => {})()
+watch(error, value => { if (value) reportReaderFailure() })
 const pageCount = ref(0)
 const currentPage = ref(1)
 const pageInput = ref('1')
@@ -81,28 +89,44 @@ let pdfPositionReady = false
 
 /** PDFium 交互引擎：几何选择、链接、目录、文本与段落提取。 */
 let pdm: PdfiumDoc | null = null
-/** MuPDF 只负责可见位图；交互能力继续由 PDFium 提供。 */
-let renderBytes: Uint8Array | null = null
+/** Raster WASM and pixel upload are worker-owned; geometry remains synchronous and byte-bounded. */
+let rasterClient: PdfRasterClient | null = null
+let rasterRevision = 0
+let rasterViewKey = ''
+const bitmapCache = new PdfByteLru<string, HTMLCanvasElement>(PDF_BITMAP_BYTES, canvas => {
+  const thumbnail = Number(canvas.dataset.thumbnailPage)
+  if (thumbnail) {
+    thumbnailRendered.delete(thumbnail)
+    thumbnailLastUsed.delete(thumbnail)
+    const holder = thumbnailHolderOf(thumbnail)
+    holder?.classList.remove('thumbnail-ready')
+    if (holder && thumbnailOpen.value) thumbnailObserver?.observe(holder)
+  }
+  canvas.remove()
+  canvas.width = canvas.height = 0
+})
+function syncRasterView() {
+  const key = `${bookPaged.value ? pagedPages.value.join(',') : currentPage.value}:${curScale.value}:${DPR()}:${settings.pdf.renderer}`
+  if (key === rasterViewKey) return
+  rasterViewKey = key
+  bitmapCache.unpinAll()
+  rasterClient?.setRevision(++rasterRevision)
+}
+function reportRasterError(cause: unknown) {
+  if (readerAlive && !(cause instanceof DOMException && cause.name === 'AbortError')) {
+    console.error('PDF worker raster failed', cause)
+    // Unsupported Worker/CSP/crash is an explicit safe failure, never blocking UI fallback.
+    error.value = cause instanceof Error ? cause.message : String(cause)
+  }
+}
 /** 原始文件供打印、另存为与属性信息复用，不受渲染引擎消费影响。 */
 let sourcePdfBlob: Blob | null = null
 const sourcePdfVersion = ref('')
-let mupdfDocPromise: Promise<any> | null = null
-let mupdfRenderFailed = false
-
-function mupdfDoc(): Promise<any> {
-  if (!mupdfDocPromise) {
-    mupdfDocPromise = (async () => {
-      if (!renderBytes) throw new Error('PDF render data unavailable')
-      const mupdf = await initMupdf()
-      const bytes = renderBytes
-      renderBytes = null
-      return mupdf.Document.openDocument(bytes, 'application/pdf')
-    })()
-  }
-  return mupdfDocPromise
-}
 let saveTimer: ReturnType<typeof setTimeout> | undefined
 let settleTimer: ReturnType<typeof setTimeout> | undefined
+let progressWrite: Promise<unknown> = Promise.resolve()
+let progressErrorShown = false
+let lastSavedProgress = ''
 let resizeTimer: ReturnType<typeof setTimeout> | undefined
 let resizeObserver: ResizeObserver | undefined
 let scrollScheduled = false
@@ -147,8 +171,6 @@ const KEEP = 4
 const CSS_PX_PER_PT = 96 / 72
 /** 必须使用完整设备像素比；截到 2 会让高 DPI 屏把位图再次放大。 */
 const DPR = () => Math.max(window.devicePixelRatio || 1, 1)
-/** 仅作为浏览器画布安全阈值；可覆盖桌面端 200% + 3x DPR 的常见页面。 */
-const MAX_DIM = 8192
 
 /** 未取得页面尺寸时使用的标准页回退。 */
 const baseDims = ref({ w: 612, h: 792 })
@@ -235,6 +257,8 @@ const scrollPageLayout = computed(() => {
 
 const renderedScale = new Map<number, string>()
 const rendering = new Set<number>()
+/** 已挂载位图的页: 与渲染 key 分开追踪, 缩放后旧的 canvas 仍能被淘汰。 */
+const mountedPages = new Set<number>()
 
 function renderKeyFor(pageNum: number, scale: number) {
   const display = displaySizeOf(pageNum, scale)
@@ -301,89 +325,62 @@ function pagedScale(): number {
   return heightScale
 }
 
-/**
- * 整页位图 canvas：MuPDF 负责页面栅格化，按 CSS 缩放与完整 DPR 输出设备像素。
- * PDFium 仍负责所有交互几何；MuPDF 失败时无感回退 PDFium。
- */
-async function renderBitmapCanvas(pageNum: number, scale: number): Promise<HTMLCanvasElement> {
-  const dims = dimensionsOf(pageNum)
-  const display = displaySizeOf(pageNum, scale)
-  const outputScale = Math.min(DPR(), MAX_DIM / display.w, MAX_DIM / display.h)
-  const targetW = Math.max(1, Math.round(display.w * outputScale))
-  const targetH = Math.max(1, Math.round(display.h * outputScale))
-  const canvas = document.createElement('canvas')
-  canvas.style.width = `${display.w}px`
-  canvas.style.height = `${display.h}px`
-
-  if (settings.pdf.renderer === 'mupdf' && !mupdfRenderFailed) {
-    let page: any = null
-    let pixmap: any = null
-    let device: any = null
-    try {
-      const mupdf = await initMupdf()
-      page = (await mupdfDoc()).loadPage(pageNum - 1)
-      // 用两个方向的精确目标比例，确保位图与 CSS×DPR 一一对应；页面原点非零时
-      // 先平移到 (0,0)，位图 bbox 固定为目标尺寸，多出的亚像素直接被裁掉。
-      const bounds: number[] = page.getBounds()
-      const scaleX = targetW / dims.w
-      const scaleY = targetH / dims.h
-      const ctm = mupdf.Matrix.concat(
-        mupdf.Matrix.translate(-bounds[0], -bounds[1]),
-        mupdf.Matrix.scale(scaleX, scaleY),
-      )
-      // 直接栅格化成不透明白底的 RGBA 位图，像素即可零拷贝喂给 ImageData，
-      // 省掉逐字节 RGB→RGBA 的 JS 循环 (DPR 2 整页 ≈ 20MB)。
-      pixmap = new mupdf.Pixmap(mupdf.ColorSpace.DeviceRGB, [0, 0, targetW, targetH], true)
-      pixmap.clear(255)
-      device = new mupdf.DrawDevice(mupdf.Matrix.identity, pixmap)
-      page.run(device, ctm)
-      device.close()
-      const stride: number = pixmap.getStride()
-      const width: number = pixmap.getWidth()
-      const height: number = pixmap.getHeight()
-      if (stride !== width * 4) throw new Error(`unexpected pixmap stride ${stride} for width ${width}`)
-      canvas.width = width
-      canvas.height = height
-      const context = canvas.getContext('2d', { alpha: false })!
-      // getPixels() 是 wasm 堆上的视图 (非共享内存)；putImageData 同步拷贝完成后再释放 pixmap。
-      const pixels = pixmap.getPixels() as Uint8ClampedArray<ArrayBuffer>
-      context.putImageData(new ImageData(pixels, width, height), 0, 0)
-      canvas.dataset.renderer = 'mupdf'
-      return canvas
-    } catch (e) {
-      mupdfRenderFailed = true
-      console.warn('MuPDF render failed; falling back to PDFium', e)
-    } finally {
-      device?.destroy?.()
-      pixmap?.destroy?.()
-      page?.destroy?.()
+/** Cache owns both mounted and detached page/thumbnail canvases under one byte budget. */
+function rasterTargetFor(pageNum: number, w: number, h: number, priority: number, density: number) {
+  const { width, height } = pdfRenderTarget(w, h, density)
+  const key = `${priority === 2 ? 'thumbnail' : 'page'}:${pageNum}:${settings.pdf.renderer}:${width}x${height}:${w}x${h}`
+  return { key, width, height }
+}
+async function renderRasterCanvas(pageNum: number, w: number, h: number, priority = 0, density = DPR()): Promise<HTMLCanvasElement> {
+  const { key, width, height } = rasterTargetFor(pageNum, w, h, priority, density)
+  if (priority === 0) bitmapCache.pin(key)
+  const cached = bitmapCache.get(key)
+  if (cached) return cached
+  const client = rasterClient
+  if (!client || !readerAlive) throw new DOMException('PDF closed', 'AbortError')
+  const revision = rasterRevision
+  const { bitmap, renderer } = await client.render({ page: pageNum - 1, width, height, renderer: settings.pdf.renderer }, revision, priority)
+  try {
+    if (!readerAlive || revision !== rasterRevision) throw new DOMException('Obsolete PDF raster', 'AbortError')
+    const canvas = document.createElement('canvas')
+    canvas.width = bitmap.width
+    canvas.height = bitmap.height
+    canvas.style.width = `${w}px`
+    canvas.style.height = `${h}px`
+    canvas.getContext('2d', { alpha: false })!.drawImage(bitmap, 0, 0)
+    canvas.dataset.renderer = renderer
+    if (!bitmapCache.set(key, canvas, 256 + width * height * 4)) {
+      canvas.width = canvas.height = 0
+      throw new DOMException('PDF bitmap budget reserved for visible pages', 'AbortError')
     }
-  }
-
-  const img = pdm!.renderToSize(pageNum - 1, targetW, targetH)
-  canvas.width = img.width
-  canvas.height = img.height
-  canvas.getContext('2d')!.putImageData(img, 0, 0)
-  canvas.dataset.renderer = 'pdfium'
-  return canvas
+    return canvas
+  } finally { bitmap.close() }
+}
+async function renderBitmapCanvas(pageNum: number, scale: number, priority = 0): Promise<HTMLCanvasElement> {
+  const display = displaySizeOf(pageNum, scale)
+  return renderRasterCanvas(pageNum, display.w, display.h, priority)
 }
 
-async function renderScrollPage(num: number) {
+async function renderScrollPage(num: number, priority = 0) {
   if (!pdm || num < 1 || num > pageCount.value || rendering.has(num)) return
   const holder = holderOf(num)
   if (!holder) return
   const scale = curScale.value
   const renderKey = renderKeyFor(num, scale)
-  if (renderedScale.get(num) === renderKey) return
+  if (renderedScale.get(num) === renderKey && (holder.querySelector('canvas')?.width ?? 0) > 0) return
   rendering.add(num)
+  const revision = rasterRevision
   try {
-    const canvas = await renderBitmapCanvas(num, scale)
-    if (scale !== curScale.value) return
+    const canvas = await renderBitmapCanvas(num, scale, priority)
+    // 卸载、缩放或页组重建后, 旧 holder 已不在文档里: 丢弃结果而不是画进游离节点。
+    if (!readerAlive || !pdm || revision !== rasterRevision || scale !== curScale.value || holderOf(num) !== holder || !holder.isConnected) return
     holder.querySelector('.p-canvas')?.replaceChildren(canvas)
     renderedScale.set(num, renderKey)
+    mountedPages.add(num)
     renderPdmLinks(holder, num)
   } finally {
     rendering.delete(num)
+    if (readerAlive && !bookPaged.value && revision !== rasterRevision) updateViewport()
   }
 }
 
@@ -397,16 +394,26 @@ async function renderPaged() {
     if (pass > 0 && Math.abs(next - curScale.value) < 0.001) break
     curScale.value = next
     await nextTick()
+    if (!readerAlive) return
   }
-  // 页组切换会创建新的 holder，不能沿用连续滚动视图的 DOM 渲染缓存。
+  if (pages !== pagedPages.value) return
+  syncRasterView()
+  const revision = rasterRevision
+  // 页组切换会创建新的 holder；位图缓存可复用，DOM 挂载状态不可复用。
   for (const page of pages) renderedScale.delete(page)
   await nextTick()
+  if (!readerAlive) return
   await Promise.all(pages.map(async page => {
     // 模式切换时，旧滚动 holder 可能仍有同页渲染任务；等它收尾后再画入新 holder。
-    while (rendering.has(page)) await new Promise(resolve => setTimeout(resolve, 0))
-    await renderScrollPage(page)
+    // 超出约 2 秒视为卡死的旧任务, 不阻塞本轮页组渲染。
+    for (let ticks = 0; rendering.has(page) && ticks < 120 && readerAlive; ticks++) {
+      await new Promise(resolve => setTimeout(resolve, 16))
+    }
+    if (!readerAlive || revision !== rasterRevision) return
+    await renderScrollPage(page).catch(reportRasterError)
   }))
-  pagedBox.value.scrollTo({ top: 0, left: 0 })
+  if (!readerAlive || revision !== rasterRevision) return
+  pagedBox.value?.scrollTo({ top: 0, left: 0 })
 }
 
 async function pagedGoto(page: number) {
@@ -527,15 +534,15 @@ function renderPdmLinks(holder: HTMLElement, num: number) {
 }
 
 function evictFarPages(center: number) {
-  for (const num of [...renderedScale.keys()]) {
-    if (Math.abs(num - center) > KEEP) {
-      const holder = holderOf(num)
-      if (holder) {
-        holder.querySelector('.p-canvas')?.replaceChildren()
-        holder.querySelector('.p-links')?.replaceChildren()
-      }
-      renderedScale.delete(num)
+  for (const num of mountedPages) {
+    if (Math.abs(num - center) <= KEEP) continue
+    const holder = holderOf(num)
+    if (holder) {
+      holder.querySelector('.p-canvas')?.replaceChildren()
+      holder.querySelector('.p-links')?.replaceChildren()
     }
+    renderedScale.delete(num)
+    mountedPages.delete(num)
   }
 }
 
@@ -562,6 +569,7 @@ function pageAtCenter(): number {
 function updateViewport() {
   const cur = pageAtCenter()
   if (cur !== currentPage.value) currentPage.value = cur
+  syncRasterView()
   const activeGroup = scrollGroupLayout.value.findIndex(group => group.pages.includes(cur))
   const nearby = scrollGroupLayout.value.slice(
     Math.max(0, activeGroup - 1),
@@ -570,15 +578,29 @@ function updateViewport() {
   // 当前页组立即渲染；相邻页组的预载放到后续宏任务里逐页进行，
   // 否则所有页面会挤在同一条微任务链里, 首页要等预载页全部栅格化后才能上屏。
   const active = scrollGroupLayout.value[activeGroup]
-  if (active) for (const page of active.pages) renderScrollPage(page)
-  schedulePrefetchRender(nearby.filter(group => group !== active).flatMap(group => group.pages))
+  const top = scroller.value?.scrollTop ?? 0
+  const bottom = top + (scroller.value?.clientHeight ?? 0)
+  const visible = scrollGroupLayout.value.filter(group => group === active || (group.top < bottom && group.top + group.height > top))
+  // PERF-REVIEW-001: visibility owns pins even when a prefetched canvas skips rendering.
+  bitmapCache.unpinAll()
+  for (const page of visible.flatMap(group => group.pages)) {
+    const { w, h } = displaySizeOf(page, curScale.value)
+    const { key } = rasterTargetFor(page, w, h, 0, DPR())
+    bitmapCache.pin(key)
+    bitmapCache.get(key)
+  }
+  // 渲染拒绝 (文档已关闭等) 不能变成未处理 Promise; 下一次可见性更新会重试。
+  for (const group of visible) {
+    for (const page of group.pages) renderScrollPage(page).catch(reportRasterError)
+  }
+  schedulePrefetchRender(nearby.filter(group => !visible.includes(group)).flatMap(group => group.pages))
   evictFarPages(cur)
 }
 
 const prefetchQueue: number[] = []
 let prefetchDraining = false
 function schedulePrefetchRender(pages: number[]) {
-  for (const page of pages) if (!prefetchQueue.includes(page)) prefetchQueue.push(page)
+  prefetchQueue.splice(0, prefetchQueue.length, ...pages.slice(0, 6))
   if (prefetchDraining || prefetchQueue.length === 0) return
   prefetchDraining = true
   const drain = () => {
@@ -593,8 +615,8 @@ function schedulePrefetchRender(pages: number[]) {
       return
     }
     // 每页之间让出主线程, 让首屏 paint / 滚动事件先执行。
-    renderScrollPage(page)
-      .catch(e => console.warn('prefetch render failed', e))
+    renderScrollPage(page, 1)
+      .catch(reportRasterError)
       .then(() => setTimeout(drain, 0))
   }
   setTimeout(drain, 0)
@@ -982,10 +1004,32 @@ watch(currentPage, cur => {
 function onPageSettled() {
   clearTimeout(saveTimer)
   if (!readerAlive || !pdfPositionReady) return
-  saveTimer = setTimeout(() => {
-    if (!readerAlive || !pdfPositionReady) return
-    library.saveProgress(bookId, String(currentPage.value), pageCount.value ? currentPage.value / pageCount.value : 0)
-  }, 400)
+  saveTimer = setTimeout(() => { void persistProgress().catch(reportProgressError) }, 400)
+}
+
+function reportProgressError() {
+  if (progressErrorShown) return
+  progressErrorShown = true
+  toast(t('reader.progressSaveFailed'), 'error')
+}
+
+/** 串行写入当前页: 快速跳转时乱序回包不能把新位置写成旧页码; 已写入的同一位置不重复写。 */
+function persistProgress(): Promise<void> {
+  if (!pdfPositionReady) return Promise.resolve()
+  const location = String(currentPage.value)
+  const fraction = pageCount.value ? currentPage.value / pageCount.value : 0
+  const key = `${location}|${pageCount.value}`
+  if (key === lastSavedProgress) return progressWrite.then(() => { /* 已落库 */ })
+  const write = progressWrite.then(() => library.saveProgress(bookId, location, fraction))
+  progressWrite = write.catch(() => { /* 保留链, 不吞掉本次失败 */ })
+  return write.then(() => { lastSavedProgress = key })
+}
+
+/** 取消防抖并立即保存: 返回/切后台/卸载时调用, 避免丢最后一次定位。 */
+function flushProgress(): Promise<void> {
+  clearTimeout(settleTimer)
+  clearTimeout(saveTimer)
+  return persistProgress()
 }
 
 function jumpTo() {
@@ -1247,18 +1291,10 @@ async function drainThumbnailQueue() {
         const size = thumbnailSizeOf(pageNum)
         // Retina 下保留清晰度，同时限制后台缩略图的长期内存占用。
         const outputScale = Math.min(DPR(), 1.5)
-        const image = pdm.renderToSize(
-          pageNum - 1,
-          Math.max(1, Math.round(size.w * outputScale)),
-          Math.max(1, Math.round(size.h * outputScale)),
-        )
-        const canvas = document.createElement('canvas')
-        canvas.width = image.width
-        canvas.height = image.height
-        canvas.style.width = `${size.w}px`
-        canvas.style.height = `${size.h}px`
+        const canvas = await renderRasterCanvas(pageNum, size.w, size.h, 2, outputScale)
+        if (!readerAlive || !thumbnailOpen.value || !holder.isConnected) continue
+        canvas.dataset.thumbnailPage = String(pageNum)
         canvas.setAttribute('aria-hidden', 'true')
-        canvas.getContext('2d', { alpha: false })!.putImageData(image, 0, 0)
         slot.replaceChildren(canvas)
         holder.classList.add('thumbnail-ready')
         thumbnailRendered.add(pageNum)
@@ -1282,6 +1318,7 @@ function queueThumbnail(pageNum: number, priority = false) {
     || pageNum > pageCount.value
     || thumbnailRendered.has(pageNum)
     || thumbnailQueued.has(pageNum)
+    || thumbnailQueue.length >= 16
   ) return
   thumbnailQueued.add(pageNum)
   if (priority) thumbnailQueue.unshift(pageNum)
@@ -1513,7 +1550,7 @@ function querySearchUnits(value: string): string[] {
   return units
 }
 
-function modelSearchUnits(model: ReturnType<PdfiumDoc['text']>) {
+function modelSearchUnits(model: { count: number; codes: Uint32Array }) {
   const units: string[] = []
   const indexes: number[] = []
   for (let i = 0; i < model.count; i++) {
@@ -1526,9 +1563,12 @@ function modelSearchUnits(model: ReturnType<PdfiumDoc['text']>) {
 
 function pageSearchHits(page: number, needle: string[]): PdfSearchHit[] {
   if (!pdm || !needle.length) return []
-  const model = pdm.text(page - 1)
+  const codes = pdm.pageCodes(page - 1)
+  const model = { codes, count: codes.length }
   const { units, indexes } = modelSearchUnits(model)
   const hits: PdfSearchHit[] = []
+  // PERF-REVIEW-002: oversized geometry may be rejected by the shared LRU.
+  let geometry: TextModel | undefined
   const lastStart = units.length - needle.length
   for (let start = 0; start <= lastStart; start++) {
     let matched = true
@@ -1546,7 +1586,7 @@ function pageSearchHits(page: number, needle: string[]): PdfSearchHit[] {
       const after = b < model.count ? String.fromCodePoint(model.codes[b] ?? 0) : ''
       if (isSearchWordChar(before) || isSearchWordChar(after)) continue
     }
-    const rects = rangeRects(model, a, b)
+    const rects = rangeRects(geometry ??= pdm.text(page - 1), a, b)
     if (rects.length) hits.push({ page, a, b, rects })
     start += Math.max(0, needle.length - 1)
   }
@@ -1619,6 +1659,7 @@ async function runPdfSearch() {
 
   pdfSearchRunning.value = true
   const hits: PdfSearchHit[] = []
+  let yieldedAt = performance.now()
   try {
     for (let page = 1; page <= pageCount.value && hits.length < PDF_SEARCH_LIMIT; page++) {
       if (session !== pdfSearchSession) return
@@ -1629,7 +1670,10 @@ async function runPdfSearch() {
         console.warn(`PDF search skipped page ${page}`, e)
       }
       pdfSearchProgress.value = page / Math.max(1, pageCount.value)
-      if (page % 8 === 0) await new Promise<void>(resolve => setTimeout(resolve, 0))
+      if (performance.now() - yieldedAt >= 8) {
+        await new Promise<void>(resolve => setTimeout(resolve, 0))
+        yieldedAt = performance.now()
+      }
     }
     if (session !== pdfSearchSession) return
     pdfSearchResults.value = hits
@@ -2256,9 +2300,10 @@ async function copySelection() {
 }
 
 /* ---- 划词 AI 解读 (点击才触发, 流式输出, 可关闭即取消) ---- */
-const selTr = ref<{ src: string; out: string; busy: boolean } | null>(null)
+const selTr = ref<{ src: string; out: string; busy: boolean; incomplete: boolean } | null>(null)
 const selTrPos = ref({ x: 0, y: 0 })
 let selTrSession = 0
+let selTrAbort: AbortController | undefined
 
 async function translateSelection() {
   const s = selection.value
@@ -2271,23 +2316,25 @@ async function translateSelection() {
   selTrPos.value = clampPop(s.anchor.x - 180, s.anchor.y + 10)
   window.getSelection()?.removeAllRanges()
   selection.value = null
-  selTr.value = { src: s.text, out: '', busy: true }
+  selTr.value = { src: s.text, out: '', busy: true, incomplete: false }
   const session = ++selTrSession
+  selTrAbort?.abort()
+  selTrAbort = new AbortController()
   try {
     const lang = settings.language === 'en' ? 'en' : 'zh'
-    const messages: AiMessage[] = [
-      {
-        role: 'system',
-        content: readerSystemPrompt({ title: meta.value?.title, author: meta.value?.author }, '', lang),
-      },
-      { role: 'user', content: explainPrompt(s.text, lang) },
-    ]
-    for await (const delta of chatStream(messages)) {
+    const messages = buildPdfAssistantMessages({
+      title: meta.value?.title ?? '', author: meta.value?.author, page: s.page,
+      text: s.text, question: explainPrompt(lang), language: lang,
+    })
+    for await (const delta of chatStream(messages, selTrAbort.signal)) {
       if (session !== selTrSession) return
       selTr.value.out += delta
     }
   } catch (e: any) {
-    if (session === selTrSession) toast(`${t('ai.requestFailed')}: ${e?.message ?? e}`, 'error', 6000)
+    if (session === selTrSession && selTr.value) {
+      selTr.value.incomplete = true
+      toast(`${t('ai.requestFailed')}: ${e?.message ?? e}`, 'error', 6000)
+    }
   } finally {
     if (session === selTrSession && selTr.value) selTr.value.busy = false
   }
@@ -2295,6 +2342,8 @@ async function translateSelection() {
 
 function closeSelTr() {
   selTrSession++
+  selTrAbort?.abort()
+  selTrAbort = undefined
   selTr.value = null
 }
 
@@ -2614,8 +2663,79 @@ watch(() => settings.autoReadSeconds, () => {
 /* ---- 听书 (Edge 在线 / 本地离线 / 系统语音) ---- */
 const ttsPanel = ref(false)
 const ttsState = ref<'stopped' | 'playing' | 'paused'>('stopped')
+watch(() => systemTts.focusLoss, () => {
+  if (ttsState.value !== 'playing') return
+  pauseTTS()
+  toast(t('tts.focusPaused'), 'info')
+}, { flush: 'sync' })
 const ttsVoices = ref<{ name: string; lang: string }[]>([])
+const nativeVoiceOptions = computed(() => {
+  const zh = systemTts.voices.filter(v => /^zh/i.test(v.locale))
+  return zh
+    .slice()
+    .sort((a, b) => Number(!!a.network) - Number(!!b.network) || a.locale.localeCompare(b.locale) || a.name.localeCompare(b.name))
+    .map((v, i) => ({
+      name: v.name,
+      label: `${v.locale} · ${v.network ? t('tts.voiceOnline') : t('tts.voiceOffline')} ${i + 1}`,
+    }))
+})
 let ttsSession = 0
+let nativeSpeechBlob: Blob | null = null
+let nativeSpeechVersion: Promise<string> | null = null
+const nativeListening = ref<NativeSpeechSnapshot | null>(null)
+const nativeSpeech = new NativeSpeechSession(async () => {
+  if (!nativeSpeechBlob) throw Object.assign(new Error('source_unavailable'), { code: 'source_unavailable' })
+  nativeSpeechVersion ??= speechSourceVersion(nativeSpeechBlob, 'pdfium-text-v1')
+  return { owner: bookId, sourceVersion: await nativeSpeechVersion }
+}, snapshot => {
+  nativeListening.value = snapshot
+  if (snapshot.state === 'playing' || (snapshot.state === 'preparing' && ttsState.value !== 'paused')) ttsState.value = 'playing'
+  else if (snapshot.state === 'paused') ttsState.value = 'paused'
+  else if (snapshot.state === 'finished' || snapshot.state === 'stopped') ttsState.value = 'stopped'
+  else if (snapshot.state === 'error') { ttsState.value = 'stopped'; toast(t(systemTtsErrorKey({ code: snapshot.code })), 'error') }
+  // No gotoPage: listening reconciliation never overwrites the reading location.
+})
+
+function nativePdfFeed(startPage: number): NativeSpeechFeed {
+  if (!pdm) throw Object.assign(new Error('extraction_failed'), { code: 'extraction_failed' })
+  const total = pageCount.value
+  let page = 1, chunk = 0
+  let chunks: string[] = []
+  let covered: number[] = []
+  let startKey = ''
+  return {
+    expectedUnits: total,
+    drainCoverage() { const result = covered; covered = []; return result },
+    startKey() { if (!startKey) throw Object.assign(new Error('tts_empty'), { code: 'tts_empty' }); return startKey },
+    async next() {
+      while (page <= total) {
+        if (!readerAlive || !pdm) throw Object.assign(new Error('extraction_failed'), { code: 'extraction_failed' })
+        if (!chunks.length) {
+          if (page % 8 === 0) await new Promise(resolve => setTimeout(resolve, 0))
+          if (!readerAlive || !pdm) throw Object.assign(new Error('extraction_failed'), { code: 'extraction_failed' })
+          try { chunks = splitChunks(pdm.pagePlainText(page - 1).replace(/\s+/g, ' ').trim()) }
+          catch (cause) { throw Object.assign(new Error('extraction_failed'), { code: 'extraction_failed', cause }) }
+          covered.push(page - 1)
+          chunk = 0
+          if (!chunks.length) { page++; continue }
+        }
+        const key = `${page}:0:${chunk}`
+        if (!startKey && page >= startPage) startKey = key
+        const text = chunks[chunk++]!
+        const sectionEnd = chunk === chunks.length
+        if (sectionEnd) { page++; chunks = [] }
+        return { key, text, sectionEnd }
+      }
+      return null
+    },
+  }
+}
+
+watch(() => [settings.ttsRate, settings.ttsVoice, settings.ttsEngine], () => {
+  if (!nativeSpeech.attached && !nativeSpeech.isPreparing) return
+  if (settings.ttsEngine !== 'system') { stopTTS(); return }
+  void nativeSpeech.configure({ rate: settings.ttsRate, voice: settings.ttsVoice }).catch(error => toast(t(systemTtsErrorKey(error)), 'error'))
+})
 
 /** 长文本按标点切块, 避免超长 utterance 在部分引擎上卡死 */
 function splitChunks(text: string, max = 400): string[] {
@@ -2676,6 +2796,12 @@ async function startTTS() {
   stopAutoRead()
   ttsState.value = 'playing'
   try {
+    if (settings.ttsEngine === 'system' && isNativeSystemTts()) {
+      const result = await nativeSpeech.play(nativePdfFeed(currentPage.value), { rate: settings.ttsRate, voice: settings.ttsVoice, deadline: 0, stopAtSection: false })
+      if (result === 'finished' && session === ttsSession) toast(t('tts.bookFinished'), 'success')
+      if (session === ttsSession) { nativeSpeech.detach(); ttsState.value = 'stopped' }
+      return
+    }
     let pageNum = currentPage.value
     let spokeAnything = false
     while (session === ttsSession && !ttsStopped() && pageNum <= pageCount.value) {
@@ -2696,7 +2822,7 @@ async function startTTS() {
           }
           const speaking = speakText(chunks[ci])
           upcoming.forEach((next, i) => prefetchSpeech(next, i + 1))
-          await speaking
+          if (await speaking === 'cancelled' || session !== ttsSession) return
           pingReadingAuto()
         }
       }
@@ -2710,26 +2836,32 @@ async function startTTS() {
       toast(t('tts.pdfNoText'), 'error', 4000)
     }
   } catch (e) {
+    if (session !== ttsSession) return
     console.error(e)
-    toast(t('tts.error'), 'error')
+    toast(t(systemTtsErrorKey(e)), 'error')
+    stopSpeech()
   }
   if (session === ttsSession) ttsState.value = 'stopped'
 }
 
 function pauseTTS() {
   ttsState.value = 'paused'
-  pauseSpeech()
+  if (nativeSpeech.attached || nativeSpeech.isPreparing) void nativeSpeech.pause().catch(error => toast(t(systemTtsErrorKey(error)), 'error'))
+  else pauseSpeech()
 }
 
 function resumeTTS() {
   ttsState.value = 'playing'
-  resumeSpeech()
+  if (nativeSpeech.attached || nativeSpeech.isPreparing) void nativeSpeech.resume().catch(error => toast(t(systemTtsErrorKey(error)), 'error'))
+  else resumeSpeech()
 }
 
 function stopTTS() {
   ttsSession++
   ttsState.value = 'stopped'
-  stopSpeech()
+  if (nativeSpeech.attached || nativeSpeech.isPreparing) void nativeSpeech.stop().catch(error => toast(t(systemTtsErrorKey(error)), 'error'))
+  else stopSpeech()
+  nativeListening.value = null
 }
 
 /* ================= 生命周期 ================= */
@@ -2943,9 +3075,7 @@ async function readerBack() {
   if (autoReading.value) { stopAutoRead(); return }
   if (presentationMode.value) { await exitPresentation(); return }
   if (isFullscreen.value) { await setFullscreen(false); return }
-  clearTimeout(settleTimer)
-  clearTimeout(saveTimer)
-  if (pdfPositionReady) await library.saveProgress(bookId, String(currentPage.value), currentPage.value / pageCount.value)
+  await flushProgress()
   if (readerAlive && nativeBackHost.__pagewiseReaderBack === handleNativeReaderBack) await router.push(backTarget)
 }
 
@@ -3025,6 +3155,7 @@ onMounted(async () => {
     if (!readerAlive) return
     annotations.value = storedAnnotations.filter(a => decodeLoc(a.cfi))
     const blob = await storage.getBookFile(bookId)
+    nativeSpeechBlob = blob
     if (!readerAlive) return
     sourcePdfBlob = blob.slice(0, blob.size, 'application/pdf')
     const fileData = await blob.arrayBuffer()
@@ -3038,7 +3169,7 @@ onMounted(async () => {
     if (!readerAlive) { opened.close(); return }
     if (!opened.pages.length) { opened.close(); throw new Error(t('reader.cantOpenPdf')) }
     pdm = opened
-    renderBytes = settings.pdf.renderer === 'mupdf' ? new Uint8Array(fileData.slice(0)) : null
+    rasterClient = new PdfRasterClient(sourcePdfBlob!)
     pageCount.value = pdm.pages.length
     pageDims.value = pdm.pages.map(page => ({ w: page.w, h: page.h }))
     baseDims.value = pageDims.value[0] ?? { w: 612, h: 792 }
@@ -3085,10 +3216,19 @@ onMounted(async () => {
     })
     observeActiveViewport()
     pdfPositionReady = true
+    try {
+      if (isNativeSystemTts()) {
+        const native = await nativeSpeech.attach()
+        if (native && readerAlive) {
+          settings.ttsEngine = 'system'; settings.ttsVoice = native.voice; settings.ttsRate = native.rate
+          ttsPanel.value = true
+        } else if (!readerAlive) nativeSpeech.detach()
+      }
+    } catch (nativeError) { if (readerAlive) toast(t(systemTtsErrorKey(nativeError)), 'error') }
   } catch (e: any) {
     if (readerAlive) {
       console.error(e)
-      error.value = e?.message ?? t('reader.cantOpenPdf')
+      error.value = e?.message === 'busy' ? t('reader.folderBusy') : (e?.message ?? t('reader.cantOpenPdf'))
     }
   } finally {
     if (readerAlive) loading.value = false
@@ -3100,8 +3240,19 @@ watch([pdfSearchOpen, drawerOpen, typographyOpen, ttsPanel, moreMenu, properties
   if (pdfAiOpen.value && flags.some(Boolean)) closePdfAssistant()
 })
 
+// 切后台 / 进程可能被回收: 把防抖中的当前页立即落库; 失败留给下次有界重试的旧值。
+function onVisibilityCheckpoint() {
+  if (document.visibilityState !== 'hidden' || !readerAlive) return
+  void flushProgress().catch(reportProgressError)
+}
+
+document.addEventListener('visibilitychange', onVisibilityCheckpoint)
+
 onBeforeUnmount(() => {
+  document.removeEventListener('visibilitychange', onVisibilityCheckpoint)
   readerAlive = false
+  // 卸载前先取消防抖并写入最后位置; 失败不回滚已显示的内容, 也不阻塞退出。
+  void flushProgress().catch(() => { /* 退出时无法保证展示提示 */ })
   pdfPositionReady = false
   closePdfAssistant()
   reflowSession++
@@ -3111,7 +3262,10 @@ onBeforeUnmount(() => {
   fullscreenWindowUnlisten?.()
   fullscreenWindowUnlisten = undefined
   selTrSession++
-  stopTTS()
+  ttsSession++
+  if (nativeSpeech.attached && !nativeSpeech.isPreparing) nativeSpeech.detach()
+  else stopTTS()
+  ttsState.value = 'stopped'
   stopAutoRead()
   resizeObserver?.disconnect()
   listenedScroller?.removeEventListener('scroll', onScroll)
@@ -3130,13 +3284,17 @@ onBeforeUnmount(() => {
   thumbnailLastUsed.clear()
   window.removeEventListener('pointermove', onDragMove)
   window.removeEventListener('pointermove', onPanMove)
+  // dragSel / panDrag 可能已登记一次性 pointerup; 卸载后不应再用旧状态回调。
+  window.removeEventListener('pointerup', onDragUp)
+  window.removeEventListener('pointerup', onPanUp)
   panDrag?.viewport.classList.remove('is-panning')
   panDrag = null
   pdm?.close()
   pdm = null
-  mupdfDocPromise?.then(doc => doc?.destroy?.()).catch(() => {})
-  mupdfDocPromise = null
-  renderBytes = null
+  rasterClient?.close()
+  rasterClient = null
+  bitmapCache.clear()
+  prefetchQueue.length = 0
   sourcePdfBlob = null
 })
 </script>
@@ -3887,6 +4045,7 @@ onBeforeUnmount(() => {
       </div>
       <p class="sel-tr-src">{{ selTr.src }}</p>
       <p class="sel-tr-out">{{ selTr.out || '…' }}</p>
+      <p v-if="selTr.incomplete" class="sel-tr-src">{{ t('ai.pdfIncomplete') }}</p>
     </div>
 
     <!-- 高亮想法编辑浮层 -->
@@ -3941,7 +4100,7 @@ onBeforeUnmount(() => {
         <div class="seg" style="flex: 1">
           <button :class="{ active: settings.ttsEngine === 'edge' }" @click="settings.ttsEngine = 'edge'; resetEdgeFailure()">{{ t('tts.engineEdge') }}</button>
           <button v-if="localTtsAvailable()" :class="{ active: settings.ttsEngine === 'local' }" :title="t('tts.engineLocalTitle')" @click="settings.ttsEngine = 'local'; resetEdgeFailure(); refreshLocalStatus()">{{ t('tts.engineLocal') }}</button>
-          <button :class="{ active: settings.ttsEngine === 'system' }" @click="settings.ttsEngine = 'system'">{{ t('tts.engineSystem') }}</button>
+          <button v-if="systemTts.available" :class="{ active: settings.ttsEngine === 'system' }" @click="settings.ttsEngine = 'system'">{{ t('tts.engineSystem') }}</button>
         </div>
       </div>
       <div v-if="edgeAvailable() && settings.ttsEngine === 'edge'" class="tts-row">
@@ -3962,12 +4121,18 @@ onBeforeUnmount(() => {
       </div>
       <div v-else class="tts-row">
         <label>{{ t('tts.voice') }}</label>
-        <select v-model="settings.ttsVoice" class="input">
+        <p v-if="nativeListening && settings.ttsEngine === 'system'" class="tts-hint">{{ t(nativeListening.committed && nativeListening.index >= nativeListening.count ? 'tts.bookFinished' : nativeListening.committed ? 'tts.nativePrepared' : 'tts.nativePreparing', { count: nativeListening.count }) }}</p>
+        <select v-if="isNativeSystemTts()" v-model="settings.ttsVoice" class="input">
+          <option value="">{{ t('tts.autoVoice') }}</option>
+          <option v-for="v in nativeVoiceOptions" :key="v.name" :value="v.name">{{ v.label }}</option>
+        </select>
+        <select v-else v-model="settings.ttsVoice" class="input">
           <option value="">{{ t('tts.autoVoice') }}</option>
           <option v-for="v in ttsVoices" :key="v.name" :value="v.name">{{ v.name }} ({{ v.lang }})</option>
         </select>
       </div>
       <p v-if="edgeAvailable() && settings.ttsEngine === 'local'" class="tts-local-hint">{{ t('tts.hintLocal') }}</p>
+      <p v-else-if="settings.ttsEngine === 'system'" class="tts-hint">{{ t(isNativeSystemTts() ? systemVoiceHintKey(settings.ttsVoice) : 'tts.hintSystem') }}</p>
     </div>
 
     <!-- 自动翻页控制条：运行后自动收起到顶部状态按钮，避免遮挡正文。 -->
@@ -5587,6 +5752,11 @@ onBeforeUnmount(() => {
   width: 36px;
   text-align: right;
 }
+.tts-voice-auto {
+  flex: 1;
+  font-size: 12px;
+  color: var(--text-3);
+}
 .seg {
   display: flex;
   border: 1px solid var(--border);
@@ -5903,6 +6073,16 @@ onBeforeUnmount(() => {
   }
   .reader-tool {
     padding-inline: 8px;
+  }
+  /* 10.3" 墨水屏竖屏约 992 CSS px: 单行工具栏会隐藏右侧缩放/版式控件。
+     中等宽度改为换行展示, 不做无提示的横向滚动。 */
+  .pdf-toolbar {
+    flex-wrap: wrap;
+    overflow-x: visible;
+    row-gap: 4px;
+  }
+  .pdf-toolbar .toolbar-sep {
+    display: none;
   }
 }
 

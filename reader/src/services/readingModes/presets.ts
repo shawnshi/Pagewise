@@ -177,7 +177,7 @@ export function themeAfterRelease(before: unknown, mode: 'night' | 'eyeCare', ap
 
 const EINK_UA = [
   // Boox 的 UA 只带型号: NoteAir2P / TabUltraC / Nova3Color / Poke5 / Palma (华为 "nova 7" 带空格, 不会命中)
-  /\bBOOX\b/i, /\bONYX\b/i, /\bNoteAir/i, /\bTabUltra/i, /\bTabX\b/i, /\bNova(?:\d?Air|Pro|\dColor|\dPlus|\d)\b/, /\bPoke[2-6]/i, /\bPalma\b/i,
+  /\bBOOX\b/i, /\bONYX\b/i, /\bNote\s?X3(?:\s?Pro)?\b/i, /\bNoteAir/i, /\bTabUltra/i, /\bTabX\b/i, /\bNova(?:\d?Air|Pro|\dColor|\dPlus|\d)\b/, /\bPoke[2-6]/i, /\bPalma\b/i,
   /\bHisense\s?A[5-9]\b/i, /\bHLTE\d{3}E\b/i, /\biReader\b/i, /\bZhangyue\b/i, /\bBigme\b/i, /\bMeebook\b/i, /\bBoyue\b/i,
   /\bLikebook\b/i, /\bKindle\b/i, /\bKobo\b/i, /\bPocketBook\b/i, /\bTolino\b/i, /\breMarkable\b/i, /\bHanvon\b/i, /\bDasung\b/i,
 ]

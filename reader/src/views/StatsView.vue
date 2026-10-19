@@ -25,12 +25,21 @@ const settings = useSettings()
 const daily = ref<DailyMap>({})
 const loaded = ref(false)
 const today = ref(localDay())
+const loadError = ref('')
+let loadErrorNotified = false
 
 async function reload() {
   try {
     daily.value = await loadDaily()
-  } catch {
-    daily.value = {}
+    loadError.value = ''
+    loadErrorNotified = false
+  } catch (error) {
+    // I/O 失败不能显示成“没有阅读记录”; 保留上一次成功的数据。
+    loadError.value = error instanceof Error ? error.message : String(error)
+    if (!loadErrorNotified) {
+      loadErrorNotified = true
+      toast(t('stats.loadFailed'), 'error', 7000)
+    }
   }
   today.value = localDay()
   loaded.value = true
@@ -117,6 +126,9 @@ const showHow = ref(false)
         <li>{{ t('stats.how4') }}</li>
       </ul>
     </div>
+
+    <!-- 读数失败: 保留上次成功数据并明确提示, 不伪装成空记录 -->
+    <p v-if="loadError" class="load-error" role="alert">{{ t('stats.loadFailed') }}</p>
 
     <!-- 加载中 -->
     <div v-if="!loaded" class="layout" aria-busy="true">
@@ -226,6 +238,15 @@ const showHow = ref(false)
   justify-content: space-between;
   gap: 12px;
   margin-bottom: 18px;
+}
+.load-error {
+  margin: 0 0 16px;
+  padding: 10px 14px;
+  border: 1px solid var(--text);
+  border-radius: var(--radius);
+  background: var(--surface-2);
+  color: var(--text);
+  font-size: 14px;
 }
 h1 {
   font-size: 22px;

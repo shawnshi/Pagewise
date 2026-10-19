@@ -35,6 +35,7 @@ import {
   DJ_MODEL,
   estimateTokens,
   IP_DAILY_CHARS,
+  PROMPT_VERSION,
   sanitizeRequest,
   validateRequest,
 } from '../../src/services/dianjing/prompt.ts'
@@ -55,7 +56,7 @@ const CORS = {
   'access-control-allow-origin': '*',
   'access-control-allow-headers': 'content-type, authorization, x-device-id',
   'access-control-allow-methods': 'GET, POST, OPTIONS',
-  'access-control-expose-headers': 'x-dj-model, x-dj-remaining',
+  'access-control-expose-headers': 'x-dj-model, x-dj-remaining, x-dj-prompt-version',
 }
 
 const json = (status, payload, extra = {}) =>
@@ -264,11 +265,13 @@ async function handleDianjing(request, env, ctx) {
   const done = (async () => {
     let output = ''
     try {
-      output = await sseToNdjson(upstream.body, s => { writer.write(encoder.encode(s)).catch(() => abort.abort()) })
+      await sseToNdjson(upstream.body, s => { writer.write(encoder.encode(s)).catch(() => abort.abort()) }, s => { output += s })
+      await writer.close()
     } catch (e) {
       console.warn('dianjing stream failed:', e?.message)
+      abort.abort()
+      try { await writer.abort(e) } catch { /* The downstream stream has already failed. */ }
     } finally {
-      try { await writer.close() } catch { /* 客户端已断开 */ }
       try {
         await bumpUsage(env.DB, day, 'cost', 'all', costUnits(inputTokens, estimateTokens(output)))
       } catch { /* D1 故障 */ }
@@ -279,6 +282,7 @@ async function handleDianjing(request, env, ctx) {
   headers.set('content-type', 'application/x-ndjson; charset=utf-8')
   headers.set('cache-control', 'no-store')
   headers.set('x-dj-model', model)
+  headers.set('x-dj-prompt-version', PROMPT_VERSION)
   headers.set('x-dj-remaining', String(remaining))
   return new Response(readable, { status: 200, headers })
 }
@@ -290,7 +294,7 @@ export default {
     }
     const url = new URL(request.url)
     if (request.method === 'GET' && url.pathname.endsWith('/models')) {
-      return json(200, { object: 'list', data: [{ id: CHAT_MODEL, object: 'model', owned_by: 'lightread' }] })
+      return json(200, { object: 'list', data: [{ id: CHAT_MODEL, object: 'model', owned_by: 'lightread' }], dianjingPromptVersion: PROMPT_VERSION }, { 'x-dj-prompt-version': PROMPT_VERSION })
     }
     if (request.method === 'POST' && url.pathname.endsWith('/dianjing')) {
       return handleDianjing(request, env, ctx)

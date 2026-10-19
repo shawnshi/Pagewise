@@ -7,7 +7,8 @@ import { isSupportedBookFormat, FORMAT_LABELS, isFoliateNative } from '../servic
 import { readerPath } from '../services/readerRoute'
 import { resolveReadingStatus, READING_STATUSES } from '../services/readingStatus'
 import { formatReadingTime } from '../composables/useReadingTimer'
-import { loadLibrarySession } from '../services/librarySession'
+import { restorableView } from '../services/navigationSession'
+import { useNativeBack } from '../composables/useNativeBack'
 import AppIcon from '../components/AppIcon.vue'
 import BookClassificationPanel from '../components/BookClassificationPanel.vue'
 import BookRelinkDialog from '../components/BookRelinkDialog.vue'
@@ -135,13 +136,17 @@ onMounted(async () => {
 })
 
 function goBack() {
-  const session = loadLibrarySession()
-  if (book.value) {
-    // 确保保留当前书籍作为最后浏览条目
-    session.lastViewedBookId = book.value.id
-  }
-  router.push('/library')
+  // 返回进入详情页之前的位置 (书库 / 在读 / 阅读记录), 而不是无条件回到书库。
+  const origin = restorableView(window.history.state?.back)
+  if (origin && origin !== route.path) router.back()
+  else router.push('/library')
 }
+
+// Android 返回键: 先关重关联对话框，再走页面返回。
+useNativeBack(() => {
+  if (showRelink.value) { showRelink.value = false; return true }
+  return false
+})
 
 function openReader() {
   if (!book.value || !readable.value) {

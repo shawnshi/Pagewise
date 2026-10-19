@@ -45,6 +45,7 @@ export function createFolderLibrary(deps: FolderLibraryDependencies) {
   let unsubscribe: (() => void) | undefined
   let timer: ReturnType<typeof setInterval> | undefined
   let lastForegroundScan = 0
+  let readingActive = false
 
   async function scan() {
     const token = epoch
@@ -131,9 +132,12 @@ export function createFolderLibrary(deps: FolderLibraryDependencies) {
           || file.size === null || file.modifiedAt === null
         let parsed: Awaited<ReturnType<typeof prepareBookImport>> | undefined
         if (mustParse) {
+          // Do not mark unseen sources missing when a foreground reader defers the pass.
+          if (readingActive) { pending = true; publish('idle'); return }
           try {
             const bytes = await deps.readMonitoredFile(folder.id, file.documentId)
             if (!current()) return
+            if (readingActive) { pending = true; publish('idle'); return }
             if (!bytes.byteLength || bytes.byteLength > MAX_FILE_BYTES) throw new Error('Unsupported source size')
             parsed = await deps.prepareBookImport(new File([new Uint8Array(bytes)], file.name), folder.label)
           } catch (error) {
@@ -183,15 +187,23 @@ export function createFolderLibrary(deps: FolderLibraryDependencies) {
 
   function rescan(): Promise<void> {
     pending = true
+    if (readingActive) return running ?? Promise.resolve()
     if (!running) {
       running = (async () => {
         try {
-          // One queued pass absorbs all requests received during the current pass.
-          while (pending) { pending = false; await scan() }
+          // Hints request one follow-up, not cancellation of already confirmed writes.
+          while (pending && !readingActive) { pending = false; await scan() }
         } finally { running = undefined }
       })()
     }
     return running
+  }
+
+  /** Integration owner sets this for reader routes; a deferred pass resumes on exit. */
+  function setReadingActive(active: boolean) {
+    if (readingActive === active) return
+    readingActive = active
+    if (!active && pending) void rescan()
   }
 
   async function chooseFolder() {
@@ -215,7 +227,7 @@ export function createFolderLibrary(deps: FolderLibraryDependencies) {
   function start() {
     subscribers++
     if (subscribers === 1) {
-      unsubscribe = deps.subscribeMonitoredFolderChanges(() => { epoch++; void rescan() })
+      unsubscribe = deps.subscribeMonitoredFolderChanges(() => { void rescan() })
       if (typeof document !== 'undefined') document.addEventListener('visibilitychange', foreground)
       if (typeof window !== 'undefined') window.addEventListener('focus', foreground)
       timer = setInterval(foreground, FOREGROUND_INTERVAL)
@@ -293,7 +305,7 @@ export function createFolderLibrary(deps: FolderLibraryDependencies) {
     }
   }
 
-  return { status: readonly(status), chooseFolder, rescan, start, relinkCandidates, relink }
+  return { status: readonly(status), chooseFolder, rescan, start, setReadingActive, relinkCandidates, relink }
 }
 
 let singleton: ReturnType<typeof createFolderLibrary> | undefined

@@ -78,10 +78,18 @@ export function prepareAndroidProject(base = root, { replace = renameSync, resto
   const kotlin = template.toString('utf8')
   if (!/^package io\.pagewise\.reader\s*\r?\n/.test(kotlin) || !/class MainActivity\s*:\s*TauriActivity\(\)/.test(kotlin) || /LightReadUpdater|UpdaterBridge|REQUEST_INSTALL_PACKAGES/.test(kotlin)) throw new Error('Invalid MainActivity template')
   const nativeFolderTemplates = readdirSync(join(base, 'src-tauri/android')).filter(name => name !== 'MainActivity.kt' && name.endsWith('.kt')).map(name => {
-    if (name !== 'MonitoredFolderPlugin.kt') throw new Error(`Unsupported Android template: ${name}`)
+    if (!['MonitoredFolderPlugin.kt', 'ExportPlugin.kt', 'SystemTtsPlugin.kt', 'NativeSpeechService.kt'].includes(name)) throw new Error(`Unsupported Android template: ${name}`)
     const data = regularFile(join(base, 'src-tauri/android', name))
     const source = data.toString('utf8')
-    if (!/^package io\.pagewise\.reader\s*\r?\n/.test(source) || !/class MonitoredFolderPlugin\b/.test(source) || !/@TauriPlugin\b/.test(source)) throw new Error('Invalid monitored-folder template')
+    if (name === 'MonitoredFolderPlugin.kt') {
+      if (!/^package io\.pagewise\.reader\s*\r?\n/.test(source) || !/@TauriPlugin\b/.test(source) || !/class MonitoredFolderPlugin\b/.test(source)) throw new Error('Invalid monitored-folder template')
+    } else if (name === 'ExportPlugin.kt') {
+      if (!/^package io\.pagewise\.reader\s*\r?\n/.test(source) || !/@TauriPlugin\b/.test(source) || !/class ExportPlugin\b/.test(source)) throw new Error('Invalid export template')
+    } else if (name === 'NativeSpeechService.kt') {
+      if (!/^package io\.pagewise\.reader\s*\r?\n/.test(source) || !/class SystemTtsService\b/.test(source)) throw new Error('Invalid speech service template')
+    } else if (!/^package io\.pagewise\.reader\s*\r?\n/.test(source) || !/@TauriPlugin\b/.test(source) || !/class SystemTtsPlugin\b/.test(source)) {
+      throw new Error('Invalid system TTS template')
+    }
     return { path: join(dirname(activity), name), data }
   })
   const currentStrings = regularFile(strings).toString('utf8')
@@ -97,8 +105,17 @@ export function prepareAndroidProject(base = root, { replace = renameSync, resto
     return opening + label + closing
   })
   if (names.size !== 2) throw new Error('Expected Android application-name resources were not found')
-  const nextManifest = currentManifest.replace(/<uses-permission\b(?=[^>]*\bandroid:name\s*=\s*["']android\.permission\.REQUEST_INSTALL_PACKAGES["'])[^>]*(?:\/>|>\s*<\/uses-permission>)/g, '')
+  let nextManifest = currentManifest.replace(/<uses-permission\b(?=[^>]*\bandroid:name\s*=\s*["']android\.permission\.REQUEST_INSTALL_PACKAGES["'])[^>]*(?:\/>|>\s*<\/uses-permission>)/g, '')
   if (nextManifest.includes('android.permission.REQUEST_INSTALL_PACKAGES')) throw new Error('Unsupported install-permission declaration')
+  // Never declare a native service if the corresponding source is absent.
+  if (nativeFolderTemplates.some(template => template.path.endsWith('SystemTtsPlugin.kt'))) {
+    for (const permission of ['android.permission.FOREGROUND_SERVICE', 'android.permission.FOREGROUND_SERVICE_MEDIA_PLAYBACK', 'android.permission.POST_NOTIFICATIONS', 'android.permission.WAKE_LOCK']) {
+      if (!nextManifest.includes(`android:name="${permission}"`)) nextManifest = nextManifest.replace(/<application\b/, `<uses-permission android:name="${permission}" />\n    <application`)
+    }
+    if (!nextManifest.includes('android:name=".SystemTtsService"')) {
+      nextManifest = nextManifest.replace(/<\/application>/, '    <service android:name=".SystemTtsService" android:foregroundServiceType="mediaPlayback" android:exported="false" />\n  </application>')
+    }
+  }
   validateXml(values, 'resources')
   validateXml(nextManifest, 'manifest')
   const icons = iconFiles(join(base, 'src-tauri/icons/android'), resources)

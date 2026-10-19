@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { computed, nextTick, onBeforeUnmount, onMounted, reactive, ref, shallowRef, watch } from 'vue'
+import { computed, inject, nextTick, onBeforeUnmount, onMounted, reactive, ref, shallowRef, watch } from 'vue'
 import { onBeforeRouteLeave, useRoute, useRouter } from 'vue-router'
 import { blocksReaderTurn, createReaderContext, createReaderSession, isReaderInteractive, readerBackTarget } from '../services/readerSession'
 import { getStorage, type AnnotationRec, type BookMeta } from '../storage'
@@ -7,12 +7,16 @@ import { useSettings, resolveEffectiveTypography, prepareTypographyCommit } from
 import { useLibrary } from '../stores/library'
 import { isSupportedBookFormat, isTextLike } from '../services/format'
 import { convertToEpub, TEXT_EPUB_LAYOUT } from '../services/textToEpub'
+import { layoutWitness, sameLayoutWitness } from '../services/performanceLayout'
+import { readerActivityKey } from '../services/readerActivity'
 import { getReaderCSS, resolveReaderColors, resolveReaderTheme, HIGHLIGHT_COLORS, annotationLineStyle, annotationLabelKey, annotationSwatchStyle, listenMarkStyle, type ListenMarkStyle } from '../services/readerTheme'
 import { resolvedTheme } from '../services/appearance'
 import { setPageBarsDark, setSystemBarsHidden, setKeepScreenOn } from '../services/systemBars'
 import { injectFontIntoDoc, injectBundledFontsIntoDoc, resolveFontFamily, measureTextScale } from '../services/fonts'
 import { isTauri } from '../storage/types'
 import { listVoicesSorted, warmUpSpeech, resetEdgeFailure } from '../services/tts'
+import { systemTts, isNativeSystemTts, systemVoiceHintKey, systemTtsErrorKey } from '../services/systemTts'
+import { speechSourceVersion, type NativeSpeechSnapshot } from '../services/nativeSpeechSession'
 import { ListenPlayer, type ListenFeed } from '../services/listenPlayer'
 import { SentenceCursor, loadListenBookmark, saveListenBookmark, agoBucket, type CursorPos, type ListenBookmark } from '../services/readAloud'
 import { readingArea, followTarget, jumpLine, isOnScreen, followHeld, scrollMotion, type Area } from '../services/readingFocus'
@@ -29,7 +33,7 @@ import { TTS_RATE_MAX, TTS_RATE_MIN, TTS_RATE_STOPS, rateText } from '../service
 import { toast } from '../services/toast'
 import { t } from '../i18n'
 import { searchBook, type SearchHit } from '../services/bookSearch'
-import { chatStream, aiConfigured, readerSystemPrompt, explainPrompt, providerById, type AiMessage } from '../services/ai'
+import { chatStream, aiConfigured, buildReaderMessages, readerRangeExcerpt, explainPrompt, providerById, READER_QUESTION_LIMIT, type ReaderAssistantContext, type ReaderAssistantMessage } from '../services/ai'
 import TocList, { type TocItem } from '../components/TocList.vue'
 import ReadingModePanel from '../components/ReadingModePanel.vue'
 import TypographyPanel, { type TypographySection } from '../components/TypographyPanel.vue'
@@ -97,6 +101,8 @@ const effectiveReader = computed(() => ({ ...settings.reader, ...effectiveTypogr
   theme: publicationBaseline.value ? 'light' as const : effectiveTypography.value.theme ?? settings.reader.theme }))
 const loading = ref(true)
 const error = ref('')
+const reportReaderFailure = inject(readerActivityKey, () => () => {})()
+watch(error, value => { if (value) reportReaderFailure() })
 const toc = ref<TocItem[]>([])
 /** 书本身无目录时由正文识别生成 (见 services/smartToc); 章节定位改按 CFI 判定 */
 const tocAuto = ref(false)
@@ -252,7 +258,28 @@ const isBookmarked = computed(() => bookmarks.value.some(b => b.cfi === currentC
 // 听书
 const ttsPanel = primaryToggle('tts')
 const ttsState = ref<'stopped' | 'playing' | 'paused'>('stopped')
+watch(() => systemTts.focusLoss, () => {
+  if (ttsState.value !== 'playing') return
+  pauseTTS()
+  toast(t('tts.focusPaused'), 'info')
+}, { flush: 'sync' })
 const ttsVoices = ref<{ name: string; lang: string }[]>([])
+const nativeVoiceOptions = computed(() => {
+  const zh = systemTts.voices.filter(v => /^zh/i.test(v.locale))
+  return zh
+    .slice()
+    .sort((a, b) => Number(!!a.network) - Number(!!b.network) || a.locale.localeCompare(b.locale) || a.name.localeCompare(b.name))
+    .map((v, i) => ({
+      name: v.name,
+      label: `${v.locale} · ${v.network ? t('tts.voiceOnline') : t('tts.voiceOffline')} ${i + 1}`,
+    }))
+})
+const ttsHint = computed(() => {
+  if (!edgeAvailable()) return t('tts.hintSystem')
+  if (settings.ttsEngine === 'edge') return t('tts.hintEdge')
+  if (settings.ttsEngine === 'local') return t('tts.hintLocal')
+  return t(isNativeSystemTts() ? systemVoiceHintKey(settings.ttsVoice) : 'tts.hintSystem')
+})
 let sectionLoadResolvers: Array<() => void> = []
 
 // 翻页 / 位置变化 / 朗读推进时 ping: 正文在 iframe 里, 其中的操作不会冒泡到 window
@@ -268,7 +295,7 @@ const searchOpts = reactive({ caseSensitive: false, wholeWord: false, regex: fal
 let searchSession = 0
 
 // ---- AI 阅读助手 ----
-const aiMessages = ref<Array<{ role: 'user' | 'assistant'; content: string }>>([])
+const aiMessages = ref<ReaderAssistantMessage[]>([])
 const aiInput = ref('')
 const aiInputOpen = ref(false)
 const aiScope = ref('')
@@ -286,38 +313,41 @@ function aiScrollToEnd() {
   })
 }
 
-async function sendAi(text?: string) {
+async function sendAi(text?: string, suppliedContext?: ReaderAssistantContext) {
   const content = (text ?? aiInput.value).trim()
   if (!content || aiStreaming.value) return
-  if (!text) aiInput.value = ''
   const session = ++aiSession
   const context = readerContext.capture()
   aiAbort = new AbortController()
   aiScope.value = chapterLabel.value || meta.value?.title || ''
   aiMessages.value.push({ role: 'user', content })
-  aiMessages.value.push({ role: 'assistant', content: '' })
+  aiMessages.value.push({ role: 'assistant', content: '', complete: false })
+  const user = aiMessages.value[aiMessages.value.length - 2]
   const reply = aiMessages.value[aiMessages.value.length - 1]
   aiStreaming.value = true
   aiScrollToEnd()
   try {
-    const history: AiMessage[] = [
-      { role: 'system', content: readerSystemPrompt(
-        { title: meta.value?.title, author: meta.value?.author },
-        chapterLabel.value,
-        settings.language,
-      ) },
-      // 只带最近 8 轮, 控制上下文长度
-      ...aiMessages.value.slice(0, -1).slice(-16).map(m => ({ role: m.role, content: m.content })),
-    ]
-    for await (const delta of chatStream(history, aiAbort.signal)) {
+    const shown = displayedContent()
+    const visible = view?.lastLocation?.range as Range | undefined
+    user.context = suppliedContext ?? readerRangeExcerpt(visible?.startContainer.ownerDocument === shown?.doc ? visible : undefined)
+    const messages = buildReaderMessages({
+      book: { title: meta.value?.title, author: meta.value?.author }, chapter: chapterLabel.value,
+      lang: settings.language, question: content, context: user.context, history: aiMessages.value.slice(0, -2),
+    })
+    for await (const delta of chatStream(messages, aiAbort.signal)) {
       if (session !== aiSession || !readerContext.current(context)) return
       reply.content += delta
       aiScrollToEnd()
     }
-    if (session === aiSession && readerContext.current(context) && !reply.content) reply.content = t('ai.emptyReply')
+    if (session === aiSession && readerContext.current(context)) {
+      reply.complete = !!reply.content.trim()
+      if (!reply.complete) reply.content = t('ai.emptyReply')
+      else if (text === undefined && aiInput.value.trim() === content) aiInput.value = ''
+    }
   } catch (e: any) {
     if (session === aiSession && readerContext.current(context)) {
-      reply.content = `${t('ai.requestFailed')}: ${e?.message ?? e}`
+      if (!reply.content) reply.content = `${t('ai.requestFailed')}: ${e?.message ?? e}`
+      reply.complete = false
     }
   } finally {
     if (session === aiSession) aiStreaming.value = false
@@ -327,11 +357,11 @@ async function sendAi(text?: string) {
 /** 划词 → AI 解读 */
 function aiExplainSelection() {
   if (!selection.value) return
-  const text = selection.value.text.slice(0, 1500)
+  const selected = selection.value.text
   selection.value = null
   panel.value = 'ai'
   showBars()
-  sendAi(explainPrompt(text, settings.language))
+  sendAi(explainPrompt(settings.language), { kind: 'selection', text: selected.slice(0, 1500), truncated: selected.length > 1500, chapter: '' })
 }
 
 /** 一键改用内置试用通道 (服务端中转, 免注册免密钥) */
@@ -343,7 +373,7 @@ function useTrialAi() {
 }
 
 async function openRegister() {
-  const url = 'https://cloud.siliconflow.cn/i/TxUlXG3u'
+  const url = 'https://cloud.siliconflow.cn/'
   if (isTauri()) {
     const { openUrl } = await import('@tauri-apps/plugin-opener')
     await openUrl(url)
@@ -361,6 +391,9 @@ function stopAi() {
   aiAbort = undefined
   aiStreaming.value = false
 }
+
+// 关闭任一入口都同步撤销请求，避免隐藏面板的旧回答续写、清空草稿或进入历史。
+watch(panel, (next, previous) => { if (previous === 'ai' && next !== 'ai') stopAi() }, { flush: 'sync' })
 
 // 自动阅读: 翻页模式每隔 N 秒翻一页; 滚动模式 (含竖屏单页滚动) 匀速平滑滚动, 约 N 秒滚过一屏。
 // autoReading 表示开着 (含暂停中), autoPaused 为用户暂停 (轻点正文 / 迷你条)
@@ -862,20 +895,28 @@ async function buildTocAnchors() {
 async function buildTocFractions(v: any) {
   const sizeTotal = secSizes.reduce((a, b) => a + b, 0)
   if (!sizeTotal || !tocAnchors.length) return
-  const docs = new Map<number, { doc: Document; length: number } | null>()
+  // 前缀和只算一次; 同一分节的多条目录共享一个 Document, 换分节时释放。
+  const prefix: number[] = [0]
+  for (const size of secSizes) prefix.push(prefix[prefix.length - 1] + size)
+  let loadedIndex = -1
+  let loaded: { doc: Document; length: number } | null = null
   const out: typeof tocFractions = []
   for (const a of tocAnchors) {
     if (v !== view) return
     if (!secSizes[a.index]) continue
     let ratio = 0
-    if (a.anchor) {
-      if (!docs.has(a.index)) {
+    if (a.index !== loadedIndex) {
+      loadedIndex = a.index
+      loaded = null
+      if (a.anchor) {
         try {
           const doc: Document = await v.book.sections[a.index].createDocument()
-          docs.set(a.index, { doc, length: doc.body?.textContent?.length ?? 0 })
-        } catch { docs.set(a.index, null) }
+          loaded = { doc, length: doc.body?.textContent?.length ?? 0 }
+        } catch { /* 分节不可解析: 本章所有目录项按分节开头算 */ }
       }
-      const entry = docs.get(a.index)
+    }
+    if (a.anchor) {
+      const entry = loaded
       if (entry?.length) {
         try {
           const target = a.anchor(entry.doc)
@@ -889,8 +930,7 @@ async function buildTocFractions(v: any) {
         } catch { /* 定位失败按分节开头算 */ }
       }
     }
-    const before = secSizes.slice(0, a.index).reduce((x, y) => x + y, 0)
-    out.push({ fraction: (before + ratio * secSizes[a.index]) / sizeTotal, label: a.label })
+    out.push({ fraction: (prefix[a.index] + ratio * secSizes[a.index]) / sizeTotal, label: a.label })
   }
   if (v === view) {
     tocFractions = out.sort((x, y) => x.fraction - y.fraction)
@@ -1453,6 +1493,10 @@ async function openTTSPanel() {
 // ---- 听书主流程: 句子游标定位 + 连续播放器出声 (见 services/readAloud, services/listenPlayer) ----
 // 句子键 "分节:段:句"; 播放器在某句开始出声时回调, 这里负责高亮、跟随翻页、记断点。
 const ttsBuffering = ref(false)
+const nativeListening = ref<NativeSpeechSnapshot | null>(null)
+const nativePreparing = computed(() => settings.ttsEngine === 'system' && isNativeSystemTts() && ttsBuffering.value)
+let nativeSpeechBlob: Blob | null = null
+let nativeSpeechVersion: Promise<string> | null = null
 /** 用户在朗读中翻页 / 跳转: 继续朗读但不再拉回视图, 提供「回到朗读位置 / 从这页听」 */
 const listenDetached = ref(false)
 const currentListenKey = ref('')
@@ -1476,16 +1520,25 @@ let lastSentenceStart: { key: string; at: number; pausedBefore: number } | null 
 const listenPlayer = new ListenPlayer({
   onSentenceStart: key => {
     // 定时到了句子边界 (听完本章 / 系统语音读完这句): 下一句一开口就停, 不读半句
-    if (sleepStopsBefore(key)) sleepPause()
+    if (!listenPlayer.nativeActive && sleepStopsBefore(key)) sleepPause()
     // 定时器在后台 / 熄屏时可能被节流: 每句开头也对一下表
-    else if (sleepAt.value && !sleepFading.value && Date.now() >= sleepAt.value - SLEEP_FADE_SECONDS * 1000) void sleepNow()
+    else if (!listenPlayer.nativeActive && sleepAt.value && !sleepFading.value && Date.now() >= sleepAt.value - SLEEP_FADE_SECONDS * 1000) void sleepNow()
     listenChain = listenChain.then(() => onListenSentence(key)).catch(() => {})
   },
-  onEnd: reason => {
+  onEnd: (reason, error) => {
     ttsBuffering.value = false
-    if (reason === 'error') toast(t('tts.error'), 'error')
+    if (reason === 'error') toast(t(systemTtsErrorKey(error)), 'error')
     if (reason === 'finished') toast(t('tts.bookFinished'), 'success')
-    if (reason !== 'stopped') finishListenSession()
+    finishListenSession() // Includes Stop from native notification/media controls.
+  },
+  onNativeState: snapshot => {
+    const previous = nativeListening.value
+    nativeListening.value = snapshot
+    if (snapshot.committed && snapshot.key) currentListenKey.value = snapshot.key
+    if (snapshot.state === 'paused' && ['timer', 'chapter'].includes(snapshot.reason)) { sleepMode.value = 0; sleepAt.value = 0 }
+    if (snapshot.state === 'paused' && snapshot.reason.startsWith('focus_') && previous?.reason !== snapshot.reason) toast(t('tts.focusPaused'), 'info')
+    if (snapshot.state === 'playing' || (snapshot.state === 'preparing' && ttsState.value !== 'paused')) ttsState.value = 'playing'
+    else if (snapshot.state === 'paused') ttsState.value = 'paused'
   },
   onBuffering: waiting => {
     ttsBuffering.value = waiting
@@ -1498,6 +1551,10 @@ const listenPlayer = new ListenPlayer({
       }
     }
   },
+}, async () => {
+  if (!nativeSpeechBlob) throw Object.assign(new Error('source_unavailable'), { code: 'source_unavailable' })
+  nativeSpeechVersion ??= speechSourceVersion(nativeSpeechBlob, `foliate-${TEXT_EPUB_LAYOUT}-sentences-v1`)
+  return { owner: bookId, sourceVersion: await nativeSpeechVersion }
 })
 
 /**
@@ -1533,8 +1590,8 @@ function cursorForDisplayed(): { cursor: SentenceCursor; index: number } | null 
 }
 
 /** 预读后续分节用离屏文档, 与显示文档同源同结构, 句子编号一致 */
-async function docForSection(index: number): Promise<Document | null> {
-  const shown = loadedContent(index)
+async function docForSection(index: number, strict = false): Promise<Document | null> {
+  const shown = strict ? null : loadedContent(index)
   if (shown) return shown.doc
   const cached = offscreenDocs.get(index)
   if (cached) return cached
@@ -1543,7 +1600,10 @@ async function docForSection(index: number): Promise<Document | null> {
     if (offscreenDocs.size >= 3) offscreenDocs.delete(offscreenDocs.keys().next().value!)
     offscreenDocs.set(index, doc)
     return doc
-  } catch { return null }
+  } catch (error) {
+    if (strict) throw Object.assign(new Error('extraction_failed'), { code: 'extraction_failed', cause: error })
+    return null
+  }
 }
 
 function rememberText(key: string, text: string) {
@@ -1552,18 +1612,23 @@ function rememberText(key: string, text: string) {
 }
 
 /** 从 (分节, 位置) 起依次产出句子; 本节读完自动续下一节, 书末返回 null */
-function makeFeed(startIndex: number, startPos: CursorPos | null): ListenFeed {
+function makeFeed(startIndex: number, startPos: CursorPos | null, strict = settings.ttsEngine === 'system' && isNativeSystemTts()): ListenFeed & { expectedUnits: number; drainCoverage(): number[] } {
   let index = startIndex
   let cur: SentenceCursor | null = null
   let fresh = false
   const total = view.book?.sections?.length ?? 0
+  let covered: number[] = []
   return {
+    expectedUnits: strict ? total : 0,
+    drainCoverage() { const result = covered; covered = []; return result },
+    nativeFull: () => makeFeed(0, null, true),
     async next() {
       for (let guard = 0; guard < 100000; guard++) {
         if (!cur) {
           if (index >= total) return null
-          if (!secSizes[index]) { index++; continue }
-          const doc = await docForSection(index)
+          const excluded = strict ? view.book.sections[index].linear === 'no' : !secSizes[index]
+          if (excluded) { if (strict) covered.push(index); index++; continue }
+          const doc = await docForSection(index, strict)
           if (!doc) { index++; continue }
           cur = new SentenceCursor(doc)
           if (startPos && index === startIndex) {
@@ -1571,8 +1636,9 @@ function makeFeed(startIndex: number, startPos: CursorPos | null): ListenFeed {
             fresh = !!cur.current() || cur.first()
           } else fresh = cur.first()
           startPos = null
-          if (!fresh) { cur = null; index++; continue }
+          if (!fresh) { if (strict) covered.push(index); cur = null; index++; continue }
         } else if (!fresh && !cur.next()) {
+          if (strict) covered.push(index)
           cur = null
           index++
           continue
@@ -1883,13 +1949,21 @@ async function startTTS(from: ListenFrom = 'auto') {
   resetEdgeFailure()
   let index: number
   let pos: CursorPos | null = null
-  if (from === 'bookmark' || (from === 'auto' && bookmarkOnPage.value && listenBookmark.value)) {
-    const hit = listenBookmark.value ? await resolveBookmark(listenBookmark.value) : null
-    if (hit) {
-      index = hit.index
-      pos = hit.pos
-      if (displayedContent()?.index !== index) await goToText(listenBookmark.value!.cfi).catch(() => {})
-    } else return startTTS('page')
+  const savedNative = settings.ttsEngine === 'system' && isNativeSystemTts() ? nativeListening.value : null
+  const nativeComplete = !!savedNative?.committed && savedNative.owner === bookId && savedNative.index >= savedNative.count
+  const useBookmark = from === 'bookmark' || (from === 'auto' && !nativeComplete && bookmarkOnPage.value && !!listenBookmark.value)
+  if (from === 'bookmark' && nativeComplete) { toast(t('tts.bookFinished'), 'success'); return }
+  if (useBookmark) {
+    if (savedNative?.committed && savedNative.owner === bookId && savedNative.key && savedNative.index < savedNative.count) {
+      const nativePos = parseKey(savedNative.key); index = nativePos.index; pos = nativePos.pos
+    } else {
+      const hit = listenBookmark.value ? await resolveBookmark(listenBookmark.value) : null
+      if (hit) {
+        index = hit.index
+        pos = hit.pos
+        if (displayedContent()?.index !== index) await goToText(listenBookmark.value!.cfi).catch(() => {})
+      } else return startTTS('page')
+    }
   } else {
     const visible: Range | undefined = typeof from === 'object' ? undefined : view.lastLocation?.range
     // 跨章连续滚动时屏上有多个分节文档: 以选区 / 可见范围所在的文档为准
@@ -1917,7 +1991,10 @@ async function startTTS(from: ListenFrom = 'auto') {
   restartOnResume = false
   reanchorSleep()
   ttsState.value = 'playing'
-  listenPlayer.play(makeFeed(index!, pos))
+  if (settings.ttsEngine === 'system' && isNativeSystemTts()) listenPlayer.setNativeSleep({ deadline: sleepAt.value, stopAtSection: sleepMode.value === 'chapter' }, false)
+  const feed = makeFeed(index!, pos)
+  feed.nativeResume = useBookmark
+  listenPlayer.play(feed)
   setupMediaSession()
 }
 
@@ -1964,6 +2041,7 @@ function finishListenSession() {
   restartOnResume = false
   ttsState.value = 'stopped'
   ttsBuffering.value = false
+  if (!nativeListening.value?.committed) nativeListening.value = null
   listenDetached.value = false
   currentListenKey.value = ''
   clearListenHighlight()
@@ -1977,6 +2055,10 @@ let skipTimer: ReturnType<typeof setTimeout> | undefined
 let skipTarget: { index: number; pos: CursorPos } | null = null
 
 async function skipListen(kind: 'sentence' | 'paragraph', dir: 1 | -1) {
+  if (settings.ttsEngine === 'system' && isNativeSystemTts()) {
+    if (!nativePreparing.value) listenPlayer.nativeSeek(dir, undefined, kind)
+    return
+  }
   const key = skipTarget ? `${skipTarget.index}:${skipTarget.pos.block}:${skipTarget.pos.sentence}` : currentListenKey.value
   if (ttsState.value === 'stopped' || !key) return
   let { index, pos } = parseKey(key)
@@ -2112,6 +2194,11 @@ function setSleep(mode: SleepMode) {
   sleepChapter = undefined
   sleepSection = undefined
   sleepAtSentenceEnd = false
+  if (settings.ttsEngine === 'system' && isNativeSystemTts()) {
+    sleepAt.value = typeof mode === 'number' && mode > 0 ? Date.now() + mode * 60000 : 0
+    listenPlayer.setNativeSleep({ deadline: sleepAt.value, stopAtSection: mode === 'chapter' })
+    return
+  }
   if (typeof mode === 'number' && mode > 0) {
     sleepAt.value = Date.now() + mode * 60000
     sleepTimer = setTimeout(() => void sleepNow(), mode * 60000 - SLEEP_FADE_SECONDS * 1000)
@@ -2130,7 +2217,7 @@ function reanchorSleep() {
 
 /** 点定时徽标: 取消定时 */
 function cancelSleep() {
-  if (!sleepMode.value) return
+  if (!sleepMode.value && !sleepAt.value) return
   setSleep(0)
   toast(t('tts.sleepCancelled'))
 }
@@ -2212,14 +2299,14 @@ watch([currentTocHref, chapterLabel], () => {
 
 /** 定时徽标: 「23:40 停止」/「听完本章停止」 */
 const sleepText = computed(() => {
-  if (sleepMode.value === 'chapter') return t('tts.sleepAfterChapter')
+  if (sleepMode.value === 'chapter') return t(settings.ttsEngine === 'system' && isNativeSystemTts() ? 'tts.sleepNativeSection' : 'tts.sleepAfterChapter')
   if (!sleepAt.value) return ''
   const d = new Date(sleepAt.value)
   return t('tts.sleepAtClock', { clock: `${String(d.getHours()).padStart(2, '0')}:${String(d.getMinutes()).padStart(2, '0')}` })
 })
 /** 胶囊上的短写: 「23:40」/「本章完」 */
 const sleepShort = computed(() => {
-  if (sleepMode.value === 'chapter') return t('tts.sleepChapterShort')
+  if (sleepMode.value === 'chapter') return t(settings.ttsEngine === 'system' && isNativeSystemTts() ? 'tts.sleepNativeSection' : 'tts.sleepChapterShort')
   if (!sleepAt.value) return ''
   const d = new Date(sleepAt.value)
   return `${String(d.getHours()).padStart(2, '0')}:${String(d.getMinutes()).padStart(2, '0')}`
@@ -2645,29 +2732,41 @@ function drawStoredAnnotations() {
   }
 }
 
+let highlightSaving = false
+
 async function addHighlight(color: string, withNote = false) {
-  if (!selection.value) return
-  const storage = await getStorage()
+  // 在第一个 await 前拍快照: 存储打开期间改选区不能改变待保存的划线。
+  const selected = selection.value
+  if (!selected || highlightSaving) return
+  highlightSaving = true
   const rec: Omit<AnnotationRec, 'id'> = {
     bookId,
     kind: 'highlight',
-    cfi: selection.value.cfi,
-    text: selection.value.text.slice(0, 300),
+    cfi: selected.cfi,
+    text: selected.text.slice(0, 300),
     color,
     createdAt: Date.now(),
   }
-  const id = await storage.addAnnotation(rec)
-  const saved = { ...rec, id }
-  annotations.value.push(saved)
   try {
-    view.addAnnotation({ value: rec.cfi, color })
-  } catch { /* 绘制失败不影响保存 */ }
-  selection.value = null
-  if (withNote) {
-    noteDraft.value = ''
-    activeAnnotation.value = saved
-  } else {
-    toast(t('reader.highlighted'), 'success')
+    const storage = await getStorage()
+    const id = await storage.addAnnotation(rec)
+    const saved = { ...rec, id }
+    annotations.value.push(saved)
+    try {
+      view.addAnnotation({ value: rec.cfi, color })
+    } catch { /* 绘制失败不影响保存 */ }
+    // 仅在选区仍是同一条时清理; 用户已选别的文字则保留新选区。
+    if (selection.value?.cfi === selected.cfi) selection.value = null
+    if (withNote) {
+      noteDraft.value = ''
+      activeAnnotation.value = saved
+    } else {
+      toast(t('reader.highlighted'), 'success')
+    }
+  } catch (error) {
+    toast(`${t('reader.highlightSaveFailed')} ${error instanceof Error ? error.message : ''}`.trim(), 'error')
+  } finally {
+    highlightSaving = false
   }
 }
 
@@ -2706,9 +2805,16 @@ function closeAnnotation(): boolean {
 function protectReaderUnload(event: BeforeUnloadEvent) {
   if (typographyApplying.value || !preserveReaderNote()) { event.preventDefault(); event.returnValue = '' }
 }
+// 移动 WebView 切后台后可能被回收, beforeunload 不保证执行: 隐藏时显式冲账进度与草稿。
+function onVisibilityCheckpoint() {
+  if (document.visibilityState !== 'hidden') return
+  void readerSession.flush().catch(() => { /* 仍有下次退出重试机会 */ })
+  noteDraftSaver?.flush()
+}
 window.addEventListener('beforeunload', protectReaderUnload)
 onBeforeUnmount(() => {
   window.removeEventListener('beforeunload', protectReaderUnload)
+  document.removeEventListener('visibilitychange', onVisibilityCheckpoint)
   noteDraftSaver?.flush()
   noteDraftSaver?.cancel()
 })
@@ -3062,10 +3168,10 @@ const dj = useDianjing({
       activeAnnotation.value = saved
     } else toast(t('reader.highlighted'), 'success')
   },
-  openAi: prompt => {
+  openAi: (prompt, context) => {
     closeOverlays()
     panel.value = 'ai'
-    void sendAi(prompt)
+    void sendAi(prompt, context)
   },
   beforeOverlay: closeOverlays,
   // 点睛阅读基础版 = 按词着色 (绘制在阅读模式里)
@@ -3145,11 +3251,13 @@ watch(() => modes.progressActive.value, on => {
   }
 })
 
+const textConversion = new AbortController()
 onMounted(async () => {
   const context = readerContext.capture()
   let bookOpened = false
   window.addEventListener('keydown', handleKeydown)
   document.addEventListener('fullscreenchange', syncFullscreenState)
+  document.addEventListener('visibilitychange', onVisibilityCheckpoint)
   showBars(true)
   try {
     const storage = await getStorage()
@@ -3174,9 +3282,10 @@ onMounted(async () => {
 
     const blob = await storage.getBookFile(bookId)
     if (!readerContext.current(context)) return
+    nativeSpeechBlob = blob
     let file: File
     if (isTextLike(meta.value.format)) {
-      const { epub } = await convertToEpub(blob, meta.value.fileName, meta.value.format as 'txt' | 'md')
+      const { epub } = await convertToEpub(blob, meta.value.fileName, meta.value.format as 'txt' | 'md', textConversion.signal)
       file = new File([epub], `${meta.value.title}.epub`, { type: 'application/epub+zip' })
     } else {
       file = new File([blob], meta.value.fileName)
@@ -3271,24 +3380,54 @@ onMounted(async () => {
     applyPrefs(true) // A chapter may reveal vertical layout only after its stylesheet loads.
     const initialAnchor = savedTypographyAnchor || getTypographyAnchor(view.lastLocation?.cfi || '')
     await typographyLayoutReady(openedView, false)
-    if (initialAnchor && !bookTypographyContext.value.protectedLayout) await navigateReader(initialAnchor)
-    await typographyLayoutReady(openedView, false)
+    const revision = () => JSON.stringify([effectiveTypography.value, layoutGeometry(), typographyTextScale.value, typographyLineMeasure])
+    const settled = layoutWitness(openedView, revision())
+    let mutated = false
+    const observers = (openedView.renderer.getContents?.() ?? []).map(({ doc }: { doc: Document }) => {
+      const observer = new MutationObserver(() => { mutated = true })
+      observer.observe(doc, { attributes: true, childList: true, characterData: true, subtree: true })
+      return observer
+    })
+    try {
+      if (initialAnchor && !bookTypographyContext.value.protectedLayout) await navigateReader(initialAnchor)
+    } finally {
+      for (const observer of observers) { mutated ||= observer.takeRecords().length > 0; observer.disconnect() }
+    }
+    if (mutated || !sameLayoutWitness(settled, layoutWitness(openedView, revision()))) await typographyLayoutReady(openedView, false)
     if (!readerContext.current(context)) return
     loading.value = false
     if (view.lastLocation?.cfi) onRelocate(new CustomEvent('relocate', { detail: view.lastLocation }))
     if (flattenToc(toc.value).length <= 1) void applySmartToc()
+    // Reconcile the listening panel without navigating or overwriting reading progress.
+    listenDetached.value = true
+    try {
+      const native = await listenPlayer.attachNative()
+      if (native && readerContext.current(context)) {
+        settings.ttsEngine = 'system'; settings.ttsVoice = native.voice; settings.ttsRate = native.rate
+        currentListenKey.value = native.key
+        sleepMode.value = native.stopAtSection ? 'chapter' : 0
+        sleepAt.value = native.deadline > Date.now() ? native.deadline : 0
+        listenPlayer.setNativeSleep({ deadline: sleepAt.value, stopAtSection: native.stopAtSection }, false)
+        ttsPanel.value = true
+      } else listenDetached.value = false
+    } catch (nativeError) { toast(t(systemTtsErrorKey(nativeError)), 'error') }
   } catch (e: any) {
     if (!bookOpened) typographyBookOwner.release()
-    if (readerContext.current(context)) { console.error(e); error.value = e?.message ?? t('reader.cantOpenBook') }
+    if (readerContext.current(context)) {
+      console.error(e)
+      error.value = e?.message === 'busy' ? t('reader.folderBusy') : (e?.message ?? t('reader.cantOpenBook'))
+    }
   } finally {
     if (readerContext.current(context)) loading.value = false
   }
 })
 
 onBeforeUnmount(() => {
+  textConversion.abort()
   setPageBarsDark(null)
   window.removeEventListener('keydown', handleKeydown)
   document.removeEventListener('fullscreenchange', syncFullscreenState)
+  document.removeEventListener('visibilitychange', onVisibilityCheckpoint)
   // 回藏书页时恢复窗口状态
   if (isFullscreen.value) toggleFullscreen()
   searchSession++
@@ -3309,7 +3448,8 @@ onBeforeUnmount(() => {
     try { localStorage.setItem(PAGE_MEASURE_KEY, JSON.stringify(pageMeasure)) } catch { /* 忽略 */ }
   }
   stopAutoRead()
-  stopTTS()
+  if (listenPlayer.nativeActive) { listenPlayer.detach(); ttsState.value = 'stopped' }
+  else stopTTS()
   modes.dispose()
   dj.dispose()
   try { view?.close?.() }
@@ -3763,7 +3903,12 @@ onBeforeRouteLeave(async () => {
         <button class="btn btn-sm" @click="returnToListening"><svg viewBox="0 0 24 24" width="14" height="14" aria-hidden="true"><path fill="currentColor" d="M12 2a1 1 0 0 1 1 1v1.06A8 8 0 0 1 19.94 11H21a1 1 0 1 1 0 2h-1.06A8 8 0 0 1 13 19.94V21a1 1 0 1 1-2 0v-1.06A8 8 0 0 1 4.06 13H3a1 1 0 1 1 0-2h1.06A8 8 0 0 1 11 4.06V3a1 1 0 0 1 1-1zm0 4a6 6 0 1 0 0 12 6 6 0 0 0 0-12zm0 3a3 3 0 1 1 0 6 3 3 0 0 1 0-6z"/></svg>{{ t('tts.backToListening') }}</button>
         <button class="btn btn-sm btn-primary" @click="listenFromHere">{{ t('tts.listenFromHere') }}</button>
       </div>
-      <!-- 断点续读 -->
+      <!-- 当前原生会话使用原生断点，不用过期的前台 CFI 覆盖它。 -->
+      <div v-else-if="ttsState === 'stopped' && nativeListening?.committed && nativeListening.owner === bookId" class="tts-notice">
+        <span class="tts-notice-text"><strong>{{ t(nativeListening.index >= nativeListening.count ? 'tts.bookFinished' : 'tts.nativeBookmark') }}</strong><span class="tts-snippet">{{ nativeListening.text.slice(0, 28) }}</span></span>
+        <button v-if="nativeListening.index < nativeListening.count" class="btn btn-sm btn-primary" @click="startTTS('bookmark')">{{ t('tts.resumeListening') }}</button>
+      </div>
+      <!-- 旧引擎的前台断点 -->
       <div v-else-if="ttsState === 'stopped' && listenBookmark && !bookmarkOnPage" class="tts-notice">
         <span class="tts-notice-text">
           <strong>{{ t('tts.lastListened') }}</strong> {{ listenBookmark.chapter }} · {{ bookmarkAgo }}
@@ -3774,8 +3919,8 @@ onBeforeRouteLeave(async () => {
 
       <!-- 走带: 上一段 / 上一句 / 播放 / 下一句 / 下一段 -->
       <div class="tts-transport">
-        <button class="tts-skip" :disabled="ttsState === 'stopped'" :title="t('tts.prevParagraph')" @click="skipListen('paragraph', -1)"><svg viewBox="0 0 24 24" width="20" height="20" aria-hidden="true"><path fill="currentColor" d="M6 5a1 1 0 0 1 1 1v12a1 1 0 1 1-2 0V6a1 1 0 0 1 1-1zm12.4.62v12.76a.8.8 0 0 1-1.22.68l-8.3-5.13a1.08 1.08 0 0 1 0-1.86l8.3-5.13a.8.8 0 0 1 1.22.68z"/></svg><span>{{ t('tts.prevParagraph') }}</span></button>
-        <button class="tts-skip" :disabled="ttsState === 'stopped'" :title="t('tts.prevSentence')" @click="skipListen('sentence', -1)"><svg viewBox="0 0 24 24" width="20" height="20" aria-hidden="true"><path fill="currentColor" d="M11 6.6v10.8a.8.8 0 0 1-1.28.64l-6.9-5.4a.8.8 0 0 1 0-1.28l6.9-5.4A.8.8 0 0 1 11 6.6zm9.5 0v10.8a.8.8 0 0 1-1.28.64l-6.9-5.4a.8.8 0 0 1 0-1.28l6.9-5.4a.8.8 0 0 1 1.28.64z"/></svg><span>{{ t('tts.prevSentence') }}</span></button>
+        <button class="tts-skip" :disabled="ttsState === 'stopped' || nativePreparing" :title="t('tts.prevParagraph')" @click="skipListen('paragraph', -1)"><svg viewBox="0 0 24 24" width="20" height="20" aria-hidden="true"><path fill="currentColor" d="M6 5a1 1 0 0 1 1 1v12a1 1 0 1 1-2 0V6a1 1 0 0 1 1-1zm12.4.62v12.76a.8.8 0 0 1-1.22.68l-8.3-5.13a1.08 1.08 0 0 1 0-1.86l8.3-5.13a.8.8 0 0 1 1.22.68z"/></svg><span>{{ t('tts.prevParagraph') }}</span></button>
+        <button class="tts-skip" :disabled="ttsState === 'stopped' || nativePreparing" :title="t('tts.prevSentence')" @click="skipListen('sentence', -1)"><svg viewBox="0 0 24 24" width="20" height="20" aria-hidden="true"><path fill="currentColor" d="M11 6.6v10.8a.8.8 0 0 1-1.28.64l-6.9-5.4a.8.8 0 0 1 0-1.28l6.9-5.4A.8.8 0 0 1 11 6.6zm9.5 0v10.8a.8.8 0 0 1-1.28.64l-6.9-5.4a.8.8 0 0 1 0-1.28l6.9-5.4a.8.8 0 0 1 1.28.64z"/></svg><span>{{ t('tts.prevSentence') }}</span></button>
         <button
           class="tts-play"
           :title="ttsState === 'playing' ? t('common.pause') : ttsState === 'paused' ? t('common.resume') : t('tts.startReading')"
@@ -3785,8 +3930,8 @@ onBeforeRouteLeave(async () => {
           <template v-if="ttsState === 'playing'"><svg viewBox="0 0 24 24" width="26" height="26" aria-hidden="true"><path fill="currentColor" d="M8 5a1.5 1.5 0 0 1 1.5 1.5v11a1.5 1.5 0 0 1-3 0v-11A1.5 1.5 0 0 1 8 5zm8 0a1.5 1.5 0 0 1 1.5 1.5v11a1.5 1.5 0 0 1-3 0v-11A1.5 1.5 0 0 1 16 5z"/></svg></template>
           <template v-else><svg viewBox="0 0 24 24" width="26" height="26" aria-hidden="true"><path fill="currentColor" d="M8.5 5.2a1 1 0 0 1 1.02.03l9 5.95a1 1 0 0 1 0 1.66l-9 5.95A1 1 0 0 1 8 17.95V6.05a1 1 0 0 1 .5-.85z"/></svg></template>
         </button>
-        <button class="tts-skip" :disabled="ttsState === 'stopped'" :title="t('tts.nextSentence')" @click="skipListen('sentence', 1)"><svg viewBox="0 0 24 24" width="20" height="20" aria-hidden="true"><path fill="currentColor" d="M13 6.6v10.8a.8.8 0 0 0 1.28.64l6.9-5.4a.8.8 0 0 0 0-1.28l-6.9-5.4A.8.8 0 0 0 13 6.6zm-9.5 0v10.8a.8.8 0 0 0 1.28.64l6.9-5.4a.8.8 0 0 0 0-1.28l-6.9-5.4A.8.8 0 0 0 3.5 6.6z"/></svg><span>{{ t('tts.nextSentence') }}</span></button>
-        <button class="tts-skip" :disabled="ttsState === 'stopped'" :title="t('tts.nextParagraph')" @click="skipListen('paragraph', 1)"><svg viewBox="0 0 24 24" width="20" height="20" aria-hidden="true"><path fill="currentColor" d="M18 5a1 1 0 0 1 1 1v12a1 1 0 1 1-2 0V6a1 1 0 0 1 1-1zM5.6 5.62v12.76a.8.8 0 0 0 1.22.68l8.3-5.13a1.08 1.08 0 0 0 0-1.86l-8.3-5.13a.8.8 0 0 0-1.22.68z"/></svg><span>{{ t('tts.nextParagraph') }}</span></button>
+        <button class="tts-skip" :disabled="ttsState === 'stopped' || nativePreparing" :title="t('tts.nextSentence')" @click="skipListen('sentence', 1)"><svg viewBox="0 0 24 24" width="20" height="20" aria-hidden="true"><path fill="currentColor" d="M13 6.6v10.8a.8.8 0 0 0 1.28.64l6.9-5.4a.8.8 0 0 0 0-1.28l-6.9-5.4A.8.8 0 0 0 13 6.6zm-9.5 0v10.8a.8.8 0 0 0 1.28.64l6.9-5.4a.8.8 0 0 0 0-1.28l-6.9-5.4A.8.8 0 0 0 3.5 6.6z"/></svg><span>{{ t('tts.nextSentence') }}</span></button>
+        <button class="tts-skip" :disabled="ttsState === 'stopped' || nativePreparing" :title="t('tts.nextParagraph')" @click="skipListen('paragraph', 1)"><svg viewBox="0 0 24 24" width="20" height="20" aria-hidden="true"><path fill="currentColor" d="M18 5a1 1 0 0 1 1 1v12a1 1 0 1 1-2 0V6a1 1 0 0 1 1-1zM5.6 5.62v12.76a.8.8 0 0 0 1.22.68l8.3-5.13a1.08 1.08 0 0 0 0-1.86l-8.3-5.13a.8.8 0 0 0-1.22.68z"/></svg><span>{{ t('tts.nextParagraph') }}</span></button>
       </div>
       <p v-if="ttsState === 'stopped'" class="tts-start-hint">
         {{ bookmarkOnPage ? t('tts.startFromBookmark') : t('tts.startFromPage') }} · {{ t('tts.selectHint') }}
@@ -3800,7 +3945,7 @@ onBeforeRouteLeave(async () => {
       <div class="tts-row tts-row-stacked">
         <label>{{ t('tts.sleep') }}</label>
         <div class="seg">
-          <button v-for="c in SLEEP_CHOICES" :key="c.mode" :class="{ active: sleepMode === c.mode }" @click="setSleep(c.mode)">{{ t(c.key) }}</button>
+          <button v-for="c in SLEEP_CHOICES" :key="c.mode" :class="{ active: sleepMode === c.mode && (c.mode !== 0 || !sleepAt) }" @click="setSleep(c.mode)">{{ t(c.mode === 'chapter' && settings.ttsEngine === 'system' && isNativeSystemTts() ? 'tts.sleepNativeSection' : c.key) }}</button>
         </div>
       </div>
       <div v-if="edgeAvailable()" class="tts-row">
@@ -3808,7 +3953,7 @@ onBeforeRouteLeave(async () => {
         <div class="seg" style="flex: 1">
           <button :class="{ active: settings.ttsEngine === 'edge' }" @click="settings.ttsEngine = 'edge'; resetEdgeFailure()">{{ t('tts.engineEdge') }}</button>
           <button v-if="localTtsAvailable()" :class="{ active: settings.ttsEngine === 'local' }" :title="t('tts.engineLocalTitle')" @click="settings.ttsEngine = 'local'; resetEdgeFailure(); refreshLocalStatus()">{{ t('tts.engineLocal') }}</button>
-          <button :class="{ active: settings.ttsEngine === 'system' }" @click="settings.ttsEngine = 'system'">{{ t('tts.engineSystem') }}</button>
+          <button v-if="systemTts.available" :class="{ active: settings.ttsEngine === 'system' }" @click="settings.ttsEngine = 'system'">{{ t('tts.engineSystem') }}</button>
         </div>
       </div>
       <div v-if="edgeAvailable() && settings.ttsEngine === 'edge'" class="tts-row">
@@ -3829,14 +3974,17 @@ onBeforeRouteLeave(async () => {
       </div>
       <div v-else class="tts-row">
         <label>{{ t('tts.voice') }}</label>
-        <select v-model="settings.ttsVoice" class="input" :aria-label="t('tts.voice')">
+        <p v-if="nativeListening && settings.ttsEngine === 'system'" class="tts-hint">{{ t(nativeListening.committed && nativeListening.index >= nativeListening.count ? 'tts.bookFinished' : nativeListening.committed ? 'tts.nativePrepared' : 'tts.nativePreparing', { count: nativeListening.count }) }}</p>
+        <select v-if="isNativeSystemTts()" v-model="settings.ttsVoice" class="input" :aria-label="t('tts.voice')">
+          <option value="">{{ t('tts.autoVoice') }}</option>
+          <option v-for="v in nativeVoiceOptions" :key="v.name" :value="v.name">{{ v.label }}</option>
+        </select>
+        <select v-else v-model="settings.ttsVoice" class="input" :aria-label="t('tts.voice')">
           <option value="">{{ t('tts.autoVoice') }}</option>
           <option v-for="v in ttsVoices" :key="v.name" :value="v.name">{{ v.name }} ({{ v.lang }})</option>
         </select>
       </div>
-      <p class="tts-hint">
-        {{ !edgeAvailable() ? t('tts.hintSystem') : settings.ttsEngine === 'edge' ? t('tts.hintEdge') : settings.ttsEngine === 'local' ? t('tts.hintLocal') : t('tts.hintSystem') }}
-      </p>
+      <p class="tts-hint">{{ ttsHint }}</p>
     </div>
 
     <!-- 侧栏面板 -->
@@ -3904,9 +4052,10 @@ onBeforeRouteLeave(async () => {
             <p v-if="!aiMessages.length" class="panel-empty">{{ t('ai.intro') }}</p>
             <div v-for="(m, i) in aiMessages" :key="i" class="ai-msg" :class="m.role">
               <div class="ai-bubble">{{ m.content }}<span v-if="m.role === 'assistant' && aiStreaming && i === aiMessages.length - 1" class="ai-cursor">▍</span></div>
+              <p v-if="m.role === 'assistant' && m.complete === false && (!aiStreaming || i !== aiMessages.length - 1)" class="analysis-scope">{{ t('ai.incompleteReply') }}</p>
             </div>
           </div>
-          <p class="analysis-scope">{{ t('reader.analysisScope') }} · {{ aiScope || chapterLabel || meta?.title }}<br />{{ t(aiMessages.length ? 'reader.analysisInSession' : 'reader.analysisEmpty') }}</p>
+          <p class="analysis-scope">{{ t('reader.analysisScope') }} · {{ aiScope || chapterLabel || meta?.title }}<br />{{ t(aiMessages.length ? 'reader.analysisInSession' : 'reader.analysisEmpty') }}<br />{{ t('ai.contextHint') }}</p>
           <button class="btn btn-sm" :aria-expanded="aiInputOpen" @click="aiInputOpen = !aiInputOpen">{{ t('reader.analysisFollowUp') }}</button>
           <div v-if="aiInputOpen" class="ai-input-row">
             <input
@@ -3914,6 +4063,7 @@ onBeforeRouteLeave(async () => {
               class="input"
               :placeholder="t('ai.placeholder')"
               :aria-label="t('ai.placeholder')"
+              :maxlength="READER_QUESTION_LIMIT"
               :disabled="aiStreaming"
               @keyup.enter="sendAi()"
             />
@@ -4907,6 +5057,11 @@ onBeforeRouteLeave(async () => {
   flex-shrink: 0;
   text-align: right;
   font-variant-numeric: tabular-nums;
+}
+.tts-voice-auto {
+  flex: 1;
+  font-size: 12px;
+  color: var(--text-3);
 }
 /* 语速: 档位名在滑条下方, 标签和数值对齐滑条那一行 */
 .tts-rate-row {

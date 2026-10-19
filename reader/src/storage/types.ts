@@ -157,6 +157,11 @@ export interface LibraryStorage {
   /** Registers a read-only source document without copying its contents. */
   addReferencedBook(meta: NewBookMeta & { sourceRef: BookSourceRef }, cover?: Blob): Promise<string>
   updateBook(id: string, patch: Partial<Omit<BookMeta, 'id'>>): Promise<void>
+  /**
+   * 原子累加累计阅读秒数并返回新值。可选: 不支持的实现回退到读-改-写。
+   * 两个并发计时冲账不能互相覆盖。
+   */
+  incrementReadingSeconds?(id: string, seconds: number): Promise<number>
   updateBookClassifications(updates: readonly BookClassificationUpdate[], legacyUpdates?: readonly LegacyBookTagsUpdate[]): Promise<void>
   deleteBook(id: string): Promise<void>
   getBookFile(id: string): Promise<Blob>

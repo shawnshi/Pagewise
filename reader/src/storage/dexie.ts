@@ -119,6 +119,18 @@ export class DexieStorage implements LibraryStorage {
     return id
   }
 
+  async incrementReadingSeconds(id: string, seconds: number) {
+    const delta = Math.round(Number(seconds))
+    if (!Number.isFinite(delta) || delta <= 0) throw new Error('Invalid reading seconds')
+    return this.db.transaction('rw', this.db.books, async () => {
+      const book = await this.db.books.get(id)
+      if (!book) throw new Error('Book not found')
+      const total = Math.max(0, Math.round((book.readingSeconds ?? 0) + delta))
+      await this.db.books.update(id, { readingSeconds: total })
+      return total
+    })
+  }
+
   async updateBook(id: string, patch: Partial<Omit<BookMeta, 'id'>>) {
     if (patch.readingStatus !== undefined && !isReadingStatus(patch.readingStatus)) throw new Error('Invalid readingStatus')
     if (patch.sourceRef !== undefined) validateSourceRef(patch.sourceRef)

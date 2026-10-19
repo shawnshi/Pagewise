@@ -1,18 +1,20 @@
 <script setup lang="ts">
 import { localPack, localTtsAvailable, refreshLocalPack } from './services/localTts'
 import { useRoute, useRouter } from 'vue-router'
-import { computed, onBeforeUnmount, onMounted, watch } from 'vue'
+import { computed, onBeforeUnmount, onMounted, provide, watch } from 'vue'
 import ToastHost from './components/ToastHost.vue'
 import AppIcon from './components/AppIcon.vue'
 import { useSettings } from './stores/settings'
 import { useLibrary } from './stores/library'
 import { useAppearance } from './services/appearance'
 import { useFolderLibrary } from './services/folderLibrary'
+import { createReaderActivity, readerActivityKey } from './services/readerActivity'
 import { t } from './i18n'
 import { isTauri } from './storage'
 import { startExternalOpen } from './services/externalOpen'
 import { disposeLibraryCovers } from './services/libraryCovers'
 import { toast } from './services/toast'
+import { initSystemTts } from './services/systemTts'
 
 const settings = useSettings()
 const library = useLibrary()
@@ -22,7 +24,11 @@ const route = useRoute()
 const router = useRouter()
 let stopExternalOpen: (() => void) | undefined
 let stopFolderLibrary: (() => void) | undefined
+let stopPerformanceProbe: (() => void) | undefined
 const folderLibrary = useFolderLibrary()
+const readerActivity = createReaderActivity(active => folderLibrary.setReadingActive(active))
+provide(readerActivityKey, () => readerActivity.captureFailure())
+const stopReaderActivity = watch(() => route.fullPath, key => readerActivity.commit(key, route.path), { immediate: true, flush: 'sync' })
 let disposed = false
 let refreshing = false
 let refreshedGeneration = folderLibrary.status.value.generation
@@ -43,7 +49,26 @@ watch(() => folderLibrary.status.value.generation, async () => {
   }
 })
 
+async function startPerformanceProbe() {
+  try {
+    const bridge = (window as Window & {
+      LightReadInsets?: {
+        performanceProbeEnabled?: () => boolean
+        recordPerformance: (action: number, engine: number, elapsedMs: number, completed: boolean) => boolean
+      }
+    }).LightReadInsets
+    if (bridge?.performanceProbeEnabled?.() !== true) return
+    const { installDevicePerformance } = await import('./services/devicePerformance')
+    if (!disposed) stopPerformanceProbe = installDevicePerformance(bridge, () =>
+      route.path.startsWith('/read-pdf/') ? 2 : route.path.startsWith('/read/') ? 1 : undefined)
+  } catch {
+    // Optional measurement must not break startup; absent ready records mean the probe is unavailable.
+  }
+}
+
 onMounted(async () => {
+  void startPerformanceProbe()
+  void initSystemTts()
   stopFolderLibrary = folderLibrary.start()
   if (isTauri()) stopExternalOpen = await startExternalOpen(router)
   void recoverFromLocalTtsCrash()
@@ -60,6 +85,9 @@ async function recoverFromLocalTtsCrash() {
 }
 onBeforeUnmount(() => {
   disposed = true
+  stopPerformanceProbe?.()
+  stopReaderActivity()
+  readerActivity.dispose()
   stopExternalOpen?.()
   disposeLibraryCovers()
   stopFolderLibrary?.()

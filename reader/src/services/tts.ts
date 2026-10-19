@@ -4,10 +4,13 @@
  * macOS 可在 系统设置 > 辅助功能 > 朗读内容 中下载更高质量音色.
  */
 
+import { systemSpeech, systemTts, isNativeSystemTts } from './systemTts.ts'
+
 let voicesReady: Promise<SpeechSynthesisVoice[]> | null = null
 
-/** 部分平台 getVoices 首次调用为空, 需等 voiceschanged */
+/** 部分平台 getVoices 首次调用为空, 需等 voiceschanged; Android WebView 没有该 API. */
 export function getVoices(): Promise<SpeechSynthesisVoice[]> {
+  if (typeof speechSynthesis === 'undefined') return Promise.resolve([])
   if (!voicesReady) {
     voicesReady = new Promise(resolve => {
       const load = () => speechSynthesis.getVoices()
@@ -24,7 +27,12 @@ export function getVoices(): Promise<SpeechSynthesisVoice[]> {
 }
 
 /** 中文置顶排序 (zh-CN > zh-TW/HK > 其他), 供音色下拉 */
-export async function listVoicesSorted(): Promise<SpeechSynthesisVoice[]> {
+export async function listVoicesSorted(): Promise<{ name: string; lang: string }[]> {
+  if (isNativeSystemTts()) {
+    return systemTts.voices
+      .map(v => ({ name: v.name, lang: v.locale }))
+      .sort((a, b) => a.lang.localeCompare(b.lang) || a.name.localeCompare(b.name))
+  }
   const voices = await getVoices()
   const weight = (v: SpeechSynthesisVoice) =>
     v.lang.startsWith('zh-CN') || v.lang.startsWith('zh_CN') ? 0
@@ -55,32 +63,35 @@ export interface SpeakOptions {
   rate: number
 }
 
-/** 朗读一段文本, 结束 / 出错 / 被取消时 resolve */
+/** 完成与取消分别结算；合成失败必须抛出，不能推进 PDF 页码。 */
 export function speak(text: string, opts: SpeakOptions): Promise<'end' | 'cancelled'> {
-  return new Promise(resolve => {
-    const utterance = new SpeechSynthesisUtterance(text)
+  return new Promise((resolve, reject) => {
+    const backend = systemSpeech()
+    const utterance = backend.utterance(text)
     if (opts.voice) {
       utterance.voice = opts.voice
       utterance.lang = opts.voice.lang
     }
     utterance.rate = opts.rate
     utterance.onend = () => resolve('end')
-    utterance.onerror = e =>
-      resolve(e.error === 'canceled' || e.error === 'interrupted' ? 'cancelled' : 'end')
-    speechSynthesis.speak(utterance)
+    utterance.onerror = e => {
+      if (e.error === 'canceled' || e.error === 'interrupted' || e.error === 'tts_stopped') resolve('cancelled')
+      else reject(Object.assign(new Error(e.error), { code: e.error }))
+    }
+    backend.speak(utterance)
   })
 }
 
 export function stopSpeaking() {
-  speechSynthesis.cancel()
+  systemSpeech().cancel()
 }
 
 export function pauseSpeaking() {
-  speechSynthesis.pause()
+  systemSpeech().pause()
 }
 
 export function resumeSpeaking() {
-  speechSynthesis.resume()
+  systemSpeech().resume()
 }
 
 /** foliate TTS 产出的 SSML → 纯文本 */

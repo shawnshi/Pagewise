@@ -2,9 +2,11 @@
 compile_error!("Pagewise supports Android only");
 
 mod edge_tts;
+mod export_file;
 mod fonts;
 #[cfg(target_os = "android")]
 mod monitored_folder;
+mod system_tts;
 
 use std::{collections::HashSet, path::Path, sync::Mutex};
 use tauri::{Emitter, Manager};
@@ -140,13 +142,29 @@ pub fn run() {
             monitored_folder::select_monitored_folder,
             monitored_folder::list_monitored_files,
             monitored_folder::read_monitored_file,
+            export_file::begin_export,
+            export_file::append_export,
+            export_file::write_export,
+            export_file::delete_export,
+            export_file::begin_import_file,
+            export_file::append_import_file,
+            export_file::publish_import_file,
+            export_file::delete_import_file,
             monitored_folder::watch_monitored_folder,
             edge_tts::edge_tts_synthesize,
+            system_tts::system_tts_available,
+            system_tts::system_tts_speak,
+            system_tts::system_tts_stop,
+            system_tts::system_tts_status,
+            system_tts::system_tts_session,
+            system_tts::system_tts_speak_batch,
             fonts::list_system_fonts
         ])
         .plugin(tauri_plugin_sql::Builder::new().build())
         .plugin(tauri_plugin_fs::init())
         .plugin(monitored_folder::init())
+        .plugin(export_file::init())
+        .plugin(system_tts::init())
         .plugin(tauri_plugin_http::init())
         .plugin(tauri_plugin_dialog::init())
         .plugin(tauri_plugin_opener::init())

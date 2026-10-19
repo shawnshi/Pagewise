@@ -24,7 +24,7 @@ export const AI_PROVIDERS: AiProviderPreset[] = [
   {
     id: 'siliconflow', label: '硅基流动 SiliconFlow', baseUrl: 'https://api.siliconflow.cn/v1',
     defaultModel: 'deepseek-ai/DeepSeek-V4-Flash', needsKey: true,
-    docsUrl: 'https://cloud.siliconflow.cn/i/TxUlXG3u',
+    docsUrl: 'https://cloud.siliconflow.cn/',
   },
   {
     id: 'gemini', label: 'Google Gemini',

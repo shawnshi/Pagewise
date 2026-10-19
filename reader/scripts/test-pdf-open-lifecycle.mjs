@@ -24,7 +24,7 @@ function fixture(options = {}) {
     readerAlive: true, pdfPositionReady: false, nativeBackPending: false,
     bookId: 'synthetic-pdf', backTarget: '/library', bookmarkMutation: null,
     window: { addEventListener() {}, removeEventListener() {}, getSelection: () => null },
-    document: { addEventListener() {}, removeEventListener() {} },
+    document: { addEventListener() {}, removeEventListener() {}, visibilityState: 'visible' },
     TextDecoder, Blob, Uint8Array, ArrayBuffer,
     console: { error: (...args) => metrics.errors.push(String(args[0])) },
     t: key => key, toast() {}, handleKeydown() {}, onFullscreenChange() {}, isTauri: () => false,
@@ -49,17 +49,21 @@ function fixture(options = {}) {
     stopTTS() {}, stopAutoRead() {}, exitPresentation: async () => {}, setFullscreen: async () => {},
     setTimeout: fn => { const id = ++timerId; timerQueue.set(id, fn); return id },
     clearTimeout: id => timerQueue.delete(id),
-    reflowSession: 0, selTrSession: 0, pdfSearchSession: 0,
+    reflowSession: 0, selTrSession: 0, pdfSearchSession: 0, ttsSession: 0,
     fullscreenWindowUnlisten: undefined, resizeObserver: undefined, listenedScroller: undefined,
     thumbnailObserver: null, thumbnailQueue: [], thumbnailQueued: new Set(), thumbnailRendered: new Set(), thumbnailLastUsed: new Map(),
-    panDrag: null, onDragMove() {}, onPanMove() {}, onScroll() {},
-    pdm: null, mupdfDocPromise: null, renderBytes: null, sourcePdfBlob: null,
+    panDrag: null, onDragMove() {}, onDragUp() {}, onPanMove() {}, onPanUp() {}, onScroll() {},
+    pdm: null, sourcePdfBlob: null, nativeSpeechBlob: null,
+    rasterClient: null, bitmapCache: { clear() {} }, prefetchQueue: [],
+    PdfRasterClient: class { close() {} },
+    nativeSpeech: { attached: false, detach() {} }, isNativeSystemTts: () => false, ttsState: ref('stopped'),
     saveTimer: undefined, settleTimer: undefined, resizeTimer: undefined, wheelPageReset: undefined, pdfSearchTimer: undefined,
+    progressWrite: Promise.resolve(), progressErrorShown: false, lastSavedProgress: '',
   })
   for (const name of ['activeAnnotation','selection','liveSel','pdfAiOpen','pdfSearchOpen','drawerOpen','moreMenu','propertiesOpen','zoomMenu','typographyOpen','shortcutsOpen','autoPanel','ttsPanel','autoReading','presentationMode','isFullscreen']) context[name] = ref(null)
   Object.assign(context, { meta: ref(null), annotations: ref([]), sourcePdfVersion: ref(''), pageCount: ref(0), pageDims: ref([]), baseDims: ref({}), currentPage: ref(1), loading: ref(true), error: ref(''), pdfLayout: ref('original'), bookPaged: ref(true), zoom: ref('fit-width'), curScale: ref(1) })
   context.nativeBackHost = context.window
-  for (const name of ['readerBack','handleNativeReaderBack','onPageSettled']) {
+  for (const name of ['readerBack','handleNativeReaderBack','onPageSettled','persistProgress','flushProgress','reportProgressError','onVisibilityCheckpoint']) {
     const node = ast.statements.find(n => ts.isFunctionDeclaration(n) && n.name?.text === name)
     assert.ok(node, `production ${name}`)
     context[name] = compile(node, context)
@@ -126,4 +130,22 @@ test('MLI-PDF-002: an adopted document is closed once when exiting during initia
   const work = f.start(); await f.renderStarted; f.unmount(); gate.resolve(); await work
   assert.equal(f.metrics.closed, 1); assert.equal(f.metrics.observers, 0); assert.equal(f.metrics.viewport, 0)
   assert.equal(f.context.pdfPositionReady, false); assert.deepEqual(f.metrics.saved, [])
+})
+
+test('MLI-PDF-001: leaving by any route persists the pending debounced page', async () => {
+  const f = fixture(); await f.start()
+  f.context.currentPage.value = 82
+  f.unmount()
+  await new Promise(resolve => setImmediate(resolve))
+  assert.deepEqual(f.metrics.saved, [{ location: '82', progress: .82 }])
+  assert.deepEqual(f.stored, { location: '82', progress: .82 })
+})
+
+test('MLI-PDF-001: going to the background checkpoints the page instead of waiting out the debounce', async () => {
+  const f = fixture(); await f.start()
+  f.context.currentPage.value = 83
+  f.context.document.visibilityState = 'hidden'
+  f.context.onVisibilityCheckpoint()
+  await new Promise(resolve => setImmediate(resolve))
+  assert.deepEqual(f.metrics.saved, [{ location: '83', progress: .83 }])
 })

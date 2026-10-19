@@ -24,6 +24,8 @@ import {
 import {
   ChunkPrefetcher, FeedError, MarkTicker, SentenceSource, sleep, waitForClock, type PrefetchedChunk,
 } from './audioQueue.ts'
+import { systemSpeech, type SystemSpeechBackend, type SystemUtterance } from './systemTts.ts'
+import { NativeSpeechSession, type NativeSpeechIdentity, type NativeSpeechFeed, type NativeSpeechSnapshot, type NativeSpeechSettings } from './nativeSpeechSession.ts'
 
 export interface ListenSentence {
   /** 调用方的不透明定位键 (如 "分节:段:句"), onSentenceStart 原样回传 */
@@ -38,6 +40,8 @@ export interface ListenSentence {
 export interface ListenFeed {
   /** 依次取下一句; null 表示读完 (书末)。可能是异步的 (跨章时要先解析下一节) */
   next(): Promise<ListenSentence | null>
+  nativeFull?(): NativeSpeechFeed
+  nativeResume?: boolean
 }
 
 export interface ListenCallbacks {
@@ -47,6 +51,7 @@ export interface ListenCallbacks {
   onEnd(reason: 'finished' | 'stopped' | 'error', error?: unknown): void
   /** 合成跟不上、正在缓冲 (true) / 恢复出声 (false) */
   onBuffering?(waiting: boolean): void
+  onNativeState?(state: NativeSpeechSnapshot): void
 }
 
 export type ListenState = 'idle' | 'playing' | 'paused' | 'buffering'
@@ -124,14 +129,67 @@ export class ListenPlayer {
 
   // ---- 系统语音 ----
   private systemActive = false
+  private native: NativeSpeechSession | null = null
+  private nativeAttachedOnly = false
+  private feed: ListenFeed | null = null
+  private nativeBookmarkRequested = false
+  private nativeKey = ''
+  private nativeSleep = { deadline: 0, stopAtSection: false }
 
   // ---- 定时关闭的淡出 ----
   /** 淡出开始时刻 (performance.now) 与时长; <audio> 回退按它逐步调音量 */
   private fade: { from: number; ms: number; timer: ReturnType<typeof setInterval> } | null = null
 
-  constructor(cb: ListenCallbacks) {
+  constructor(cb: ListenCallbacks, identity?: () => Promise<NativeSpeechIdentity>) {
     this.cb = cb
     this.ticker = new MarkTicker(key => this.cb.onSentenceStart(key))
+    if (identity) this.native = new NativeSpeechSession(identity, snapshot => {
+      this.cb.onNativeState?.(snapshot)
+      if (snapshot.state !== 'preparing') this.paused = snapshot.state === 'paused'
+      this.setWaiting(snapshot.state === 'preparing')
+      this.refresh()
+      if (snapshot.key && snapshot.key !== this.nativeKey && snapshot.state === 'playing' && (typeof document === 'undefined' || document.visibilityState !== 'hidden')) {
+        this.nativeKey = snapshot.key
+        this.cb.onSentenceStart(snapshot.key)
+      }
+      if (this.nativeAttachedOnly && ['finished', 'stopped', 'error'].includes(snapshot.state)) {
+        this.detach()
+        this.cb.onEnd(snapshot.state === 'error' ? 'error' : snapshot.state === 'finished' ? 'finished' : 'stopped', snapshot.code ? { code: snapshot.code } : undefined)
+      }
+    })
+  }
+
+  get nativeActive(): boolean { return !!this.native && (this.native.attached || this.native.isPreparing) }
+  async attachNative(): Promise<NativeSpeechSnapshot | null> {
+    if (!this.native || systemSpeech().kind !== 'native') return null
+    this.nativeAttachedOnly = false
+    const snapshot = await this.native.attach()
+    if (snapshot) {
+      this.nativeAttachedOnly = true
+      this.active = true; this.systemActive = true; this.paused = snapshot.state === 'paused'; this.refresh()
+    } else this.nativeAttachedOnly = false
+    return snapshot
+  }
+  detach(): void {
+    if (this.native?.isPreparing) void this.native.stop().catch(error => console.error('Native speech preparation cancellation failed', error))
+    else this.native?.detach()
+    this.nativeAttachedOnly = false; this.systemActive = false
+    this.halt(true)
+  }
+  setNativeSleep(settings: Partial<Pick<NativeSpeechSettings, 'deadline' | 'stopAtSection'>>, apply = true): void {
+    this.nativeSleep = { ...this.nativeSleep, ...settings }
+    if (apply && this.nativeActive) this.nativeControl(this.native!.configure(settings))
+  }
+  nativeSeek(delta: -1 | 1, key?: string, kind: 'sentence' | 'paragraph' = 'sentence'): boolean {
+    if (!this.native?.attached) return false
+    this.nativeControl(this.native.seek(delta, key, kind)); return true
+  }
+
+  private nativeControl(promise: Promise<void>): void {
+    const session = this.session
+    void promise.catch(error => {
+      if (session === this.session && this.active && error?.code !== 'cancelled') this.cb.onEnd('error', error)
+    })
   }
 
   get state(): ListenState {
@@ -142,11 +200,14 @@ export class ListenPlayer {
   play(feed: ListenFeed): void {
     this.halt()
     // 浏览器的系统语音暂停后, cancel 不会解除暂停 (Chrome): 新排的句子会一直静音, 先恢复
-    try { if (typeof speechSynthesis !== 'undefined' && speechSynthesis.paused) speechSynthesis.resume() } catch { /* 无系统语音 */ }
+    const backend = systemSpeech()
+    if (backend.kind === 'web') backend.resume()
     const session = this.session
+    this.nativeBookmarkRequested = backend.kind === 'native' && !neuralEngine() && !!feed.nativeResume
     this.active = true
+    this.feed = feed
     this.source = new SentenceSource(feed)
-    this.ensureContext()
+    if (backend.kind !== 'native' || neuralEngine()) this.ensureContext()
     // 神经引擎要先合成第一块: 从缓冲开始
     if (neuralEngine()) this.setWaiting(true)
     this.refresh()
@@ -154,21 +215,25 @@ export class ListenPlayer {
   }
 
   pause(): void {
-    if (!this.active || this.paused) return
+    if (!this.active || (this.paused && !this.nativeActive)) return
     this.paused = true
     this.ctx?.suspend().catch(() => {})
     this.element?.pause()
-    if (this.systemActive) speechSynthesis.pause()
+    if (this.nativeActive) this.nativeControl(this.native!.pause())
+    else if (this.systemActive) systemSpeech().pause()
     this.refresh()
   }
 
   resume(): void {
-    if (!this.active || !this.paused) return
+    if (!this.active || (!this.paused && !this.nativeActive)) return
     this.restoreVolume()
     this.paused = false
-    this.ctx?.resume().catch(() => {})
-    this.element?.play().catch(() => {})
-    if (this.systemActive) speechSynthesis.resume()
+    if (!this.nativeActive) {
+      this.ctx?.resume().catch(() => {})
+      this.element?.play().catch(() => {})
+    }
+    if (this.nativeActive) this.nativeControl(this.native!.resume())
+    else if (this.systemActive) systemSpeech().resume()
     this.ticker.tick()
     this.refresh()
   }
@@ -241,7 +306,12 @@ export class ListenPlayer {
 
   /** 音色 / 倍速 / 引擎变了: 正在播放的这一块读完后, 后续按新设置重新合成 */
   invalidate(): void {
-    if (this.active) this.invalidateHook?.()
+    if (this.nativeActive) {
+      const settings = useSettings()
+      // Switching away needs an explicit stop; never leave two engines playing.
+      if (settings.ttsEngine !== 'system') { this.stop(); return }
+      this.nativeControl(this.native!.configure({ rate: settings.ttsRate, voice: settings.ttsVoice }))
+    } else if (this.active) this.invalidateHook?.()
   }
 
   // ================= 会话 =================
@@ -284,14 +354,18 @@ export class ListenPlayer {
     this.elementDone?.()
     if (this.systemActive) {
       this.systemActive = false
-      speechSynthesis.cancel()
+      if (this.nativeActive) void this.native!.stop().catch(error => console.error('Native speech stop failed', error))
+      else systemSpeech().cancel()
     }
+    this.nativeAttachedOnly = false
+    this.nativeKey = ''
     if (release && this.ctx?.state === 'running') this.ctx.suspend().catch(() => {})
     this.refresh()
   }
 
   private ensureContext() {
     if (!this.ctx && !this.webAudioOff) {
+      // SAFETY: only optional AudioContext constructors are read; both are validated before use.
       const g = globalThis as unknown as { AudioContext?: typeof AudioContext; webkitAudioContext?: typeof AudioContext }
       const AC = g.AudioContext ?? g.webkitAudioContext
       if (AC) {
@@ -574,7 +648,108 @@ export class ListenPlayer {
 
   // ================= 系统语音 =================
 
+  /**
+   * 原生有界批次（最多 200 句）；不承诺整章或无限后台续读。
+   * 轮询 native status 更新句子高亮; 暂停时保留位置, 恢复后从当前句重读.
+   */
+  private async runNativeOwned(session: number): Promise<RunOutcome> {
+    const first = await this.source!.next(() => session !== this.session)
+    if (session !== this.session) return 'stopped'
+    if (!first) throw Object.assign(new Error('no_readable_text'), { code: 'no_readable_text' })
+    const full = this.feed?.nativeFull?.()
+    let initial: ListenSentence | null = first
+    const feed: NativeSpeechFeed = full ?? { next: async () => { if (initial) { const item = initial; initial = null; return item }; return (await this.source!.next(() => session !== this.session)) ?? null } }
+    feed.resumeFromCheckpoint = this.nativeBookmarkRequested
+    this.nativeBookmarkRequested = false
+    this.systemActive = true
+    this.ctx?.suspend().catch(() => {})
+    const settings = useSettings()
+    this.setWaiting(true)
+    const result = await this.native!.play(feed, { rate: settings.ttsRate, voice: settings.ttsVoice, ...this.nativeSleep }, first.key, this.paused)
+    if (session !== this.session) return 'stopped'
+    this.native!.detach(); this.systemActive = false; this.setWaiting(false)
+    return result
+  }
+
+  private async runNativeBatch(session: number, backend: SystemSpeechBackend): Promise<RunOutcome> {
+    const source = this.source!
+    const settings = useSettings()
+    const alive = () => session === this.session
+    let invalidated = false
+    const hook = () => {
+      invalidated = true
+      backend.cancel()
+    }
+    this.invalidateHook = hook
+    this.systemActive = true
+    let batch: ListenSentence[] = []
+    let offset = 0
+    let currentIndex = 0
+    try {
+      // 在线音频已排上的部分先播完，避免双引擎混音。
+      if (!(await waitForClock(this.clock, this.tail, () => alive() && !invalidated))) {
+        return alive() ? 'switch' : 'stopped'
+      }
+      for (;;) {
+        if (!alive() || invalidated) return invalidated && alive() ? 'switch' : 'stopped'
+        if (offset >= batch.length) {
+          batch = []
+          offset = 0
+          currentIndex = 0
+          let chars = 0
+          while (batch.length < 200 && chars < 190_000 && !invalidated) {
+            const sentence = await source.next(() => !alive() || invalidated)
+            if (!sentence) break
+            batch.push(sentence)
+            chars += sentence.text.length
+          }
+          if (!alive() || invalidated) return alive() ? 'switch' : 'stopped'
+          if (!batch.length) return 'finished'
+        }
+        const slice = batch.slice(offset)
+        try {
+          if (this.paused) backend.pause()
+          const done = await backend.speakBatch!(
+            slice.map(sentence => sentence.text),
+            settings.ttsRate,
+            settings.ttsVoice,
+            index => {
+              currentIndex = offset + index
+              const sentence = batch[currentIndex]
+              if (sentence && alive() && !invalidated) {
+                this.setWaiting(false)
+                this.cb.onSentenceStart(sentence.key)
+              }
+            },
+          )
+          offset += done
+        } catch (error) {
+          const code = (error as { code?: string } | null)?.code
+          const resumeAt = (error as { index?: number } | null)?.index
+          if (typeof resumeAt === 'number') offset += resumeAt
+          if (!alive()) return 'stopped'
+          if (invalidated) return 'switch'
+          if (code === 'audio_focus_lost') {
+            this.pause()
+            continue
+          }
+          throw error
+        }
+      }
+    } finally {
+      if (invalidated && alive()) source.unshift(batch.slice(currentIndex))
+      if (this.invalidateHook === hook) this.invalidateHook = null
+      if (alive()) {
+        backend.cancel()
+        this.systemActive = false
+      }
+    }
+  }
+
   private async runSystem(session: number): Promise<RunOutcome> {
+    const backend = systemSpeech()
+    if (backend.kind === 'native' && this.native) return this.runNativeOwned(session)
+    if (backend.kind === 'native' && backend.speakBatch) return this.runNativeBatch(session, backend)
     const source = this.source!
     const settings = useSettings()
     const alive = () => session === this.session
@@ -594,14 +769,14 @@ export class ListenPlayer {
     }
     this.invalidateHook = hook
 
-    interface Pending { s: ListenSentence; u: SpeechSynthesisUtterance; started: boolean }
+    interface Pending { s: ListenSentence; u: SystemUtterance; started: boolean }
     const queue: Pending[] = []
     let errors = 0
     let voice: SpeechSynthesisVoice | undefined
     let voicePicked = false
     const cancelQueued = () => {
       dead = true
-      speechSynthesis.cancel()
+      backend.cancel()
       this.systemActive = false
       source.unshift(queue.map(q => q.s))
       queue.length = 0
@@ -611,7 +786,7 @@ export class ListenPlayer {
       if (i >= 0) queue.splice(i, 1)
     }
     const speakOne = (s: ListenSentence) => {
-      const u = new SpeechSynthesisUtterance(s.text)
+      const u = backend.utterance(s.text)
       if (voice) {
         u.voice = voice
         u.lang = voice.lang
@@ -636,14 +811,19 @@ export class ListenPlayer {
       }
       u.onerror = e => {
         if (!live()) return
-        if (e.error !== 'canceled' && e.error !== 'interrupted') errors++
+        if (e.error === 'audio_focus_lost') {
+          this.pause()
+          return
+        }
+        if (e.error === 'tts_unavailable' || e.error === 'no_voice' || e.error === 'no_offline_voice') errors = 3
+        else if (e.error !== 'canceled' && e.error !== 'interrupted') errors++
         remove(item)
         notify()
       }
       queue.push(item)
       this.systemActive = true
-      speechSynthesis.speak(u)
-      if (this.paused) speechSynthesis.pause()
+      backend.speak(u)
+      if (this.paused) backend.pause()
     }
 
     try {

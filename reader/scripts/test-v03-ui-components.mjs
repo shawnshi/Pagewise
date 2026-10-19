@@ -170,7 +170,8 @@ test('LibraryView.vue: removes retired actions and provides actionable file-heal
   // Folder control moved to Settings; the library exposes actionable availability errors.
   assert.match(content, /useFolderLibrary/, 'LibraryView integrates useFolderLibrary')
   assert.match(content, /class="library-notice" role="status"/, 'File-health errors have a status region')
-  assert.match(content, /folderLibrary\.value\.status\.value\.state/, 'LibraryView checks the reactive folder service state')
+  assert.match(content, /const folderStatus = computed\(\(\) => folderLibrary\.value\.status\.value\)/, 'LibraryView checks the reactive folder service state')
+  assert.match(content, /folderStatus\.value\.state/, 'Folder state drives the notice and scan status')
   assert.match(content, /@click="showUnavailable"/, 'Unavailable books can be inspected')
   assert.match(content, /to="\/settings\?section=folder"/, 'Folder authorization and rescan remain accessible in Settings')
 
@@ -196,6 +197,10 @@ test('SettingsView.vue: integrates AiProviderSelector, removes onAiProviderChang
   assert.match(content, /id="settings-folder"/, 'SettingsView has settings-folder section')
   assert.match(content, /useFolderLibrary/, 'SettingsView uses useFolderLibrary')
   assert.match(content, /settings\.monitoredFolderNotice/, 'SettingsView distinguishes source folder from database root')
+  assert.match(content, /settings\.privacyNote/, 'About explains local data and AI data flow')
+  assert.match(content, /github\.com\/shawnshi\/Pagewise/, 'About links the Pagewise source repository')
+  assert.match(content, /function openExternal/, 'About links open through the native opener')
+  assert.doesNotMatch(readSrc('services/aiProviders.ts'), /TxUlXG3u/, 'AI provider links carry no referral code')
 
   // Compile
   const script = compileScript(descriptor, { id: 'settings-view-test' })
@@ -247,4 +252,5 @@ test('ReaderView.vue: visible Chinese/English text labels on major reader action
   // Compile
   const script = compileScript(descriptor, { id: 'reader-view-test' })
   assert.ok(script, 'ReaderView script compiles')
+  assert.doesNotMatch(content, /TxUlXG3u/, 'ReaderView does not open a referral link')
 })

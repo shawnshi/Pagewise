@@ -33,8 +33,6 @@
  *  - View.expand() ignores documents that are already gone.
  * Vite resolves `foliate-js/view.js`'s `./paginator.js` to this file (vite.config.ts).
  */
-const wait = ms => new Promise(resolve => setTimeout(resolve, ms))
-
 const requestIdle = globalThis.requestIdleCallback
     ? (cb, opts) => globalThis.requestIdleCallback(cb, opts)
     : cb => setTimeout(() => cb({ didTimeout: true, timeRemaining: () => 0 }), 32)
@@ -311,6 +309,8 @@ class View {
     #iframe = document.createElement('iframe')
     #contentRange = document.createRange()
     #overlayer
+    #cancelLoad
+    #destroyed = false
     #vertical = false
     #rtl = false
     #column = true
@@ -350,35 +350,43 @@ class View {
     }
     async load(src, afterLoad, beforeRender) {
         if (typeof src !== 'string') throw new Error(`${src} is not string`)
-        return new Promise(resolve => {
-            this.#iframe.addEventListener('load', () => {
-                const doc = this.document
-                afterLoad?.(doc)
+        if (this.#destroyed) return
+        return new Promise((resolve, reject) => {
+            const cleanup = () => {
+                this.#iframe.removeEventListener('load', onLoad)
+                this.#cancelLoad = undefined
+            }
+            const onLoad = () => {
+                cleanup()
+                if (this.#destroyed) { resolve(); return }
+                try {
+                    const doc = this.document
+                    afterLoad?.(doc)
+                    if (this.#destroyed) { resolve(); return }
 
-                // it needs to be visible for Firefox to get computed style
-                this.#iframe.style.display = 'block'
-                const { vertical, rtl } = getDirection(doc)
-                this.docBackground = getBackground(doc)
-                doc.body.style.background = 'none'
-                const background = this.docBackground
-                this.#iframe.style.display = 'none'
+                    // Firefox needs visibility to compute writing direction.
+                    this.#iframe.style.display = 'block'
+                    const { vertical, rtl } = getDirection(doc)
+                    this.docBackground = getBackground(doc)
+                    doc.body.style.background = 'none'
+                    const background = this.docBackground
+                    this.#iframe.style.display = 'none'
+                    this.#vertical = vertical
+                    this.#rtl = rtl
+                    this.#contentRange.selectNodeContents(doc.body)
+                    const layout = beforeRender?.({ vertical, rtl, background })
+                    this.#iframe.style.display = 'block'
+                    this.render(layout)
+                    this.#observer.observe(doc.body)
 
-                this.#vertical = vertical
-                this.#rtl = rtl
-
-                this.#contentRange.selectNodeContents(doc.body)
-                const layout = beforeRender?.({ vertical, rtl, background })
-                this.#iframe.style.display = 'block'
-                this.render(layout)
-                this.#observer.observe(doc.body)
-
-                // the resize observer above doesn't work in Firefox
-                // (see https://bugzilla.mozilla.org/show_bug.cgi?id=1832939)
-                // until the bug is fixed we can at least account for font load
-                doc.fonts.ready.then(() => this.expand())
-
-                resolve()
-            }, { once: true })
+                    // Firefox's resize observer misses font layout (bug 1832939).
+                    doc.fonts.ready.then(() => this.expand())
+                    resolve()
+                } catch (error) { reject(error) }
+            }
+            // A removed iframe need not emit load; destroy must also settle its owner.
+            this.#cancelLoad = () => { cleanup(); resolve() }
+            this.#iframe.addEventListener('load', onLoad, { once: true })
             this.#iframe.src = src
         })
     }
@@ -462,7 +470,7 @@ class View {
     }
     expand() {
         // LightRead: late font / resize callbacks after the iframe was removed
-        if (!this.document?.documentElement) return
+        if (this.#destroyed || !this.document?.documentElement) return
         const { documentElement } = this.document
         if (this.#column) {
             const side = this.#vertical ? 'height' : 'width'
@@ -519,7 +527,9 @@ class View {
         return this.#overlayer
     }
     destroy() {
-        if (this.document) this.#observer.unobserve(this.document.body)
+        this.#destroyed = true
+        this.#cancelLoad?.()
+        this.#observer.disconnect()
     }
 }
 
@@ -549,6 +559,7 @@ export class Paginator extends HTMLElement {
     #glideToken = 0 // LightRead: bumped by every scrollToRange; a newer one cancels a running glide
     #justAnchored = false
     #locked = false // while true, prevent any further navigation
+    #navigationEpoch = 0
     #styles
     #styleMap = new WeakMap()
     #mediaQuery = matchMedia('(prefers-color-scheme: dark)')
@@ -811,6 +822,8 @@ export class Paginator extends HTMLElement {
         }
     }
     open(book) {
+        this.#navigationEpoch++
+        this.#locked = false
         this.bookDir = book.dir
         this.sections = book.sections
         this.#contBlocked = false
@@ -1138,10 +1151,12 @@ export class Paginator extends HTMLElement {
         }
         // FIXME: vertical-rl only, not -lr
         if (this.scrolled && this.#vertical) offset = -offset
+        const epoch = this.#navigationEpoch
         if ((reason === 'snap' || smooth) && this.hasAttribute('animated')) return animate(
             this.containerPosition, offset, 300, easeOutQuad,
-            x => this.containerPosition = x,
+            x => { if (epoch === this.#navigationEpoch) this.containerPosition = x },
         ).then(() => {
+            if (epoch !== this.#navigationEpoch) return
             this.#scrollBounds = [offset, this.atStart ? 0 : size, this.atEnd ? 0 : size]
             this.#afterScroll(reason)
         })
@@ -1283,12 +1298,15 @@ export class Paginator extends HTMLElement {
         this.dispatchEvent(new CustomEvent('relocate', { detail }))
     }
     async #display(promise) {
+        const epoch = this.#navigationEpoch
         const { index, src, anchor, onLoad, select, focus } = await promise
+        if (epoch !== this.#navigationEpoch) return
         this.#index = index
         const hasFocus = this.#view?.document?.hasFocus()
         if (src) {
             const view = this.#createView()
             const afterLoad = doc => {
+                if (epoch !== this.#navigationEpoch) return
                 if (doc.head) {
                     const $styleBefore = doc.createElement('style')
                     doc.head.prepend($styleBefore)
@@ -1298,8 +1316,11 @@ export class Paginator extends HTMLElement {
                 }
                 onLoad?.({ doc, index })
             }
-            const beforeRender = this.#beforeRender.bind(this)
+            const beforeRender = (...args) => {
+                if (epoch === this.#navigationEpoch) return this.#beforeRender(...args)
+            }
             await view.load(src, afterLoad, beforeRender)
+            if (epoch !== this.#navigationEpoch) return
             this.dispatchEvent(new CustomEvent('create-overlayer', {
                 detail: {
                     doc: view.document, index,
@@ -1315,7 +1336,7 @@ export class Paginator extends HTMLElement {
             this.#anchorAt = focus.at
             await this.#scrollToAnchor(target, select ? 'selection' : 'navigation')
         } else await this.scrollToAnchor(target, select)
-        if (hasFocus) this.focusView()
+        if (hasFocus && epoch === this.#navigationEpoch) this.focusView()
     }
     #canGoToIndex(index) {
         return index >= 0 && index <= this.sections.length - 1
@@ -1340,8 +1361,9 @@ export class Paginator extends HTMLElement {
     }
     async goTo(target) {
         if (this.#locked) return
+        const epoch = this.#navigationEpoch
         const resolved = await target
-        if (!this.#canGoToIndex(resolved.index)) return
+        if (epoch !== this.#navigationEpoch || !this.#canGoToIndex(resolved.index)) return
         // LightRead: nothing displayed yet → start directly in the wanted mode
         if (this.#mode !== 'cont' && !this.#view && !this.#busy && this.#wantCont())
             this.#setMode('cont')
@@ -1395,14 +1417,19 @@ export class Paginator extends HTMLElement {
     async #turnPage(dir, distance) {
         if (this.#locked) return
         this.#locked = true
-        const prev = dir === -1
-        const shouldGo = await (prev ? this.#scrollPrev(distance) : this.#scrollNext(distance))
-        if (shouldGo) await this.#goTo({
-            index: this.#adjacentIndex(dir),
-            anchor: prev ? () => 1 : () => 0,
-        })
-        if (shouldGo || !this.hasAttribute('animated')) await wait(100)
-        this.#locked = false
+        const epoch = this.#navigationEpoch
+        try {
+            const prev = dir === -1
+            const shouldGo = await (prev ? this.#scrollPrev(distance) : this.#scrollNext(distance))
+            if (epoch !== this.#navigationEpoch) return
+            if (shouldGo) await this.#goTo({
+                index: this.#adjacentIndex(dir),
+                anchor: prev ? () => 1 : () => 0,
+            })
+            // Scroll/section completion is readiness; a timer tail drops the next committed input.
+        } finally {
+            if (epoch === this.#navigationEpoch) this.#locked = false
+        }
     }
     async prev(distance) {
         if (this.#mode === 'cont') return await this.#contTurn(-1, distance)
@@ -1456,18 +1483,24 @@ export class Paginator extends HTMLElement {
             $style.textContent = style
         } else $style.textContent = styles
 
-        // NOTE: needs `requestAnimationFrame` in Chromium
+        // VAL-LIFECYCLE-001: deferred style work must not reach a destroyed/replaced view.
+        const styledView = this.#view
         requestAnimationFrame(() => {
-            this.#replaceBackground(this.#view.docBackground, this.columnCount)
+            if (this.#view !== styledView || !styledView) return
+            this.#replaceBackground(styledView.docBackground, this.columnCount)
         })
 
         // needed because the resize observer doesn't work in Firefox
-        this.#view?.document?.fonts?.ready?.then(() => this.#view.expand())
+        styledView?.document?.fonts?.ready?.then(() => {
+            if (this.#view === styledView) styledView.expand()
+        })
     }
     focusView() {
         this.#view.document.defaultView.focus()
     }
     destroy() {
+        this.#navigationEpoch++
+        this.#locked = false
         this.#observer.unobserve(this)
         this.#observer.disconnect() // LightRead: it observes #container, not `this`
         if (this.#mode === 'cont') {

@@ -4,7 +4,7 @@
  * 当前导出是符合 OKF v0.1 的开放知识包；导入仍兼容早期 JSON v1/v2 备份。
  * 开放 Profile 见 docs/library-okf-profile.md。
  */
-import { zipSync, unzipSync, strToU8, strFromU8 } from 'fflate'
+import { unzipSync, strToU8, strFromU8, Zip, ZipPassThrough } from 'fflate'
 import { parseDocument, stringify } from 'yaml'
 import {
   getStorage,
@@ -608,12 +608,48 @@ function annotationKey(annotation: Omit<AnnotationRec, 'id' | 'bookId'>): string
   ])
 }
 
-export async function exportBackup(onProgress?: (msg: string) => void): Promise<Blob> {
+/** 调用方负责把 zip 输出块写入磁盘或 Blob; 实现不应保留所有块。 */
+export type ArchiveChunkSink = (chunk: Uint8Array) => void | Promise<void>
+
+/**
+ * 流式构建藏书包: 逐本读取源文件并立即写入 zip 输出, 不在 JS 中同时保存全部书字节
+ * 与完整 zip。单本书的字节仍是瞬时内存上限 (源文件读取本身受 64 MB 限制)。
+ */
+export async function exportBackupToSink(write: ArchiveChunkSink, onProgress?: (msg: string) => void): Promise<void> {
   const storage = await getStorage()
   const books = await storage.listBooks()
-  const entries: Record<string, Uint8Array> = {}
   const bookIndex: string[] = []
   const exportedAt = new Date().toISOString()
+  const pending: Uint8Array[] = []
+  let pendingBytes = 0
+  let finalChunkSeen = false
+  let zipFailure: Error | null = null
+  const zip = new Zip((error, chunk, final) => {
+    if (error) { zipFailure = error; return }
+    pending.push(chunk)
+    pendingBytes += chunk.byteLength
+    if (final) finalChunkSeen = true
+  })
+  const flush = async () => {
+    if (zipFailure) throw zipFailure
+    if (!pendingBytes) return
+    const merged = new Uint8Array(pendingBytes)
+    let offset = 0
+    for (const chunk of pending) {
+      merged.set(chunk, offset)
+      offset += chunk.byteLength
+    }
+    pending.length = 0
+    pendingBytes = 0
+    await write(merged)
+  }
+  // store 模式: 书籍文件通常已压缩; 超过 4 MB 的输出立即交给 sink, 避免整包驻留。
+  const addEntry = async (path: string, data: Uint8Array) => {
+    const entry = new ZipPassThrough(path)
+    zip.add(entry)
+    entry.push(data, true)
+    if (pendingBytes >= 4 * 1024 * 1024) await flush()
+  }
   const compatibilityManifest: CompatibilityManifest = {
     format: LEGACY_JSON_FORMAT,
     version: books.some(book => book.classification !== undefined) ? 3 : LEGACY_JSON_VERSION,
@@ -629,7 +665,7 @@ export async function exportBackup(onProgress?: (msg: string) => void): Promise<
     const contentPath = `assets/books/${book.id}/content${contentSuffix(book.format)}`
     const file = await storage.getBookFile(book.id)
     const fileBytes = new Uint8Array(await file.arrayBuffer())
-    entries[contentPath] = fileBytes
+    await addEntry(contentPath, fileBytes)
     const content = await describeAsset(contentPath, MEDIA_TYPES[book.format], fileBytes)
 
     let cover: AssetDescriptor | undefined
@@ -643,7 +679,7 @@ export async function exportBackup(onProgress?: (msg: string) => void): Promise<
         if (!coverBlob.size) throw new Error('Cover file is empty')
         const coverPath = `assets/books/${book.id}/cover.jpg`
         const coverBytes = new Uint8Array(await coverBlob.arrayBuffer())
-        entries[coverPath] = coverBytes
+        await addEntry(coverPath, coverBytes)
         cover = await describeAsset(coverPath, coverBlob.type || 'image/jpeg', coverBytes)
       } finally {
         URL.revokeObjectURL(coverUrl)
@@ -730,12 +766,12 @@ export async function exportBackup(onProgress?: (msg: string) => void): Promise<
     if (cover) body.push(`- [Cover](../${cover.path})`)
 
     const conceptPath = `books/${book.id}.md`
-    entries[conceptPath] = okfDocument(frontmatter, body.join('\n'))
+    await addEntry(conceptPath, okfDocument(frontmatter, body.join('\n')))
     const summary = oneLine(book.description ?? `${book.author || 'Unknown author'} · ${book.format.toUpperCase()}`)
     bookIndex.push(`* [${markdownLabel(book.title)}](${book.id}.md) - ${summary}`)
   }
 
-  entries['books/index.md'] = strToU8(`# Books\n\n${bookIndex.join('\n') || 'No books.'}\n`)
+  await addEntry('books/index.md', strToU8(`# Books\n\n${bookIndex.join('\n') || 'No books.'}\n`))
 
   const catalogIndex: string[] = []
   const sources = (await storage.listSources()).filter(source => !source.builtin)
@@ -759,17 +795,17 @@ export async function exportBackup(onProgress?: (msg: string) => void): Promise<
       url: source.url,
       added_at: toIso(source.addedAt),
     })
-    entries[conceptPath] = okfDocument(frontmatter, [
+    await addEntry(conceptPath, okfDocument(frontmatter, [
       '# Catalog',
       '',
       `- **Name:** ${source.title}`,
       `- **Protocol:** ${source.kind === 'arxiv' ? 'arXiv API' : 'OPDS'}`,
       `- **URL:** ${source.url}`,
-    ].join('\n'))
+    ].join('\n')))
     catalogIndex.push(`* [${markdownLabel(source.title)}](${source.id}.md) - ${source.url}`)
   }
   if (catalogIndex.length) {
-    entries['catalogs/index.md'] = strToU8(`# Catalogs\n\n${catalogIndex.join('\n')}\n`)
+    await addEntry('catalogs/index.md', strToU8(`# Catalogs\n\n${catalogIndex.join('\n')}\n`))
   }
 
   onProgress?.('压缩中…')
@@ -782,12 +818,12 @@ export async function exportBackup(onProgress?: (msg: string) => void): Promise<
     rootSections.push('', '# Catalogs', '', `* [Catalogs](catalogs/) - ${sources.length} catalog${sources.length === 1 ? '' : 's'}`)
   }
   rootSections.push('', `Exported by LightRead ${__APP_VERSION__} at ${exportedAt}.`)
-  entries['index.md'] = okfDocument({ okf_version: OKF_VERSION }, rootSections.join('\n'))
-  entries['manifest.json'] = strToU8(JSON.stringify(compatibilityManifest, null, 2))
+  await addEntry('index.md', okfDocument({ okf_version: OKF_VERSION }, rootSections.join('\n')))
+  await addEntry('manifest.json', strToU8(JSON.stringify(compatibilityManifest, null, 2)))
   try {
     const rows = await listReadingLog()
     if (rows.length) {
-      entries[READING_LOG_PATH] = strToU8(JSON.stringify({ format: READING_LOG_FORMAT, version: 1, rows }))
+      await addEntry(READING_LOG_PATH, strToU8(JSON.stringify({ format: READING_LOG_FORMAT, version: 1, rows })))
     }
   } catch (err) {
     // 阅读记录是附加数据, 读不出不影响藏书包
@@ -807,16 +843,23 @@ export async function exportBackup(onProgress?: (msg: string) => void): Promise<
           wanted: wanted.filter(entry => entry.booklistId === list.id),
         })
       }
-      entries[BOOKLISTS_PATH] = strToU8(JSON.stringify({ format: BOOKLISTS_FORMAT, version: 1, lists: exported }))
+      await addEntry(BOOKLISTS_PATH, strToU8(JSON.stringify({ format: BOOKLISTS_FORMAT, version: 1, lists: exported })))
     }
   } catch (err) {
     console.warn('[backup] booklists export failed', err)
   }
-  // 书籍文件通常已压缩，容器使用 store 模式，优先速度并避免无意义的重复压缩。
-  const zipped = zipSync(entries, { level: 0 })
-  return new Blob([zipped.buffer as ArrayBuffer], {
-    type: 'application/zip',
-  })
+  zip.end()
+  await flush()
+  if (zipFailure) throw zipFailure
+  if (!finalChunkSeen) throw new Error('Archive compression did not finish')
+}
+
+/** Browser/desktop compatibility: collect streamed chunks into a Blob. */
+export async function exportBackup(onProgress?: (msg: string) => void): Promise<Blob> {
+  const chunks: Uint8Array[] = []
+  await exportBackupToSink(chunk => { chunks.push(chunk) }, onProgress)
+  // SAFETY: every chunk is a Uint8Array created by this function; TS only sees the generic ArrayBufferLike view.
+  return new Blob(chunks as unknown as BlobPart[], { type: 'application/zip' })
 }
 
 export async function importBackup(

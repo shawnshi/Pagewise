@@ -19,6 +19,7 @@ import { BOOK_CATEGORIES, normalizeTagName } from '../services/bookClassificatio
 import { bookFileProblem, type AvailabilityFilter } from '../services/bookAvailability'
 import { mergeLibraryTags, removeLibraryTag, clearBookClassifications } from '../services/bookTagActions'
 import { getStorage } from '../storage'
+import { useNativeBack } from '../composables/useNativeBack'
 import {
   saveLibrarySession,
   loadLibrarySession,
@@ -68,7 +69,9 @@ const sortBy = ref<LibrarySortBy>('recent')
 const statusFilter = ref<ReadingStatus | ''>('')
 const availabilityFilter = ref<AvailabilityFilter>('')
 const unavailableCount = computed(() => allBooks.value.filter(book => bookFileProblem(book)).length)
-const hasFolderIssue = computed(() => ['partial', 'error', 'permission-denied'].includes(folderLibrary.value.status.value.state))
+const folderStatus = computed(() => folderLibrary.value.status.value)
+const scanning = computed(() => folderStatus.value.state === 'scanning')
+const hasFolderIssue = computed(() => ['partial', 'error', 'permission-denied'].includes(folderStatus.value.state))
 const folderIssueMessage = computed(() => {
   const status = folderLibrary.value.status.value
   if (status.state === 'permission-denied') return t('library.filePermission')
@@ -119,6 +122,7 @@ const TODAY_RING_C = 2 * Math.PI * 5.5
 
 function saveCurrentSession() {
   if (restoringSession.value) return
+  rememberResultOrder()
   saveLibrarySession({
     keyword: keyword.value,
     sortBy: sortBy.value,
@@ -208,17 +212,21 @@ onBeforeUnmount(() => {
 
 function onGlobalKeydown(e: KeyboardEvent) {
   if (e.key !== 'Escape') return
-  if (filterDraft.value) {
-    closeAdvancedFilter()
-    e.preventDefault()
-    return
-  }
-  if (showTagManage.value) showTagManage.value = false
-  else if (showTagModal.value) showTagModal.value = false
-  else if (manageMode.value) toggleManage()
-  else return
+  if (!dismissLibraryLayer()) return
   e.preventDefault()
 }
+
+/** 逐层关闭书库弹层/管理态; 返回 false 表示没有需要关闭的层。 */
+function dismissLibraryLayer(): boolean {
+  if (filterDraft.value) { closeAdvancedFilter(); return true }
+  if (showTagManage.value) { showTagManage.value = false; return true }
+  if (showTagModal.value) { showTagModal.value = false; return true }
+  if (manageMode.value) { toggleManage(); return true }
+  return false
+}
+
+// Android 侧滑/返回键与 Esc 行为一致: 先退出弹层与管理态，再交给路由回退。
+useNativeBack(dismissLibraryLayer)
 
 // 包含所有书籍 (退休的 paper 格式书籍也在藏书中统一展示)
 const allBooks = computed(() => library.books)
@@ -284,16 +292,33 @@ watch(() => filtered.value.filter(book => book.hasCover).map(book => book.id), (
 const formats = computed(() => [...new Set(allBooks.value.map(book => book.format))].sort())
 const languages = computed(() => [...new Set(allBooks.value.map(book => book.language).filter((language): language is string => !!language))].sort())
 
-watch([keyword, tagFilter, tagMode, formatFilter, languageFilter, statusFilter, availabilityFilter, categoryFilter, classificationStatusFilter, audienceFilter, textbookFilter, ancientTextFilter, workCountryFilter, workPeriodFilter, sortBy, pageSize], () => {
-  if (restoringSession.value) return
+let isBatchUpdatingFilters = false
+function batchFilterCommit(action: () => void) {
+  isBatchUpdatingFilters = true
+  try {
+    action()
+  } finally {
+    isBatchUpdatingFilters = false
+  }
+  if (!restoringSession.value) {
+    onFilterChange()
+  }
+}
+
+function onFilterChange() {
   orderedBookIds.value = []
-  page.value = 1
-  selectedIds.value = new Set()
+  if (page.value !== 1) page.value = 1
+  if (selectedIds.value.size > 0) selectedIds.value = new Set()
   rememberResultOrder()
+}
+
+watch([keyword, tagFilter, tagMode, formatFilter, languageFilter, statusFilter, availabilityFilter, categoryFilter, classificationStatusFilter, audienceFilter, textbookFilter, ancientTextFilter, workCountryFilter, workPeriodFilter, sortBy, pageSize], () => {
+  if (restoringSession.value || isBatchUpdatingFilters) return
+  onFilterChange()
 }, { flush: 'sync' })
 
 watch(() => query.value.page, value => {
-  if (!restoringSession.value) page.value = value
+  if (!restoringSession.value && page.value !== value) page.value = value
 })
 
 watch(() => library.books.map(book => book.id), ids => {
@@ -378,21 +403,22 @@ function closeAdvancedFilter() {
 function applyAdvancedFilter() {
   if (!filterDraft.value) return
   const committed = commitFilterDraft(filterDraft.value)
-  tagFilter.value = committed.tagFilter
-  tagMode.value = committed.tagMode
-  formatFilter.value = committed.formatFilter
-  languageFilter.value = committed.languageFilter
-  statusFilter.value = committed.statusFilter
-  availabilityFilter.value = committed.availabilityFilter
-  categoryFilter.value = committed.categoryFilter
-  classificationStatusFilter.value = committed.classificationStatusFilter
-  audienceFilter.value = committed.audienceFilter
-  textbookFilter.value = committed.textbookFilter
-  ancientTextFilter.value = committed.ancientTextFilter
-  workCountryFilter.value = committed.workCountryFilter
-  workPeriodFilter.value = committed.workPeriodFilter
-  sortBy.value = committed.sortBy
-  page.value = 1
+  batchFilterCommit(() => {
+    tagFilter.value = committed.tagFilter
+    tagMode.value = committed.tagMode
+    formatFilter.value = committed.formatFilter
+    languageFilter.value = committed.languageFilter
+    statusFilter.value = committed.statusFilter
+    availabilityFilter.value = committed.availabilityFilter
+    categoryFilter.value = committed.categoryFilter
+    classificationStatusFilter.value = committed.classificationStatusFilter
+    audienceFilter.value = committed.audienceFilter
+    textbookFilter.value = committed.textbookFilter
+    ancientTextFilter.value = committed.ancientTextFilter
+    workCountryFilter.value = committed.workCountryFilter
+    workPeriodFilter.value = committed.workPeriodFilter
+    sortBy.value = committed.sortBy
+  })
   closeAdvancedFilter()
 }
 
@@ -424,19 +450,21 @@ function toggleTag(tag: string) {
 }
 
 function clearFilters() {
-  keyword.value = ''
-  tagFilter.value = []
-  formatFilter.value = ''
-  languageFilter.value = ''
-  statusFilter.value = ''
-  availabilityFilter.value = ''
-  categoryFilter.value = ''
-  classificationStatusFilter.value = ''
-  audienceFilter.value = ''
-  textbookFilter.value = ''
-  ancientTextFilter.value = ''
-  workCountryFilter.value = ''
-  workPeriodFilter.value = ''
+  batchFilterCommit(() => {
+    keyword.value = ''
+    tagFilter.value = []
+    formatFilter.value = ''
+    languageFilter.value = ''
+    statusFilter.value = ''
+    availabilityFilter.value = ''
+    categoryFilter.value = ''
+    classificationStatusFilter.value = ''
+    audienceFilter.value = ''
+    textbookFilter.value = ''
+    ancientTextFilter.value = ''
+    workCountryFilter.value = ''
+    workPeriodFilter.value = ''
+  })
 }
 
 function toggleManage() {
@@ -586,8 +614,21 @@ function showUnavailable() {
     saveCurrentSession()
     unavailableReturn.value = loadLibrarySession() ?? undefined
   }
-  clearFilters()
-  availabilityFilter.value = 'unavailable'
+  batchFilterCommit(() => {
+    keyword.value = ''
+    tagFilter.value = []
+    formatFilter.value = ''
+    languageFilter.value = ''
+    statusFilter.value = ''
+    categoryFilter.value = ''
+    classificationStatusFilter.value = ''
+    audienceFilter.value = ''
+    textbookFilter.value = ''
+    ancientTextFilter.value = ''
+    workCountryFilter.value = ''
+    workPeriodFilter.value = ''
+    availabilityFilter.value = 'unavailable'
+  })
   closeAdvancedFilter()
 }
 
@@ -784,6 +825,11 @@ async function clearSelectedTags() {
       <span class="row-break" aria-hidden="true" />
     </header>
 
+    <!-- 首次扫描时库里还没有任何记录: 明确告知正在扫描, 而不是显示“空书库”。 -->
+    <section v-if="scanning && !allBooks.length" class="library-notice" role="status" aria-live="polite">
+      <span>{{ t('folder.status.scanning') }}<template v-if="folderStatus.indexed"> · {{ t('folder.indexedCount', { n: folderStatus.indexed }) }}</template></span>
+    </section>
+
     <section v-if="unavailableCount || hasFolderIssue" class="library-notice" role="status">
       <span>{{ folderIssueMessage }}</span>
       <button v-if="unavailableCount && !hasFolderIssue" type="button" class="btn" @click="showUnavailable">{{ t('library.viewUnavailable') }}</button>
@@ -894,8 +940,8 @@ async function clearSelectedTags() {
       <button type="button" class="btn btn-sm btn-clear-chips" @click="clearFilters">{{ t("uiV02.copy.清空全部") }}</button>
     </div>
 
-    <!-- 加载骨架屏 -->
-    <div v-if="!library.loaded" class="grid" aria-busy="true" :aria-label="t('library.loading')">
+    <!-- 加载骨架屏 (首次扫描完成前不要冒充“空书库”) -->
+    <div v-if="!library.loaded || (scanning && !allBooks.length)" class="grid" aria-busy="true" :aria-label="t('library.loading')">
       <div v-for="i in 12" :key="i" class="skeleton-card">
         <div class="skeleton skeleton-cover" />
         <div class="skeleton skeleton-line" />

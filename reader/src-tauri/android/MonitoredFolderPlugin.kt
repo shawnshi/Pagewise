@@ -22,12 +22,22 @@ import app.tauri.plugin.JSObject
 import app.tauri.plugin.Plugin
 import org.json.JSONObject
 import java.io.ByteArrayOutputStream
+import java.io.File
 import java.io.FileNotFoundException
+import java.io.FileOutputStream
 import java.io.IOException
 import java.security.MessageDigest
 import java.util.ArrayDeque
-import java.util.concurrent.Executors
+import java.util.UUID
+import java.util.concurrent.ArrayBlockingQueue
+import java.util.concurrent.ThreadPoolExecutor
+import java.util.concurrent.TimeUnit
 import java.util.concurrent.atomic.AtomicBoolean
+
+private const val MAX_READ_BYTES = 64L * 1024 * 1024
+
+/** 超过该大小时不再经 base64 字符串传输, 改为原生临时文件。 */
+private const val BASE64_MAX_BYTES = 8L * 1024 * 1024
 
 /** Only the system tree picker can create a registry entry; no caller-supplied URI is opened. */
 @TauriPlugin
@@ -37,8 +47,16 @@ class MonitoredFolderPlugin(
     private val resolver get() = activity.contentResolver
     private val preferences = activity.getSharedPreferences("pagewise-monitored-folder", Activity.MODE_PRIVATE)
     private val handler = Handler(Looper.getMainLooper())
-    private val executor = Executors.newSingleThreadExecutor()
-    private val working = AtomicBoolean(false)
+
+    private class Lane {
+        val executor = ThreadPoolExecutor(1, 1, 0L, TimeUnit.MILLISECONDS, ArrayBlockingQueue<Runnable>(1))
+        var working = false
+        var stop: (() -> Unit)? = null
+    }
+
+    private val admission = Any()
+    private val enumerationLane = Lane()
+    private val interactiveLane = Lane()
     private val selecting = AtomicBoolean(false)
     private var view: WebView? = null
     private var watching = false
@@ -48,7 +66,6 @@ class MonitoredFolderPlugin(
     private var observer: ContentObserver? = null
     private var observerSignalPending = false
 
-    @Volatile private var activeSignal: CancellationSignal? = null
     private var pendingPicker: Invoke? = null
     private val signalChange =
         Runnable {
@@ -128,13 +145,18 @@ class MonitoredFolderPlugin(
     }
 
     override fun onDestroy(activity: AppCompatActivity) {
-        destroyed = true
+        val stops =
+            synchronized(admission) {
+                destroyed = true
+                listOfNotNull(enumerationLane.stop, interactiveLane.stop)
+            }
         watching = false
         removeObserver()
-        activeSignal?.cancel()
+        stops.forEach { it() }
         pendingPicker?.reject("unavailable", "unavailable")
         pendingPicker = null
-        executor.shutdownNow()
+        enumerationLane.executor.shutdownNow()
+        interactiveLane.executor.shutdownNow()
         view = null
     }
 
@@ -199,49 +221,92 @@ class MonitoredFolderPlugin(
         invoke.reject(value, value)
     }
 
+    private fun reserveSelection(invoke: Invoke? = null): String? =
+        synchronized(admission) {
+            when {
+                destroyed -> {
+                    "unavailable"
+                }
+
+                enumerationLane.working || interactiveLane.working || selecting.get() -> {
+                    "busy"
+                }
+
+                else -> {
+                    selecting.set(true)
+                    pendingPicker = invoke
+                    null
+                }
+            }
+        }
+
     private fun work(
         invoke: Invoke,
+        lane: Lane = enumerationLane,
+        selection: Boolean = false,
         timeoutReject: Boolean = true,
+        timeoutMs: Long = 15000,
         action: (CancellationSignal, Long) -> JSObject?,
-    ) {
+    ) = synchronized(admission) {
         if (destroyed) {
+            if (selection) selecting.set(false)
             invoke.reject("unavailable", "unavailable")
-            return
+            return@synchronized
         }
-        if (!working.compareAndSet(false, true)) {
+        if (lane.working || (selecting.get() && !selection)) {
             invoke.reject("busy", "busy")
-            return
+            return@synchronized
         }
+        lane.working = true
         val cancellation = CancellationSignal()
-        activeSignal = cancellation
-        val deadline = SystemClock.elapsedRealtime() + 15000
+        val deadline = SystemClock.elapsedRealtime() + timeoutMs
         val settled = AtomicBoolean(false)
-        val timeout =
-            Runnable {
-                // A provider may ignore cancellation. Read/list callers still receive a bounded result;
-                // the single worker stays busy until it unwinds rather than admitting an unbounded queue.
-                if (timeoutReject && settled.compareAndSet(false, true)) invoke.reject("unavailable", "unavailable")
-                cancellation.cancel()
-            }
-        handler.postDelayed(timeout, 15000)
+        val stop = {
+            if (timeoutReject && settled.compareAndSet(false, true)) invoke.reject("unavailable", "unavailable")
+            cancellation.cancel()
+        }
+        lane.stop = stop
+        val timeout = Runnable { stop() }
+        handler.postDelayed(timeout, timeoutMs)
         try {
-            executor.execute {
+            lane.executor.execute {
                 try {
                     val result = action(cancellation, deadline)
-                    if (settled.compareAndSet(false, true)) invoke.resolve(result)
+                    // A canceled provider keeps only its own lane occupied, never the other lane.
+                    synchronized(admission) {
+                        if (destroyed && timeoutReject) {
+                            if (settled.compareAndSet(false, true)) invoke.reject("unavailable", "unavailable")
+                            discard(result)
+                        } else if (settled.compareAndSet(false, true)) {
+                            invoke.resolve(result)
+                        } else {
+                            discard(result)
+                        }
+                    }
                 } catch (error: Exception) {
                     if (settled.compareAndSet(false, true)) reject(invoke, error)
                 } finally {
                     handler.removeCallbacks(timeout)
-                    activeSignal = null
-                    working.set(false)
+                    synchronized(admission) {
+                        lane.stop = null
+                        lane.working = false
+                        if (selection) selecting.set(false)
+                    }
                 }
             }
         } catch (_: java.util.concurrent.RejectedExecutionException) {
             handler.removeCallbacks(timeout)
-            activeSignal = null
-            working.set(false)
-            invoke.reject("unavailable", "unavailable")
+            lane.stop = null
+            lane.working = false
+            if (selection) selecting.set(false)
+            if (settled.compareAndSet(false, true)) invoke.reject("unavailable", "unavailable")
+        }
+    }
+
+    private fun discard(result: JSObject?) {
+        val path = result?.optString("path") ?: return
+        if (Regex("cache/pagewise-read/[a-f0-9-]{36}\\.bin").matches(path)) {
+            File(activity.cacheDir, "pagewise-read/${path.substringAfterLast('/')}").delete()
         }
     }
 
@@ -264,21 +329,20 @@ class MonitoredFolderPlugin(
 
     @Command
     fun select(invoke: Invoke) {
-        if (destroyed) {
-            invoke.reject("unavailable", "unavailable")
+        val error = reserveSelection(invoke)
+        if (error != null) {
+            invoke.reject(error, error)
             return
         }
-        if (working.get() || !selecting.compareAndSet(false, true)) {
-            invoke.reject("busy", "busy")
-            return
-        }
-        pendingPicker = invoke
         val intent = Intent(Intent.ACTION_OPEN_DOCUMENT_TREE)
         intent.addFlags(
             Intent.FLAG_GRANT_READ_URI_PERMISSION or Intent.FLAG_GRANT_PERSISTABLE_URI_PERMISSION or Intent.FLAG_GRANT_PREFIX_URI_PERMISSION,
         )
         try {
-            startActivityForResult(invoke, intent, "selected")
+            synchronized(admission) {
+                if (destroyed) return
+                startActivityForResult(invoke, intent, "selected")
+            }
         } catch (
             error: Exception,
         ) {
@@ -293,22 +357,25 @@ class MonitoredFolderPlugin(
         invoke: Invoke,
         result: ActivityResult,
     ) {
+        if (pendingPicker !== invoke) return
         pendingPicker = null
-        selecting.set(false)
         if (destroyed) {
+            selecting.set(false)
             invoke.reject("unavailable", "unavailable")
             return
         }
         if (result.resultCode == Activity.RESULT_CANCELED) {
+            selecting.set(false)
             invoke.resolve(folderResult(null))
             return
         }
         if (result.resultCode != Activity.RESULT_OK) {
+            selecting.set(false)
             invoke.reject("unavailable", "unavailable")
             return
         }
         // Selection has a commit point: never return a synthetic timeout before its final state is known.
-        work(invoke, timeoutReject = false) { cancellation, deadline ->
+        work(invoke, selection = true, timeoutReject = false) { cancellation, deadline ->
             val data = result.data ?: throw Failure("invalid_reference")
             val uri = tree(data.data?.toString() ?: throw Failure("invalid_reference"))
             if (data.flags and Intent.FLAG_GRANT_READ_URI_PERMISSION == 0 ||
@@ -454,12 +521,13 @@ class MonitoredFolderPlugin(
                 }
                 if (cancellation.isCanceled || SystemClock.elapsedRealtime() >= deadline) break
             }
+            authorized(folder.id)
             JSObject().put("files", files).put("complete", errorCodes.isEmpty()).put("errors", errors)
         }
 
     @Command
     fun read(invoke: Invoke) =
-        work(invoke) { cancellation, deadline ->
+        work(invoke, lane = interactiveLane) { cancellation, deadline ->
             val args = invoke.getArgs()
             val folder = authorized(args.getString("folderId"))
             val id = args.getString("documentId")
@@ -468,6 +536,7 @@ class MonitoredFolderPlugin(
             val document = DocumentsContract.buildDocumentUriUsingTree(folder.uri, id)
             // Prefix-string checks are not tree membership checks. Fail closed for providers without isChildDocument.
             if (!DocumentsContract.isChildDocument(resolver, root, document)) throw Failure("invalid_reference")
+            var sourceSize: Long? = null
             resolver
                 .query(
                     document,
@@ -487,7 +556,8 @@ class MonitoredFolderPlugin(
                     ) {
                         throw Failure("invalid_reference")
                     }
-                    if (!it.isNull(2) && it.getLong(2) > 64L * 1024 * 1024) throw Failure("resource_limit")
+                    sourceSize = if (it.isNull(2)) null else it.getLong(2)
+                    if ((sourceSize ?: 0L) > MAX_READ_BYTES) throw Failure("resource_limit")
                 } ?: throw Failure("unavailable")
             check(cancellation, deadline)
             val descriptor = resolver.openFileDescriptor(document, "r", cancellation) ?: throw Failure("unavailable")
@@ -500,24 +570,76 @@ class MonitoredFolderPlugin(
                 }
             handler.postDelayed(closeOnTimeout, (deadline - SystemClock.elapsedRealtime()).coerceAtLeast(1))
             try {
-                android.os.ParcelFileDescriptor.AutoCloseInputStream(descriptor).use { stream ->
-                    val output = ByteArrayOutputStream()
-                    val buffer = ByteArray(65536)
-                    while (true) {
-                        check(cancellation, deadline)
-                        val count = stream.read(buffer)
-                        if (count < 0) break
-                        if (output.size().toLong() + count > 64L * 1024 * 1024) throw Failure("resource_limit")
-                        output.write(buffer, 0, count)
+                // Base64 经 JSBridge 时 Java 字符串按 UTF-16 计算: 40 MB 文件需要约 107 MB 连续分配,
+                // 会直接 OutOfMemoryError 杀死进程。大文件改由原生流式写入应用 cache, 前端再用
+                // plugin-fs 按二进制读取并立即删除临时文件。
+                val result =
+                    if (sourceSize == null || sourceSize!! > BASE64_MAX_BYTES) {
+                        JSObject().put("path", writeTempDocument(descriptor, cancellation, deadline))
+                    } else {
+                        android.os.ParcelFileDescriptor.AutoCloseInputStream(descriptor).use { stream ->
+                            val output = ByteArrayOutputStream()
+                            val buffer = ByteArray(65536)
+                            while (true) {
+                                check(cancellation, deadline)
+                                val count = stream.read(buffer)
+                                if (count < 0) break
+                                if (output.size().toLong() + count > MAX_READ_BYTES) throw Failure("resource_limit")
+                                output.write(buffer, 0, count)
+                            }
+                            check(cancellation, deadline)
+                            JSObject().put("data", android.util.Base64.encodeToString(output.toByteArray(), android.util.Base64.NO_WRAP))
+                        }
                     }
+                try {
                     check(cancellation, deadline)
-                    JSObject().put("data", android.util.Base64.encodeToString(output.toByteArray(), android.util.Base64.NO_WRAP))
+                    authorized(folder.id)
+                    result
+                } catch (error: Exception) {
+                    discard(result)
+                    throw error
                 }
             } finally {
                 handler.removeCallbacks(closeOnTimeout)
                 descriptor.close()
             }
         }
+
+    /** 大文件: 流式写 cache/pagewise-read/<uuid>.bin; 过期临时文件一小时清理。 */
+    private fun writeTempDocument(
+        descriptor: android.os.ParcelFileDescriptor,
+        cancellation: CancellationSignal,
+        deadline: Long,
+    ): String {
+        val dir = File(activity.cacheDir, "pagewise-read")
+        if (!dir.isDirectory && !dir.mkdirs()) throw Failure("io_error")
+        val cutoff = System.currentTimeMillis() - 60L * 60L * 1000L
+        dir.listFiles()?.forEach { file ->
+            if (file.isFile && file.lastModified() < cutoff) file.delete()
+        }
+        val target = File(dir, "${UUID.randomUUID()}.bin")
+        try {
+            FileOutputStream(target).use { output ->
+                android.os.ParcelFileDescriptor.AutoCloseInputStream(descriptor).use { stream ->
+                    val buffer = ByteArray(65536)
+                    var written = 0L
+                    while (true) {
+                        check(cancellation, deadline)
+                        val count = stream.read(buffer)
+                        if (count < 0) break
+                        written += count
+                        if (written > MAX_READ_BYTES) throw Failure("resource_limit")
+                        output.write(buffer, 0, count)
+                    }
+                    check(cancellation, deadline)
+                }
+            }
+        } catch (error: Exception) {
+            target.delete()
+            throw error
+        }
+        return "cache/pagewise-read/${target.name}"
+    }
 
     @Command
     fun watch(invoke: Invoke) {

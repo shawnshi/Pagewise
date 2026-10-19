@@ -1,7 +1,13 @@
 import assert from 'node:assert/strict'
 import { test } from 'node:test'
 import { performance } from 'node:perf_hooks'
-import { queryLibraryBooks } from '../src/services/libraryQuery.ts'
+import {
+  queryLibraryBooks,
+  filterLibraryBooks,
+  compareLibraryBooks,
+  prepareLibraryQuery,
+  getCachedBookNorm,
+} from '../src/services/libraryQuery.ts'
 
 const book = (id, patch = {}) => ({ id, title: 'Same', author: 'Same', tags: [], format: 'epub', addedAt: 0, ...patch })
 const ids = result => result.items.map(item => item.id)
@@ -44,6 +50,25 @@ test('tag AND/OR and exact normalized format/language metadata intersection', ()
   assert.deepEqual(ids(queryLibraryBooks(books, { languages: ['en'], formats: ['ＥＰＵＢ'] })), ['a'])
   assert.deepEqual(ids(queryLibraryBooks(books, { formats: ['cbr'] })), ['c'])
   assert.equal(queryLibraryBooks(books, { languages: ['fr'] }).total, 0)
+})
+
+test('PERF-REVIEW-003: normalized-empty facets retain the frozen query semantics', () => {
+  const books = [book('empty'), book('classified', {
+    classification: { category: { value: 'Science' }, facets: { audience: 'adult', workCountry: 'CN', workPeriod: 'modern' } },
+  })]
+  for (const facet of ['formats', 'languages', 'statuses']) {
+    for (const value of [[], [' '], ['\u3000', '\t']]) {
+      assert.deepEqual(ids(queryLibraryBooks(books, { [facet]: value })), ['classified', 'empty'], `${facet}: ${JSON.stringify(value)}`)
+    }
+  }
+  for (const facet of ['category', 'audience', 'workCountry', 'workPeriod']) {
+    for (const value of [undefined, '']) {
+      assert.deepEqual(ids(queryLibraryBooks(books, { [facet]: value })), ['classified', 'empty'])
+    }
+    for (const value of [' ', '\u3000', '\t']) {
+      assert.deepEqual(ids(queryLibraryBooks(books, { [facet]: value })), ['empty'], `${facet}: normalized-empty predicate`)
+    }
+  }
 })
 
 test('all five sorts, both directions, deterministic ID tie and stable duplicate IDs', () => {
@@ -92,4 +117,26 @@ test('pagination correction, empty results, no invented completion state', () =>
   const completeProgress = book('a', { progress: 1 })
   assert.equal(queryLibraryBooks([completeProgress]).items[0], completeProgress)
   assert.equal('readState' in completeProgress, false)
+})
+
+test('modular filter, compare, and prepared query composition', () => {
+  const books = [
+    book('b', { title: 'Book B', author: 'Author 2', addedAt: 2 }),
+    book('a', { title: 'Book A', author: 'Author 1', addedAt: 1 }),
+  ]
+  const options = { search: 'Book', sortBy: 'title', direction: 'asc' }
+  const prep = prepareLibraryQuery(options)
+  assert.equal(prep.words[0], 'book')
+  assert.equal(prep.sortBy, 'title')
+  assert.equal(prep.direction, 'asc')
+
+  const filtered = filterLibraryBooks(books, options)
+  assert.equal(filtered.length, 2)
+
+  const compared = compareLibraryBooks(books[0], books[1], options)
+  assert.ok(compared > 0, 'Book B should sort after Book A in asc')
+
+  const cachedA = getCachedBookNorm(books[1])
+  assert.equal(cachedA.normalizedTitle, 'book a')
+  assert.equal(cachedA.normalizedAuthor, 'author 1')
 })

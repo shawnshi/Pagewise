@@ -15,7 +15,7 @@ const build = read('src-tauri/build.rs')
 test('only the Android library entry point remains, with the existing brand and crate types', () => {
   assert.match(manifest, /^autobins\s*=\s*false$/m)
   assert.match(manifest, /^name = "pagewise"$/m)
-  assert.match(manifest, /^version = "1\.15\.0"$/m)
+  assert.equal(manifest.match(/^version = "([^"]+)"$/m)?.[1], JSON.parse(read('package.json')).version)
   assert.match(manifest, /^name = "pagewise_lib"$/m)
   assert.match(manifest, /^crate-type = \["staticlib", "cdylib", "rlib"\]$/m)
   assert.equal(existsSync(join(root, 'src-tauri/src/main.rs')), false)

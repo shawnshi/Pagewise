@@ -8,6 +8,7 @@ import {
   createFilterDraft,
   commitFilterDraft,
   setSessionStorageAdapter,
+  queryLibrarySession,
   DEFAULT_LIBRARY_SESSION,
 } from '../src/services/librarySession.ts'
 
@@ -138,4 +139,17 @@ test('session retains query, page and visible item identity', () => {
   assert.equal(restored.lastViewedBookId, 'book-789')
 
   setSessionStorageAdapter(null)
+})
+
+test('queryLibrarySession preserves orderedIds priority, handles unranked items and tiebreaks', () => {
+  const books = [
+    { id: 'b3', title: 'Gamma', author: 'Author', tags: [], format: 'epub', addedAt: 3 },
+    { id: 'b1', title: 'Alpha', author: 'Author', tags: [], format: 'epub', addedAt: 1 },
+    { id: 'b2', title: 'Beta', author: 'Author', tags: [], format: 'epub', addedAt: 2 },
+    { id: 'b4', title: 'Delta', author: 'Author', tags: [], format: 'epub', addedAt: 4 },
+  ]
+
+  // b2, b3 explicitly ranked; b1, b4 unranked (should be sorted by query comparator addedAt asc)
+  const result = queryLibrarySession(books, { sortBy: 'addedAt', direction: 'asc', pageSize: 10 }, ['b2', 'b3'])
+  assert.deepEqual(result.items.map(b => b.id), ['b2', 'b3', 'b1', 'b4'])
 })

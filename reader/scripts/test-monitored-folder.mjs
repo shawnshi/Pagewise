@@ -1,6 +1,7 @@
 import assert from 'node:assert/strict'
 import test from 'node:test'
-import { createMonitoredFolderService, getMonitoredFolder, selectMonitoredFolder, listMonitoredFiles, readMonitoredFile, subscribeMonitoredFolderChanges, monitoredFolderCapabilities } from '../src/services/monitoredFolder.ts'
+import { readFileSync } from 'node:fs'
+import { createMonitoredFolderService, getMonitoredFolder, selectMonitoredFolder, listMonitoredFiles, readMonitoredFile, subscribeMonitoredFolderChanges, monitoredFolderCapabilities, decodeBase64Bytes } from '../src/services/monitoredFolder.ts'
 
 const folder = { id: 'saf-test', label: 'Synthetic books', permission: 'granted' }
 const book = { documentId: 'provider:stable-1', name: 'quoted "书".epub', relativePath: 'nested/quoted "书".epub', size: null, modifiedAt: null }
@@ -246,4 +247,17 @@ test('browser preview reports capability absence, not fake Android persistence',
   assert.equal(await getMonitoredFolder(), null)
   await assert.rejects(selectMonitoredFolder(), { code: 'unavailable' })
   await assert.rejects(listMonitoredFiles(folder.id), { code: 'unavailable' })
+})
+
+test('native base64 transport decodes every byte without per-character callbacks', () => {
+  // 高字节覆盖 UTF-8/二进制内容；嵌入文件头用于确认顺序没有旋转。
+  const source = new Uint8Array(64 * 1024)
+  for (let i = 0; i < source.length; i++) source[i] = (i * 37) & 0xff
+  const encoded = Buffer.from(source).toString('base64')
+  const decoded = decodeBase64Bytes(encoded)
+  assert.equal(decoded.length, source.length)
+  assert.deepEqual(decoded, source)
+  // 目标代码路径必须保持线性循环；逐字符回调曾被实测放大约 45 倍。
+  const service = readFileSync(new URL('../src/services/monitoredFolder.ts', import.meta.url), 'utf8')
+  assert.doesNotMatch(service, /Uint8Array\.from\(decoded/)
 })

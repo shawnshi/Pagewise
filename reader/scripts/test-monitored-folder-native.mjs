@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict'
 import { cpSync, existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, renameSync, rmSync, writeFileSync } from 'node:fs'
-import { dirname, join } from 'node:path'
+import { dirname, join, resolve } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import test from 'node:test'
 import { prepareAndroidProject } from './prepare-android-project.mjs'
@@ -13,7 +13,7 @@ const generated = 'src-tauri/gen/android'
 const plugin = `${generated}/app/src/main/java/io/pagewise/reader/MonitoredFolderPlugin.kt`
 const strings = `${generated}/app/src/main/res/values/strings.xml`
 function fixture() {
-  const temp = join(root, '.tmp')
+  const temp = resolve(root, '../.cache/performance-20261019/native-prepare')
   mkdirSync(temp, { recursive: true })
   const base = mkdtempSync(join(temp, 'monitored-folder-prepare-'))
   const put = (path, value) => { mkdirSync(dirname(join(base, path)), { recursive: true }); writeFileSync(join(base, path), value) }
@@ -79,7 +79,7 @@ test('native source has a read-only grant boundary and no caller-controlled path
   assert.match(source, /folder\.id != id/)
   assert.match(source, /persistedUriPermissions/)
   assert.match(source, /"lost"/)
-  assert.match(source, /RESULT_CANCELED\) \{\s*invoke\.resolve\(folderResult\(null\)\)/)
+  assert.match(source, /RESULT_CANCELED\) \{\s*selecting\.set\(false\)\s*invoke\.resolve\(folderResult\(null\)\)/)
   assert.match(source, /SHA-256/)
   assert.match(source, /preferences\.edit\(\)\.putString\("selected"/)
   assert.doesNotMatch(source, /evaluateJavascript\([^\n]*\$|addJavascriptInterface/)
@@ -100,7 +100,12 @@ test('nullable folder responses use an explicit envelope; invalid envelopes rema
 
 test('enumeration and observer lifetimes are bounded and errors are not hidden as complete', () => {
   for (const text of ['5000', 'directory.depth >= 8', '15000', 'CancellationSignal', 'EXTRA_LOADING', 'resource_limit', 'provider_loading', 'errorCodes.isEmpty()', 'ByteArray(65536)', '64L * 1024 * 1024']) assert.ok(source.includes(text), text)
-  assert.match(source, /working\.compareAndSet\(false, true\)/)
+  assert.match(source, /synchronized\(admission\)/)
+  assert.match(source, /ArrayBlockingQueue<Runnable>\(1\)/)
+  assert.match(source, /work\(invoke, lane = interactiveLane\)/)
+  assert.match(source, /enumerationLane\.working \|\| interactiveLane\.working \|\| selecting\.get\(\)/)
+  assert.match(source, /selection = true, timeoutReject = false/)
+  assert.match(source, /authorized\(folder\.id\)/)
   assert.match(source, /override fun onPause\(\)/)
   assert.match(source, /override fun onDestroy\(activity: AppCompatActivity\)/)
   assert.match(source, /executor\.shutdownNow\(\)/)

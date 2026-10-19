@@ -24,7 +24,11 @@ globalThis.SpeechSynthesisUtterance = class {
 }
 
 const ttsUrl = new URL('../src/services/tts.ts', import.meta.url).href
+const systemUrl = new URL('../src/services/systemTts.ts', import.meta.url).href
 const modules = {
+  vue: 'export const reactive = value => value',
+  '@tauri-apps/api/core': 'export const invoke = () => Promise.reject(new Error("unexpected native command"))',
+  '../storage': 'export const isTauri = () => false',
   '../stores/settings': 'export const useSettings = () => globalThis.__ttsTest.settings',
   './toast': `export const toast = (...args) => {
     globalThis.__ttsTest.notices.push(args)
@@ -45,7 +49,7 @@ const modules = {
 }
 const hook = registerHooks({
   resolve(specifier, context, nextResolve) {
-    if (context.parentURL === ttsUrl && modules[specifier]) {
+    if ([ttsUrl, systemUrl].includes(context.parentURL) && modules[specifier]) {
       return { shortCircuit: true, url: `data:text/javascript,${encodeURIComponent(modules[specifier])}` }
     }
     return nextResolve(specifier, context)
@@ -153,7 +157,7 @@ test('long paragraph is synthesized sentence by sentence and played while the re
   reset()
   const ctl = controlledSynth()
   const plays = []
-  state.play = blob => { const d = Promise.withResolvers(); plays.push(d); return d.promise }
+  state.play = () => { const d = Promise.withResolvers(); plays.push(d); return d.promise }
   const para = '第一句话在这里。第二句话也在这里，而且稍微长一点点。第三句话。' +
     '第四句话会比较长一些，用来确认切块之后依然按顺序播放。'
   const speech = speakText(para)
@@ -270,4 +274,19 @@ test('slow first model load shows a loading hint and dismisses it when ready', a
   state.notices.length = 0
   assert.equal(await speakText('第二次。'), 'end')
   assert.equal(state.notices.length, 0)
+})
+
+test('system synthesis errors reject rather than reporting the text as read', async () => {
+  reset()
+  const engine = state.settings.ttsEngine
+  const original = globalThis.speechSynthesis.speak
+  state.settings.ttsEngine = 'system'
+  globalThis.speechSynthesis.speak = utterance => utterance.onerror({ error: 'no_offline_voice' })
+  try {
+    await assert.rejects(speakText('合成测试'), error => error.code === 'no_offline_voice')
+  } finally {
+    state.settings.ttsEngine = engine
+    globalThis.speechSynthesis.speak = original
+    reset()
+  }
 })

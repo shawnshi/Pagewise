@@ -10,7 +10,7 @@ import { DjError, streamDianjing, type DjChannel } from './client.ts'
 import { cacheKey, feedbackKey, getDjCache, sectionKey, type ChunkRecord, type DjCache, type FeedbackRecord, type SectionSummary } from './cache.ts'
 import { decideFiction, fictionFromMeta, fictionFromText, type FictionVerdict } from './fiction.ts'
 import { createDjLayer, hitTest, type DjLayer, type HitTarget } from './layer.ts'
-import { DJ_FALLBACK_MODEL, DJ_MODEL, LEGACY_PROMPT_VERSIONS, PROMPT_VERSION } from './prompt.ts'
+import { buildSummarySource, planMarkInput, DJ_FALLBACK_MODEL, DJ_MODEL, LEGACY_PROMPT_VERSIONS, PROMPT_VERSION } from './prompt.ts'
 import {
   isDjItem,
   keyWordsUsable,
@@ -381,6 +381,13 @@ export class DianjingEngine {
     this.#schedule()
   }
 
+  #discardQueuedRequests() {
+    this.#queue = []
+    for (const section of this.sections.values()) for (const chunk of section.chunks) {
+      if (chunk.status === 'queued') chunk.status = 'idle'
+    }
+  }
+
   #pump() {
     const max = Math.max(1, this.host.concurrency())
     while (this.#running < max && this.#queue.length && this.active) {
@@ -419,7 +426,9 @@ export class DianjingEngine {
     let fictionSeen: boolean | undefined
     const book = this.host.book()
     const wantKw = wantsKeyWords(s.model.lang || book.language, c.chunk.text)
+    const askGenre = this.fictionSource === 'default'
     try {
+      const mark = planMarkInput(c.chunk.text)
       const res = await streamDianjing({
         mode: 'mark',
         lang: this.host.uiLang(),
@@ -427,8 +436,8 @@ export class DianjingEngine {
         book: { title: book.title, author: book.author },
         chapter: this.host.chapterTitle(s.index),
         fiction: this.fiction,
-        askGenre: this.fictionSource === 'default',
-        text: c.chunk.text,
+        askGenre,
+        text: mark.text,
         knownTerms: this.#knownTerms(s, c),
         keywords: wantKw,
       }, channel, (raw: RawItem) => {
@@ -436,7 +445,6 @@ export class DianjingEngine {
         if (!it) return
         if (it.t === 'meta') {
           fictionSeen = it.fiction
-          if (this.fictionSource === 'default') this.#setModelVerdict(it.fiction)
           return
         }
         if (!isDjItem(it) || c.items.some(x => x.id === it.id)) return
@@ -445,11 +453,17 @@ export class DianjingEngine {
       }, ctrl.signal)
       if (typeof res.remaining === 'number') this.remaining = res.remaining
       const total = res.good + res.bad
-      // 坏行 + 锚定失败超过一半: 重试一次
-      if (attempt === 0 && total > 0 && (res.bad + stats.dropped) / total > 0.5) {
-        this.#controllers.delete(ctrl)
-        return this.#request(s, c, 1)
+      const gistBlocks = new Set(c.items.filter(i => i.t === 'gist').map(i => i.block))
+      const missingGist = gistBlocks.size === 0 || mark.gistParagraphs.some(p => !gistBlocks.has(c.chunk.blocks[p - 1].block))
+      const malformed = total === 0 || res.bad > 0 || (res.bad + stats.dropped) / total > 0.5
+      if (malformed || missingGist || (askGenre && fictionSeen === undefined)) {
+        if (attempt === 0) {
+          this.#controllers.delete(ctrl)
+          return this.#request(s, c, 1)
+        }
+        throw new DjError('http', 'Incomplete JSON analysis: missing valid paragraph gists or genre')
       }
+      if (fictionSeen !== undefined && this.fictionSource === 'default') this.#setModelVerdict(fictionSeen)
       c.status = 'done'
       c.model = res.model
       if (wantKw) {
@@ -477,6 +491,9 @@ export class DianjingEngine {
       } else if (err.code === 'offline') {
         this.status = 'offline'
         this.#queue = []
+      } else if (err.code === 'version' || err.code === 'config') {
+        this.status = 'error'
+        this.#discardQueuedRequests()
       } else this.status = 'error'
     } finally {
       this.#controllers.delete(ctrl)
@@ -569,6 +586,7 @@ export class DianjingEngine {
 
   #updateStatus() {
     if (!this.active) { this.status = 'idle'; return }
+    if (this.error?.code === 'version') { this.status = 'error'; return }
     if (this.status === 'quota' || this.status === 'offline') return
     const p = this.position
     const s = p ? this.sections.get(p.section) : [...this.sections.values()].find(x => x.rendered)
@@ -792,12 +810,9 @@ export class DianjingEngine {
     if (!keys.length && !gists.length) return
     const channel = this.host.channel()
     if (!channel) return
-    const keyList = keys.slice(0, 24)
-    const lines = [
-      ...(gists.length ? [this.host.uiLang() === 'en' ? 'Gists:' : '段意：', ...gists.slice(0, 40).map(g => `- ${g.text}`)] : []),
-      this.host.uiLang() === 'en' ? 'Key sentences:' : '要句：',
-      ...keyList.map((k, i) => `[${i + 1}] ${(s.model.sentenceTexts(k.block)[k.sentence] ?? '').slice(0, 200)}`),
-    ]
+    const source = buildSummarySource(gists.map(g => g.text), keys.map(k => s.model.sentenceTexts(k.block)[k.sentence] ?? ''))
+    const keyList = source.keyIndices.map(i => keys[i])
+    const pointIds = new Set<number>()
     s.summaryLoading = true
     let text = ''
     const points: PointItem[] = []
@@ -809,19 +824,27 @@ export class DianjingEngine {
       book: { title: book.title, author: book.author },
       chapter: this.host.chapterTitle(s.index),
       fiction: this.fiction,
-      text: lines.join('\n'),
+      text: source.text,
     }, channel, raw => {
       if (raw.t === 'sum' && typeof raw.text === 'string') text = raw.text.trim().slice(0, 400)
       if (raw.t === 'pt' && typeof raw.text === 'string') {
-        const k = keyList[Number(String(raw.s ?? '').replace(/\D/g, '')) - 1]
-        if (k && points.length < 5) points.push({ t: 'pt', block: k.block, sentence: k.sentence, text: raw.text.trim().slice(0, 90) })
+        const ref = String(raw.s ?? '').match(/^(?:([1-9]\d*)|\[([1-9]\d*)\])$/)
+        const id = Number(ref?.[1] ?? ref?.[2])
+        const k = keyList[id - 1]
+        if (!k || pointIds.has(id) || points.length >= 3 || !raw.text.trim()) throw new DjError('http', 'Invalid summary reference or point count')
+        pointIds.add(id)
+        points.push({ t: 'pt', block: k.block, sentence: k.sentence, text: raw.text.trim().slice(0, 90) })
       }
     }).then(async () => {
-      if (!text) return
+      if (!text) throw new DjError('http', 'Incomplete summary output')
       s.summary = { key: sectionKey(this.host.bookId, s.index, PROMPT_VERSION), bookId: this.host.bookId, section: s.index, basis: this.#basis(s), text, points, at: Date.now() }
       await this.cache.put('sections', s.summary).catch(() => {})
       this.host.onChange()
-    }).catch(() => { /* 要义失败不影响标记 */ }).finally(() => { s.summaryLoading = false })
+    }).catch(e => {
+      this.error = e instanceof DjError ? e : new DjError('http', String(e))
+      if (this.error.code === 'version') { this.status = 'error'; this.#discardQueuedRequests() }
+      this.host.onChange()
+    }).finally(() => { s.summaryLoading = false })
   }
 
   /**
@@ -869,9 +892,12 @@ export class DianjingEngine {
       this.cache.listBook<ChunkRecord>('chunks', this.host.bookId).catch(() => [] as ChunkRecord[]),
       this.cache.listBook<SectionSummary>('sections', this.host.bookId).catch(() => [] as SectionSummary[]),
     ])
-    // 上一版的块 (没有重点词) 照样用于脉络 / 速读; 同一块两版都有时调用方按时间取新的
+    // 脉络也必须遵守当前版本，不能经另一入口重新载入已失效的旧要义。
     const versions = new Set([PROMPT_VERSION, ...LEGACY_PROMPT_VERSIONS])
-    return { chunks: chunks.filter(c => versions.has(c.promptVersion)), sections }
+    return {
+      chunks: chunks.filter(c => versions.has(c.promptVersion)),
+      sections: sections.filter(s => s.key === sectionKey(this.host.bookId, s.section, PROMPT_VERSION)),
+    }
   }
 
   /** 重新点睛本章: 删掉内存结果, 重新请求 (缓存会被新结果覆盖) */

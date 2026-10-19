@@ -1,6 +1,6 @@
 [package]
 name = "pagewise"
-version = "1.15.0"
+version = "1.1.0"
 description = "面向文石 Note X3 Pro 的个人 EPUB 阅读器。专注阅读，随页理解。"
 authors = ["云中江树"]
 license = "AGPL-3.0-or-later"

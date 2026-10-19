@@ -1,7 +1,7 @@
 {
   "name": "pagewise",
   "private": true,
-  "version": "1.15.0",
+  "version": "1.1.0",
   "type": "module",
   "scripts": {
     "dev": "vite --configLoader runner",
@@ -23,6 +23,7 @@
     "android:prepare": "node scripts/prepare-android-project.mjs",
     "android:dev": "node scripts/prepare-android-project.mjs && tauri android dev",
     "android:build": "node scripts/prepare-android-project.mjs && tauri android build --apk --target aarch64 --debug",
+    "android:build:release": "node scripts/prepare-android-project.mjs && tauri android build --apk --target aarch64",
     "test:android-only": "node --experimental-strip-types --test scripts/test-android-only.mjs",
     "e2e": "node scripts/e2e-android-preview.mjs",
     "e2e:epub-compat": "node scripts/e2e-epub-compat.mjs",
@@ -33,6 +34,8 @@
     "test:listen-eta": "node --experimental-strip-types --test scripts/test-listen-eta.mjs",
     "test:read-aloud": "node --experimental-strip-types --test scripts/test-read-aloud.mjs scripts/test-listen-player.mjs scripts/test-voice-catalog.mjs",
     "test:dianjing": "node --experimental-strip-types --test scripts/test-dianjing.mjs",
+    "test:native-back": "node --experimental-strip-types --test scripts/test-native-reader-back.mjs scripts/test-native-back-pages.mjs",
+    "test:system-tts": "node --experimental-strip-types --test scripts/test-system-tts.mjs scripts/test-system-tts-runtime.mjs scripts/test-system-tts-player.mjs scripts/test-native-speech-session.mjs scripts/test-native-speech-callers.mjs",
     "test:ambient-usage-removal": "node --experimental-strip-types --test scripts/test-ambient-usage-removal.mjs scripts/test-reader-more-browser.mjs",
     "test:menu-icons": "node --experimental-strip-types --test --test-concurrency=1 scripts/test-menu-icons.mjs scripts/test-ui-label-visibility.mjs scripts/test-v03-retirement.mjs",
     "test:typography-auto": "node --experimental-strip-types --test --test-concurrency=1 scripts/test-reader-typography.mjs scripts/test-reader-panels.mjs scripts/test-typography-auto.mjs scripts/test-typography-auto-browser.mjs",

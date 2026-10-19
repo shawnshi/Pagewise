@@ -457,6 +457,9 @@ const fakeSynth = `(text) => {
   return Promise.resolve().then(() => env.synth(text)).finally(() => { env.inFlight-- })
 }`
 const mocks = {
+  vue: 'export const reactive = value => value',
+  '@tauri-apps/api/core': 'export const invoke = () => Promise.reject(new Error("unexpected native command"))',
+  '../storage': 'export const isTauri = () => false',
   '../stores/settings': 'export const useSettings = () => globalThis.__listenEnv.settings',
   './toast': 'export const toast = (...args) => { globalThis.__listenEnv.notices.push(args); return () => {} }',
   '../i18n': 'export const t = key => key',

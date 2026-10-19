@@ -6,6 +6,7 @@
  * 输出: 按段聚合的块 (不跨节、段落完整), 每块带编号后的文本和内容 hash。
  * 块边界只取决于各段长度, 与从哪里打开无关 —— 同一节每次切出相同的块, 缓存才能命中。
  */
+import { MAX_CHUNK_CHARS } from './prompt.ts'
 
 export interface SectionBlock {
   /** 本节内的段序号 (与 SentenceCursor 的 block 相同) */
@@ -86,7 +87,7 @@ function splitLongBlock(b: SectionBlock, max: number): Array<SectionBlock & { of
   let offset = 0
   b.sentences.forEach((s, i) => {
     const l = visibleLen(s)
-    if (cur.length && len + l > max) {
+    if (cur.length && (len + l > max || numberBlocks([{ block: b.block, sentences: [...cur, s] }]).length > MAX_CHUNK_CHARS)) {
       out.push({ block: b.block, sentences: cur, offset })
       offset = i
       cur = []
@@ -117,7 +118,7 @@ export function chunkSection(blocks: SectionBlock[], opts: ChunkOptions = {}): C
   for (const b of blocks) {
     if (!b.sentences.length) continue
     const len = b.sentences.reduce((n, s) => n + visibleLen(s), 0)
-    if (len > max) pieces.push(...splitLongBlock(b, target))
+    if (len > max || numberBlocks([b]).length > MAX_CHUNK_CHARS) pieces.push(...splitLongBlock(b, target))
     else pieces.push(b)
   }
   const groups: ChunkBlock[][] = []
@@ -126,7 +127,7 @@ export function chunkSection(blocks: SectionBlock[], opts: ChunkOptions = {}): C
   for (const p of pieces) {
     const l = p.sentences.reduce((n, s) => n + visibleLen(s), 0)
     const goal = groups.length === 0 ? first : target
-    if (cur.length && (len + l > max || len >= goal)) {
+    if (cur.length && (len + l > max || len >= goal || numberBlocks([...cur, p]).length > MAX_CHUNK_CHARS)) {
       groups.push(cur)
       cur = []
       len = 0
@@ -137,7 +138,7 @@ export function chunkSection(blocks: SectionBlock[], opts: ChunkOptions = {}): C
   if (cur.length) {
     const prev = groups[groups.length - 1]
     const prevLen = prev ? prev.reduce((n, p) => n + p.sentences.reduce((m, s) => m + visibleLen(s), 0), 0) : 0
-    if (prev && len < CHUNK_MIN_TAIL && prevLen + len <= max) prev.push(...cur)
+    if (prev && len < CHUNK_MIN_TAIL && prevLen + len <= max && numberBlocks([...prev, ...cur]).length <= MAX_CHUNK_CHARS) prev.push(...cur)
     else groups.push(cur)
   }
   return groups.map((g, i) => makeChunk(i, g))

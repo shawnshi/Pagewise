@@ -29,43 +29,61 @@ export function quotaDay(now = Date.now()) {
 }
 
 /**
- * 上游 SSE → NDJSON: 抽出 delta.content, 按行切分, 只转发像 JSON 对象的行 (去掉代码块围栏等)。
- * 返回累计输出文本 (成本估算用)。
+ * 上游 SSE → NDJSON，返回累计文本；onText 在失败前也能记录已产生的用量。
+ * 完成信号缺失、长度截断、坏 JSON 或下游写入失败必须穿透为错误。
  */
-export async function sseToNdjson(readable, write) {
+export async function sseToNdjson(readable, write, onText) {
   const reader = readable.getReader()
   const decoder = new TextDecoder()
-  let sse = ''
-  let line = ''
-  let output = ''
+  let sse = '', line = '', output = '', completed = false, finishReason = null
+  const emitLine = part => {
+    const t = part.trim().replace(/^-\s*/, '').replace(/,$/, '')
+    if (!t || t.startsWith('```')) return
+    let value
+    try { value = JSON.parse(t) } catch (cause) { throw new Error('Invalid NDJSON frame', { cause }) }
+    if (!value || typeof value !== 'object' || Array.isArray(value)) throw new Error('Invalid NDJSON object')
+    write(t + '\n')
+  }
   const emit = text => {
     output += text
+    onText?.(text)
     line += text
     const parts = line.split('\n')
     line = parts.pop() ?? ''
-    for (const p of parts) {
-      const t = p.trim()
-      if (t.startsWith('{') && t.endsWith('}')) write(t + '\n')
-    }
+    parts.forEach(emitLine)
   }
-  for (;;) {
-    const { done, value } = await reader.read()
-    if (done) break
-    sse += decoder.decode(value, { stream: true })
+  const feed = text => {
+    sse += text
     const events = sse.split('\n')
     sse = events.pop() ?? ''
     for (const ev of events) {
       const t = ev.trim()
       if (!t.startsWith('data:')) continue
       const payload = t.slice(5).trim()
-      if (payload === '[DONE]') continue
-      try {
-        const c = JSON.parse(payload)?.choices?.[0]?.delta?.content
-        if (typeof c === 'string' && c) emit(c)
-      } catch { /* 心跳 */ }
+      if (payload === '[DONE]') { completed = true; continue }
+      if (!payload) continue
+      let value
+      try { value = JSON.parse(payload) } catch (cause) { throw new Error('Invalid SSE JSON frame', { cause }) }
+      if (value?.error) throw new Error('Provider stream returned an error')
+      const choice = value?.choices?.[0]
+      if (typeof choice?.finish_reason === 'string') finishReason = choice.finish_reason
+      const c = choice?.delta?.content ?? choice?.message?.content
+      if (typeof c === 'string' && c) emit(c)
     }
   }
-  const t = line.trim()
-  if (t.startsWith('{') && t.endsWith('}')) write(t + '\n')
-  return output
+  try {
+    for (;;) {
+      const { done, value } = await reader.read()
+      if (done) break
+      feed(decoder.decode(value, { stream: true }))
+    }
+    feed(decoder.decode() + '\n')
+    if (finishReason && finishReason !== 'stop') throw new Error(`Incomplete SSE output: ${finishReason}`)
+    if (!completed && finishReason !== 'stop') throw new Error('Incomplete SSE output: truncated before completion')
+    emitLine(line)
+    return output
+  } finally {
+    try { await reader.cancel() } catch { /* Cleanup cannot hide the original stream failure. */ }
+    reader.releaseLock()
+  }
 }

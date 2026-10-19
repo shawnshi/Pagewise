@@ -87,6 +87,7 @@ export class NdjsonParser {
 export class SseDeltaParser {
   #buf = ''
   done = false
+  finishReason: string | null = null
 
   feed(text: string): string {
     this.#buf += text
@@ -98,13 +99,23 @@ export class SseDeltaParser {
       if (!t.startsWith('data:')) continue
       const payload = t.slice(5).trim()
       if (payload === '[DONE]') { this.done = true; continue }
-      try {
-        const j = JSON.parse(payload)
-        const c = j?.choices?.[0]?.delta?.content ?? j?.choices?.[0]?.message?.content
-        if (typeof c === 'string') out += c
-      } catch { /* 心跳 / 注释 */ }
+      if (!payload) continue
+      let j: any
+      try { j = JSON.parse(payload) } catch (cause) { throw new Error('Invalid SSE JSON frame', { cause }) }
+      if (j?.error) throw new Error('Provider stream returned an error')
+      const choice = j?.choices?.[0]
+      if (typeof choice?.finish_reason === 'string') this.finishReason = choice.finish_reason
+      const c = choice?.delta?.content ?? choice?.message?.content
+      if (typeof c === 'string') out += c
     }
     return out
+  }
+
+  finish(): string {
+    const tail = this.feed('\n')
+    if (this.finishReason && this.finishReason !== 'stop') throw new Error(`Incomplete SSE output: ${this.finishReason}`)
+    if (!this.done && this.finishReason !== 'stop') throw new Error('Incomplete SSE output: truncated before completion')
+    return tail
   }
 }
 
@@ -181,7 +192,10 @@ export function chunkPlainText(chunk: Chunk): string {
 export function resolveItem(raw: RawItem, chunk: Chunk, stats?: ResolveStats): AnyItem | null {
   const drop = () => { if (stats) stats.dropped++; return null }
   const t = raw.t
-  if (t === 'meta') return { t: 'meta', fiction: raw.fiction === true || raw.fiction === 'true' }
+  if (t === 'meta') {
+    if (![true, false, 'true', 'false'].includes(raw.fiction as boolean | string)) return drop()
+    return { t: 'meta', fiction: raw.fiction === true || raw.fiction === 'true' }
+  }
   if (t === 'sum') {
     const text = str(raw.text, LIMITS.sum)
     return text ? { t: 'sum', text } : drop()

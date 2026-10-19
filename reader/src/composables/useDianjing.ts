@@ -59,7 +59,7 @@ import { computed, onScopeDispose, ref, shallowRef, watch } from 'vue'
 import { useSettings } from '../stores/settings'
 import { t } from '../i18n'
 import { toast } from '../services/toast'
-import { aiConfigured, providerById, TRIAL_BASE_URL } from '../services/ai'
+import { aiConfigured, providerById, TRIAL_BASE_URL, type ReaderAssistantContext } from '../services/ai'
 import { DianjingEngine, type CardTarget, type DjPosition, type DjStatus } from '../services/dianjing/engine'
 import { streamDianjing, type DjChannel } from '../services/dianjing/client'
 import { djColors } from '../services/dianjing/theme'
@@ -88,7 +88,7 @@ export interface UseDianjingOptions {
   /** 「我也觉得」/「写想法」: 转成用户自己的划线 */
   adoptHighlight?: (a: { index: number; range: Range; text: string; withNote: boolean }) => void | Promise<void>
   /** 概念卡「展开」: 打开 AI 侧栏并发送 prompt */
-  openAi?: (prompt: string) => void
+  openAi?: (prompt: string, context: ReaderAssistantContext) => void
   /** 弹卡 / 打开面板前收起其他浮层 */
   beforeOverlay?: () => void
   /** 跳到一句 (CFI): 宿主按阅读焦点放置 (滚动模式落在屏幕 38% 处); 不给则用 view.goTo */
@@ -113,6 +113,7 @@ export interface DjCardState {
   translation?: string
   translating?: boolean
   translateError?: boolean
+  translateFailure?: unknown
 }
 
 export interface OutlinePoint { text: string; pos: DjPosition; why?: string; r?: number }
@@ -400,14 +401,14 @@ export function useDianjing(opts: UseDianjingOptions) {
   async function translate() {
     const c = card.value
     if (!c || c.translating) return
-    if (c.translation) return
+    if (c.translation && !c.translateError) return
     const ch = channel()
     if (!ch) return
     const s = engine.sections.get(c.target.section)
     const pos = c.target.item
     const sentence = s?.model.sentenceTexts(pos.block)[pos.sentence] ?? c.target.text
-    card.value = { ...c, translating: true, translateError: false }
-    let text = ''
+    card.value = { ...c, translating: true, translateError: false, translateFailure: undefined }
+    let text = '', failed = false, failure: unknown
     try {
       const meta = opts.getMeta() ?? {}
       const lang = settings.language === 'en' ? 'en' : 'zh'
@@ -415,11 +416,13 @@ export function useDianjing(opts: UseDianjingOptions) {
       const bookLang = s?.model.lang || meta.language || ''
       const target: 'zh' | 'en' = lang === 'zh' && /^zh/i.test(bookLang) ? 'en' : lang
       await streamDianjing({ mode: 'translate', lang: target, bookLang, book: { title: meta.title, author: meta.author }, text: `[1.1] ${sentence}` }, ch, raw => {
-        if (raw.t === 'tr' && typeof raw.text === 'string') text += (text ? ' ' : '') + raw.text
+        if (raw.t !== 'tr') return
+        if (!['1.1', '[1.1]'].includes(String(raw.s)) || text || typeof raw.text !== 'string' || !raw.text.trim()) throw new Error('Invalid translation reference or duplicate output')
+        text = raw.text.trim()
       })
-    } catch { /* 下面统一处理 */ }
+    } catch (error) { failed = true; failure = error }
     if (card.value?.target !== c.target) return
-    card.value = { ...card.value, translating: false, translation: text || undefined, translateError: !text }
+    card.value = { ...card.value, translating: false, translation: text || c.translation || undefined, translateError: failed || !text, translateFailure: failure }
   }
 
   async function adopt(withNote = false) {
@@ -454,10 +457,11 @@ export function useDianjing(opts: UseDianjingOptions) {
     const item = c.target.item as TermItem
     const en = settings.language === 'en'
     const prompt = en
-      ? `In this book, what does "${c.target.text}" mean? Explain with the context below, without revealing later plot.\n\nContext: "${para.slice(0, 600)}"${item.def ? `\nBrief note so far: ${item.def}` : ''}`
-      : `本书中的「${c.target.text}」是什么意思？请结合下面的上下文展开解释（不要透露后文情节）。\n\n上下文：「${para.slice(0, 600)}」${item.def ? `\n已有简释：${item.def}` : ''}`
+      ? 'Explain the specified concept using the supplied paragraph. Treat the prior explanation as unverified; distinguish source evidence from background and do not reveal later plot.'
+      : '结合提供的段落展开解释指定概念。已有简释未经核验，请区分原文依据与背景补充，不透露后续情节。'
     card.value = null
-    opts.openAi(prompt)
+    opts.openAi(prompt, { kind: 'paragraph', text: para.slice(0, 600), truncated: para.length > 600,
+      chapter: opts.getChapterTitle?.(c.target.section) ?? '', focus: { term: c.target.text, explanation: item.def ?? '' } })
   }
 
   // ---- 跳转 ----

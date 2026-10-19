@@ -1,7 +1,7 @@
 import type { ReadingStatus } from '../storage/types.ts'
 import { normalizeReadingStatus } from './readingStatus.ts'
 import { normalizeAvailability, type AvailabilityFilter } from './bookAvailability.ts'
-import { queryLibraryBooks, type LibraryQueryBook, type LibraryQueryOptions, type LibraryQueryResult } from './libraryQuery.ts'
+import { queryLibraryBooks, filterLibraryBooks, compareLibraryBooks, compare, type LibraryQueryBook, type LibraryQueryOptions, type LibraryQueryResult } from './libraryQuery.ts'
 
 export type LibrarySortBy = 'recent' | 'added' | 'title' | 'author' | 'progress'
 
@@ -164,14 +164,25 @@ export function sanitizeSessionState(raw: unknown, allowReturn = true): LibraryS
 /** Keep the user's result order while reading changes lastReadAt; refreshed metadata and predicates still apply. */
 export function queryLibrarySession<T extends LibraryQueryBook>(books: readonly T[], options: LibraryQueryOptions, orderedIds?: readonly string[]): LibraryQueryResult<T> {
   if (!orderedIds?.length) return queryLibraryBooks(books, options)
-  const all = queryLibraryBooks(books, { ...options, page: 1, pageSize: Number.MAX_SAFE_INTEGER })
+  const selected = filterLibraryBooks(books, options)
   const rank = new Map(orderedIds.map((id, index) => [id, index]))
-  all.items.sort((a, b) => (rank.get(a.id) ?? Number.MAX_SAFE_INTEGER) - (rank.get(b.id) ?? Number.MAX_SAFE_INTEGER))
+  selected.sort((a, b) => {
+    const rankA = rank.get(a.id)
+    const rankB = rank.get(b.id)
+    if (rankA !== undefined && rankB !== undefined) {
+      return (rankA - rankB) || compare(a.id, b.id)
+    }
+    if (rankA !== undefined) return -1
+    if (rankB !== undefined) return 1
+    return compareLibraryBooks(a, b, options) || compare(a.id, b.id)
+  })
   const pageSize = Number.isFinite(options.pageSize) ? Math.max(1, Math.min(Number.MAX_SAFE_INTEGER, Math.trunc(options.pageSize!))) : 12
-  const totalPages = Math.ceil(all.total / pageSize)
+  const total = selected.length
+  const totalPages = Math.ceil(total / pageSize)
   const requestedPage = Number.isFinite(options.page) ? Math.max(1, Math.trunc(options.page!)) : 1
   const page = Math.min(requestedPage, Math.max(1, totalPages))
-  return { items: all.items.slice((page - 1) * pageSize, page * pageSize), total: all.total, totalPages, page, pageSize }
+  const start = (page - 1) * pageSize
+  return { items: selected.slice(start, start + pageSize), total, totalPages, page, pageSize }
 }
 
 /**

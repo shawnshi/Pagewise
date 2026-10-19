@@ -11,6 +11,7 @@
 import { init, type WrappedPdfiumModule } from '@embedpdf/pdfium'
 import wasmUrl from '@embedpdf/pdfium/pdfium.wasm?url'
 import { isMathChar, type TextItem } from './paperText'
+import { PdfByteLru, PDF_GEOMETRY_BYTES } from './pdfResources'
 
 let modPromise: Promise<WrappedPdfiumModule> | null = null
 
@@ -85,7 +86,7 @@ export class PdfiumDoc {
   private m: WrappedPdfiumModule
   private doc = 0
   private filePtr = 0
-  private textCache = new Map<number, TextModel>()
+  private textCache = new PdfByteLru<number, TextModel>(PDF_GEOMETRY_BYTES)
 
   private constructor(m: WrappedPdfiumModule) {
     this.m = m
@@ -193,8 +194,24 @@ export class PdfiumDoc {
     m.FPDFText_ClosePage(tp)
     m.FPDF_ClosePage(page)
     const model: TextModel = { count, codes, boxes, sizes, lines: buildLines(codes, boxes) }
-    this.textCache.set(pageIdx, model)
+    this.textCache.set(pageIdx, model, 256 + codes.byteLength + boxes.byteLength + sizes.byteLength + model.lines.length * 64)
     return model
+  }
+
+  /** Search retains no geometry for non-matching pages; indexes stay PDFium character indexes. */
+  pageCodes(pageIdx: number): Uint32Array {
+    const m = this.m
+    const page = m.FPDF_LoadPage(this.doc, pageIdx)
+    if (!page) throw new Error('PDF page extraction failed')
+    const tp = m.FPDFText_LoadPage(page)
+    if (!tp) { m.FPDF_ClosePage(page); throw new Error('PDF text extraction failed') }
+    try {
+      const count = m.FPDFText_CountChars(tp)
+      if (count < 0) throw new Error('PDF character extraction failed')
+      const codes = new Uint32Array(count)
+      for (let i = 0; i < count; i++) codes[i] = m.FPDFText_GetUnicode(tp, i)
+      return codes
+    } finally { m.FPDFText_ClosePage(tp); m.FPDF_ClosePage(page) }
   }
 
   /** 文档元数据 (Title / Author 等) */
@@ -222,9 +239,12 @@ export class PdfiumDoc {
   pagePlainText(pageIdx: number): string {
     const m = this.m
     const page = m.FPDF_LoadPage(this.doc, pageIdx)
+    if (!page) throw new Error('PDF page extraction failed')
     const textPage = m.FPDFText_LoadPage(page)
+    if (!textPage) { m.FPDF_ClosePage(page); throw new Error('PDF text extraction failed') }
     try {
-      const count = Math.max(0, m.FPDFText_CountChars(textPage))
+      const count = m.FPDFText_CountChars(textPage)
+      if (count < 0) throw new Error('PDF character extraction failed')
       let text = ''
       for (let index = 0; index < count; index += 1) {
         const code = m.FPDFText_GetUnicode(textPage, index)

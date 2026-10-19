@@ -63,8 +63,8 @@ export async function readBookMetadata(file: File, format: BookFormat | null = d
     } finally { doc.close() }
   }
   if (isTextLike(format)) {
-    const { convertToEpub } = await import('./textToEpub')
-    const { title } = await convertToEpub(file, file.name, format as 'txt' | 'md')
+    const { readTextTitle } = await import('./textToEpub')
+    const title = await readTextTitle(file, file.name, format as 'txt' | 'md')
     return { ...base, title }
   }
   throw new Error('不支持的格式')

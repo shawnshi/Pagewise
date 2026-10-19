@@ -4,10 +4,10 @@
  */
 import { fetchRemote } from '../net'
 import { TRIAL_BASE_URL, trialDeviceId } from '../ai'
-import { buildChatBody, DJ_MODEL, PROMPT_VERSION, type DjRequest } from './prompt.ts'
+import { buildChatBody, planMarkInput, MAX_CHUNK_CHARS, DJ_MODEL, PROMPT_VERSION, type DjRequest } from './prompt.ts'
 import { NdjsonParser, SseDeltaParser, type RawItem } from './protocol.ts'
 
-export type DjErrorCode = 'quota' | 'budget' | 'offline' | 'auth' | 'http' | 'aborted' | 'config'
+export type DjErrorCode = 'quota' | 'budget' | 'offline' | 'auth' | 'http' | 'aborted' | 'config' | 'version'
 
 export class DjError extends Error {
   code: DjErrorCode
@@ -74,16 +74,19 @@ async function pump(res: Response, onText: (s: string) => void, signal?: AbortSi
     return
   }
   const decoder = new TextDecoder()
-  for (;;) {
-    if (signal?.aborted) {
-      try { await reader.cancel() } catch { /* 已关闭 */ }
-      throw new DjError('aborted', 'aborted')
+  try {
+    for (;;) {
+      if (signal?.aborted) throw new DjError('aborted', 'aborted')
+      const { done, value } = await reader.read()
+      if (signal?.aborted) throw new DjError('aborted', 'aborted')
+      if (done) break
+      onText(decoder.decode(value, { stream: true }))
     }
-    const { done, value } = await reader.read()
-    if (done) break
-    onText(decoder.decode(value, { stream: true }))
+    onText(decoder.decode())
+  } finally {
+    try { await reader.cancel() } catch { /* Cleanup cannot hide the stream failure. */ }
+    reader.releaseLock()
   }
-  onText(decoder.decode())
 }
 
 /**
@@ -97,9 +100,17 @@ export async function streamDianjing(
   signal?: AbortSignal,
 ): Promise<DjStreamResult> {
   const parser = new NdjsonParser()
-  const body: DjRequest = { ...req, promptVersion: PROMPT_VERSION }
   try {
+    const text = String(req.text ?? '')
+    if (text.length > MAX_CHUNK_CHARS) throw new DjError('http', `Reading source exceeds the ${MAX_CHUNK_CHARS}-character limit`)
+    const body: DjRequest = { ...req, text: req.mode === 'mark' ? planMarkInput(text).text : text, promptVersion: PROMPT_VERSION }
     if (channel.kind === 'builtin') {
+      // Capability discovery carries no document/device data and avoids billed POSTs to an old relay.
+      const metadata = await fetchRemote(channel.baseUrl.trim().replace(/\/+$/, '') + '/models', undefined, {
+        method: 'GET', headers: { accept: 'application/json' }, signal, raw: true,
+      })
+      if (!metadata.ok) throw await readError(metadata)
+      if ((await metadata.json())?.dianjingPromptVersion !== PROMPT_VERSION) throw new DjError('version', 'Built-in reading service revision is missing or outdated; update the relay')
       const res = await fetchRemote(DJ_ENDPOINT(channel.baseUrl), undefined, {
         method: 'POST',
         headers: {
@@ -112,10 +123,15 @@ export async function streamDianjing(
         raw: true,
       })
       if (!res.ok) throw await readError(res)
+      if (res.headers.get('x-dj-prompt-version') !== PROMPT_VERSION) {
+        try { await res.body?.cancel() } catch { /* Keep the revision failure as the primary error. */ }
+        throw new DjError('version', 'Built-in reading response revision is missing or outdated; update the relay')
+      }
       const model = res.headers.get('x-dj-model') || DJ_MODEL
       const rem = Number(res.headers.get('x-dj-remaining'))
       await pump(res, s => { for (const it of parser.feed(s)) onItem(it) }, signal)
       for (const it of parser.flush()) onItem(it)
+      if (parser.bad) throw new DjError('http', 'Invalid or incomplete NDJSON output')
       return { model, remaining: Number.isFinite(rem) ? rem : undefined, good: parser.good, bad: parser.bad }
     }
     const base = channel.baseUrl.trim().replace(/\/+$/, '')
@@ -135,11 +151,15 @@ export async function streamDianjing(
     if (!res.ok) throw await readError(res)
     if ((res.headers.get('content-type') ?? '').includes('application/json')) {
       const j = await res.json()
+      const reason = j?.choices?.[0]?.finish_reason
+      if (reason && reason !== 'stop') throw new DjError('http', `Incomplete output: ${reason}`)
       for (const it of parser.feed(String(j?.choices?.[0]?.message?.content ?? ''))) onItem(it)
     } else {
       await pump(res, s => { for (const it of parser.feed(sse.feed(s))) onItem(it) }, signal)
+      for (const it of parser.feed(sse.finish())) onItem(it)
     }
     for (const it of parser.flush()) onItem(it)
+    if (parser.bad) throw new DjError('http', 'Invalid or incomplete NDJSON output')
     return { model: channel.model, good: parser.good, bad: parser.bad }
   } catch (e) {
     throw classify(e)

@@ -61,13 +61,14 @@ const statusText = computed(() => {
     case 'offline': return t('dianjing.statusOffline')
     case 'unsupported': return t('dianjing.unsupported')
     case 'error':
+      if (code === 'version') return t('dianjing.statusVersion')
       if (code === 'config') return t('dianjing.statusConfig')
       if (code === 'auth') return t('dianjing.statusAuth')
       return t('dianjing.statusError')
     default: return ''
   }
 })
-const needsSettings = computed(() => status.value === 'quota' || (status.value === 'error' && ['config', 'auth'].includes(props.dj.errorCode.value ?? '')))
+const needsSettings = computed(() => status.value === 'quota' || (status.value === 'error' && ['config', 'auth', 'version'].includes(props.dj.errorCode.value ?? '')))
 /** 智能版眼下用不了 (额度、配置、密钥、离线): 给一步换成基础版 */
 const offerBasic = computed(() => needsSettings.value || status.value === 'offline')
 
