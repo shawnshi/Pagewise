@@ -1,17 +1,19 @@
 /**
- * 伴读的两个版本 (docs/manual/05-点睛阅读.md):
+ * 伴读的两个版本 (docs/manual/05-伴读.md):
  *   基础版 (basic): 按词分色, 不联网 —— 全局开关, 即 settings.readingMode.wordGuide.enabled;
  *   智能版 (smart): AI 先读一遍点出概念与要句 —— 沿用原伴读的按书开关 (perBook / consentAll + enabled)。
- * settings.dianjing.level 记住读者选的版本 (随同步); 「伴读开着」= 所选版本开着。
+ * settings.pagewiseCompanion.level 记住读者选的版本 (随同步); 「伴读开着」= 所选版本开着。
  * 两个版本不会同时生效: 未选中的那个即使底层开关还是 true 也不画。
  */
-export type DjLevel = 'basic' | 'smart'
+import { readCompanionPreferences } from './compatibility.ts'
 
-export const DJ_LEVELS: readonly DjLevel[] = ['basic', 'smart']
-export const DJ_LEVEL_DEFAULT: DjLevel = 'basic'
+export type CompanionLevel = 'basic' | 'smart'
 
-export function normalizeLevel(v: unknown): DjLevel {
-  return v === 'smart' || v === 'basic' ? v : DJ_LEVEL_DEFAULT
+export const COMPANION_LEVELS: readonly CompanionLevel[] = ['basic', 'smart']
+export const COMPANION_LEVEL_DEFAULT: CompanionLevel = 'basic'
+
+export function normalizeLevel(v: unknown): CompanionLevel {
+  return v === 'smart' || v === 'basic' ? v : COMPANION_LEVEL_DEFAULT
 }
 
 interface SmartPrefs {
@@ -22,17 +24,19 @@ interface SmartPrefs {
 
 /** 智能版在这本书上是否开着 (不看所选版本) */
 export function smartOnFor(prefs: SmartPrefs | undefined, bookId: string): boolean {
-  const per = prefs?.perBook?.[bookId]
-  return per ?? (!!prefs?.consentAll && !!prefs?.enabled)
+  // Read before checking ownership so Vue tracks additions/deletions of a previously absent override.
+  const perBook = prefs?.perBook?.[bookId]
+  if (prefs?.perBook && Object.hasOwn(prefs.perBook, bookId)) return perBook === true
+  return prefs?.consentAll === true && prefs?.enabled === true
 }
 
 /** 两个版本各自是否生效 (同一时间至多一个) */
-export function effectiveLevels(s: { level: DjLevel; basicOn: boolean; smartOn: boolean }): { basic: boolean; smart: boolean } {
+export function effectiveLevels(s: { level: CompanionLevel; basicOn: boolean; smartOn: boolean }): { basic: boolean; smart: boolean } {
   return { basic: s.level === 'basic' && s.basicOn, smart: s.level === 'smart' && s.smartOn }
 }
 
 /** 伴读是否开着 (按所选版本) */
-export function dianjingOn(s: { level: DjLevel; basicOn: boolean; smartOn: boolean }): boolean {
+export function companionOn(s: { level: CompanionLevel; basicOn: boolean; smartOn: boolean }): boolean {
   const e = effectiveLevels(s)
   return e.basic || e.smart
 }
@@ -44,8 +48,8 @@ export function dianjingOn(s: { level: DjLevel; basicOn: boolean; smartOn: boole
  *   - 都没开 → 关着, 预选基础版 (打开即用)。
  * 选了智能版时把按词着色的旧开关关掉, 免得两份状态互相打架。
  */
-export function migrateLevel(saved: any): { level: DjLevel; wordGuideEnabled: boolean } {
-  const dj = saved?.dianjing && typeof saved.dianjing === 'object' ? saved.dianjing : {}
+export function migrateLevel(saved: any): { level: CompanionLevel; wordGuideEnabled: boolean } {
+  const dj = readCompanionPreferences(saved)
   const wordGuide = !!saved?.readingMode?.wordGuide?.enabled
   const smartAll = !!dj.consentAll && !!dj.enabled
   const smartSome = !!dj.perBook && typeof dj.perBook === 'object' && Object.values(dj.perBook).some(v => v === true)
@@ -68,8 +72,8 @@ export function savedBasicMark(v: unknown): BasicMark {
 }
 
 /** 开关相关的全部状态 (基础版开关 + 智能版的按书开关与「所有书」) */
-export interface DjSwitchState {
-  level: DjLevel
+export interface CompanionSwitchState {
+  level: CompanionLevel
   /** 基础版开关 (readingMode.wordGuide.enabled) */
   basicOn: boolean
   perBook: Record<string, boolean>
@@ -77,11 +81,11 @@ export interface DjSwitchState {
   enabled: boolean
 }
 
-export type DjAction =
+export type CompanionAction =
   /** 总开关 (面板开关、D 键): 按上次选的版本开 / 关 */
   | { kind: 'toggle' }
   /** 面板里的「基础 / 智能」: 开着时把「开」带到新版本, 关着时只记住选择 */
-  | { kind: 'setLevel'; level: DjLevel }
+  | { kind: 'setLevel'; level: CompanionLevel }
   /** 「先用基础版」: 换成基础版并开着 */
   | { kind: 'switchToBasic' }
   /** 智能版的同意说明: 仅本书 / 所有书 */
@@ -91,10 +95,11 @@ export type DjAction =
  * 伴读的开关状态机 (纯函数, usePagewiseCompanion 照它写回设置)。
  * needConsent: 要打开智能版但这本书还没同意过——先弹同意说明, 状态不变 (基础版开着就继续开着)。
  */
-export function applyDjAction(s: DjSwitchState, bookId: string, a: DjAction): { state: DjSwitchState; needConsent: boolean } {
-  const st: DjSwitchState = { ...s, perBook: { ...s.perBook } }
-  const hasConsent = st.consentAll || bookId in st.perBook
-  const isOn = dianjingOn({ level: st.level, basicOn: st.basicOn, smartOn: smartOnFor(st, bookId) })
+export function applyCompanionAction(s: CompanionSwitchState, bookId: string, a: CompanionAction): { state: CompanionSwitchState; needConsent: boolean } {
+  const st: CompanionSwitchState = { ...s, perBook: { ...s.perBook } }
+  const hasConsent = st.consentAll === true
+    || (Object.hasOwn(st.perBook, bookId) && typeof st.perBook[bookId] === 'boolean')
+  const isOn = companionOn({ level: st.level, basicOn: st.basicOn, smartOn: smartOnFor(st, bookId) })
   const done = () => ({ state: st, needConsent: false })
   const startSmart = () => {
     if (!hasConsent) return { state: s, needConsent: true }

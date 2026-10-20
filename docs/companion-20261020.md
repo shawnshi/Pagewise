@@ -21,11 +21,11 @@
 
 本轮没有数据迁移。以下标识有意保留：
 
-- 序列化设置 `settings.dianjing` 及其子字段。
+- 序列化设置 `settings.pagewiseCompanion` 及其子字段。
 - IndexedDB `lightread-dianjing`、原缓存键与版本，以及提示词版本 `dj3`。
 - 服务端 `/v1/dianjing`、`dianjingPromptVersion` 和 `x-dj-*` 协议。
 - 原高亮标识、正文 DOM、CFI 计算及持久化定位格式。
-- 既有 `npm run test:dianjing` 入口。
+- 既有 `npm run test:companion` 入口。
 
 未修改启动恢复策略、EPUB/PDF 边距政策、依赖版本或应用版本。源码仍为 1.2.0。没有暂存、提交、推送、APK 部署或 BOOX 设置变更；没有读取真实书库、账号或调用真实 AI 服务。
 

@@ -1,5 +1,5 @@
 /**
- * 叙事类 (小说等) 识别 (纯函数, docs/dianjing-reading.md §10 Q4 / reading-experience-plan Q9)。
+ * 叙事类 (小说等) 识别 (纯函数, docs/pagewise-companion.md §10 Q4 / reading-experience-plan Q9)。
  * 顺序: 用户手动设置 > 元数据 subject/标签 > 正文启发式 > 首块模型判断 (meta 行)。
  * 结果只决定防剧透规则 (R6): 释义、要义、脉络只用读者当前位置之前的内容。
  */

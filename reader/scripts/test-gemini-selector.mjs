@@ -16,7 +16,7 @@ test('selector renders localized labels, keyboard focus and isolated persistent 
     import AiProviderSelector from '/src/components/AiProviderSelector.vue';
     import { useSettings } from '/src/stores/settings.ts';
     if (!localStorage.getItem('lightread-settings')) localStorage.setItem('lightread-settings', JSON.stringify({
-      version: 14, aiProvider: 'siliconflow', aiBaseUrl: 'https://synthetic.invalid/v1',
+      version: 14, aiProvider: 'deepseek', aiBaseUrl: 'https://synthetic.invalid/v1',
       aiModel: 'synthetic-original', aiApiKey: 'synthetic-other-provider'
     }));
     const app = createApp({ setup() {
@@ -69,7 +69,7 @@ test('selector renders localized labels, keyboard focus and isolated persistent 
       await page.setViewportSize({ width, height: 900 })
       const control = page.getByLabel('AI 服务', { exact: true })
       assert.equal(await control.count(), 1)
-      assert.equal(await control.inputValue(), 'siliconflow')
+      assert.equal(await control.inputValue(), 'deepseek')
       assert.equal(await control.locator('option[value="gemini"]').innerText(), 'Google Gemini')
       const box = await control.boundingBox()
       assert.ok(box.height >= 48)
@@ -80,7 +80,7 @@ test('selector renders localized labels, keyboard focus and isolated persistent 
     assert.notEqual(await page.locator('#ai-provider').evaluate(el => getComputedStyle(el).outlineStyle), 'none')
     await page.selectOption('#ai-provider', 'gemini')
     assert.equal(await page.evaluate(() => window.__geminiStore.aiApiKey), '')
-    assert.equal(await page.evaluate(() => window.__geminiStore.aiModel), 'gemini-3.8-flash')
+    assert.equal(await page.evaluate(() => window.__geminiStore.aiModel), 'gemini-4-argon')
     assert.equal(await page.evaluate(() => window.__changes), 1)
     await page.evaluate(() => {
       window.__geminiStore.aiApiKey = 'synthetic-google-only'
@@ -88,7 +88,7 @@ test('selector renders localized labels, keyboard focus and isolated persistent 
       window.__geminiStore.language = 'en'
     })
     assert.equal(await page.getByLabel('AI service', { exact: true }).count(), 1)
-    await page.selectOption('#ai-provider', 'siliconflow')
+    await page.selectOption('#ai-provider', 'deepseek')
     assert.equal(await page.evaluate(() => window.__geminiStore.aiApiKey), 'synthetic-other-provider')
     assert.equal(await page.evaluate(() => window.__geminiStore.aiModel), 'synthetic-original')
     await page.waitForFunction(() => JSON.parse(localStorage.getItem('lightread-settings')).aiProfiles?.gemini?.model === 'synthetic-custom-gemini')

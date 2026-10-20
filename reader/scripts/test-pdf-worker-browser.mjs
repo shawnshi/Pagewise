@@ -139,7 +139,7 @@ test('production-built Worker: same full-DPR pixels as frozen baseline; responsi
 async function appFixture(mode = 'paged') {
   const ctx = await context(origin), initial = settingsDefaults()
   initial.pdf.renderer = 'mupdf'; initial.pdf.mode = mode; initial.reader.portraitScroll = false; initial.reader.flow = 'paginated'
-  await ctx.addInitScript(state => { localStorage.setItem('lightread-settings', JSON.stringify(state)); sessionStorage.setItem('lightread-dianjing-intro-seen', '1') }, initial)
+  await ctx.addInitScript(state => { localStorage.setItem('lightread-settings', JSON.stringify(state)) }, initial)
   const page = await ctx.newPage()
   await page.goto(`${origin}/#/library`)
   const id = await page.evaluate(async bytes => {

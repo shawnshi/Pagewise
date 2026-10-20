@@ -702,7 +702,12 @@ export default {
   'settings.importDone': "Imported {books} books, {annotations} notes and {sources} sources",
   'settings.navLabel': 'Settings sections',
   'settings.navReading': 'Reading',
-  'settings.aiModelLabel': "AI name",
+  'settings.aiModelLabel': 'Model',
+  'settings.aiModelDefault': 'Latest default',
+  'settings.aiSavedModel': 'Saved: {model}',
+  'settings.aiModelCatalog': 'Model catalog checked: {date}; availability depends on provider and account access',
+  'settings.aiChooseSupported': 'Choose a supported AI service',
+  'settings.aiRetiredProvider': 'The previous service is no longer selectable. Its configuration is retained. Choose a service and configure its own key; requests will not be rerouted automatically.',
   'settings.aiBaseUrlLabel': "Server address",
   'settings.aiEditBaseUrl': "Edit server address",
 

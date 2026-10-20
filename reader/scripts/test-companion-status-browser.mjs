@@ -149,7 +149,7 @@ try {
     await page.getByRole('button', { name: label, exact: true }).click()
     assert.equal(await page.evaluate(() => window.qa.calls.inspect), 1)
     const sourceText = await page.locator('.dj-card').innerText()
-    assert.equal(/companion\.|reader\.viewSource|reader\.analysisAvailable|点睛|Spotlight Reading/.test(sourceText), false)
+    assert.equal(/companion\.|reader\.viewSource|reader\.analysisAvailable|伴读|Spotlight Reading/.test(sourceText), false)
     await page.screenshot({ path: resolve(artifacts, `${stem}-short-card.png`) })
     await page.keyboard.press('Escape')
     assert.equal(await page.locator('.dj-card').count(), 0)

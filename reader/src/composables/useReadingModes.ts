@@ -25,7 +25,7 @@
  *   onReminder: () => { stopAutoRead() },           // 休息提醒出现时打字机已自动暂停
  * })
  * (按词着色是伴读的基础版: 开关由 usePagewiseCompanion 统一管理 (传入 basic: { isOn, set, supported }),
- *  这里只在 settings.dianjing.level 为 basic 时绘制, 与智能版天然互斥。)
+ *  这里只在 settings.pagewiseCompanion.level 为 basic 时绘制, 与智能版天然互斥。)
  * ```
  *
  * 1. applyPrefs():
@@ -702,7 +702,7 @@ export function useReadingModes(opts: UseReadingModesOptions) {
   /** 智能版在这本书上开着, 且标记里勾了重点词 */
   const smartKeyWords = computed(() => {
     const src = kwSource.value
-    const dj = settings.dianjing
+    const dj = settings.pagewiseCompanion
     return !!src && normalizeLevel(dj.level) === 'smart' && smartOnFor(dj, src.bookId) && dj.kinds?.kw !== false
   })
   /**
@@ -711,7 +711,7 @@ export function useReadingModes(opts: UseReadingModesOptions) {
    */
   const guideKind = computed<'off' | 'boundary' | 'keywords' | 'smart'>(() => {
     if (!supported.value || opts.presentationSuppressed?.()) return 'off'
-    const level = normalizeLevel(settings.dianjing.level)
+    const level = normalizeLevel(settings.pagewiseCompanion.level)
     if (level === 'basic') {
       if (!settings.readingMode.wordGuide.enabled) return 'off'
       return settings.readingMode.wordGuide.mark === 'keywords' && keyWordsSupported.value && kwSource.value ? 'keywords' : 'boundary'
@@ -761,7 +761,7 @@ export function useReadingModes(opts: UseReadingModesOptions) {
 
   function kwParams(doc: Document, section: number): { level: KwLevel; spoilerSafe: boolean; smart: KwSmartInput | null } {
     const src = kwSource.value
-    const d = settings.dianjing.density
+    const d = settings.pagewiseCompanion.density
     const level: KwLevel = d === 'low' || d === 'high' ? d : 'normal'
     return {
       level,
@@ -853,7 +853,7 @@ export function useReadingModes(opts: UseReadingModesOptions) {
     },
   )
   // 重点词: 密度档、体裁变了就重新取词
-  watch(() => [settings.dianjing.density, kwSource.value?.fiction()], () => refreshKeyWords())
+  watch(() => [settings.pagewiseCompanion.density, kwSource.value?.fiction()], () => refreshKeyWords())
 
   // =====================================================================
   // 休息提醒 (20-20-20) 与夜间定时

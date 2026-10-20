@@ -6,7 +6,7 @@
  */
 import { fetchRemote } from './net'
 import { useSettings } from '../stores/settings'
-import { AI_PROVIDERS, providerById, TRIAL_BASE_URL } from './aiProviders.ts'
+import { AI_PROVIDERS, compatibleChatBody, providerById, TRIAL_BASE_URL } from './aiProviders.ts'
 
 export { AI_PROVIDERS, providerById, TRIAL_BASE_URL } from './aiProviders.ts'
 export type { AiProviderPreset, AiProviderProfile } from './aiProviders.ts'
@@ -65,16 +65,16 @@ export async function* chatStream(
     headers: {
       'content-type': 'application/json',
       accept: 'text/event-stream, application/json',
-      ...(s.aiApiKey.trim() ? { authorization: `Bearer ${s.aiApiKey.trim()}` } : {}),
+      ...(preset.id !== 'trial' && s.aiApiKey.trim() ? { authorization: `Bearer ${s.aiApiKey.trim()}` } : {}),
       // 试用通道: 携带匿名设备标识用于每日配额
       ...(preset.id === 'trial' && s.aiBaseUrl.trim().replace(/\/+$/, '') === TRIAL_BASE_URL ? { 'x-device-id': deviceId() } : {}),
     },
-    body: JSON.stringify({
+    body: JSON.stringify(compatibleChatBody({
       model: s.aiModel.trim(),
       messages,
       stream: true,
       temperature: 0.6,
-    }),
+    })),
     signal,
     raw: true,
   })

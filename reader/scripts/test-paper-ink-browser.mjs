@@ -50,7 +50,7 @@ async function setup(lang, width) {
   initial.readingMode.eink.enabled = true
   initial.readingMode.eyeCare.dim = 30
   initial.readingMode.night = { ...initial.readingMode.night, schedule: true, from: '00:00', to: '23:59' }
-  await context.addInitScript(state => { if (!localStorage.getItem('lightread-settings')) localStorage.setItem('lightread-settings', JSON.stringify(state)); sessionStorage.setItem('lightread-dianjing-intro-seen', '1') }, initial)
+  await context.addInitScript(state => { if (!localStorage.getItem('lightread-settings')) localStorage.setItem('lightread-settings', JSON.stringify(state)) }, initial)
   const page = await context.newPage()
   page.on('pageerror', e => report.pageErrors.push(e.message))
   await page.goto(`${origin}/#/library`)

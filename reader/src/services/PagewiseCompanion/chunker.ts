@@ -1,5 +1,5 @@
 /**
- * 伴读的分块与编号 (纯函数, docs/dianjing-reading.md §6.1 §6.2)。
+ * 伴读的分块与编号 (纯函数, docs/pagewise-companion.md §6.1 §6.2)。
  *
  * 输入: 一节里各段 (block) 的句子文本 —— 段的切分与听书的 SentenceCursor 相同, 句子由 splitSentences 切出,
  * 所以 (block, sentence) 与听书的游标位置一一对应。

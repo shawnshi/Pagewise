@@ -1,6 +1,6 @@
 <script setup lang="ts">
 /**
- * 伴读, 放在「阅读模式」面板顶部 (docs/reader-panels.md §3.2, docs/manual/05-点睛阅读.md)。
+ * 伴读, 放在「阅读模式」面板顶部 (docs/reader-panels.md §3.2, docs/manual/05-伴读.md)。
  * 关: 标题 + 副标题 + 总开关。开: 「基础 / 智能」两个版本, 下面只显示所选版本的选项——
  *   基础 (不联网): 标出「词与词 / 重点词」, 重点词的标记多少, 明显程度、颜色;
  *   智能 (AI): 密度、标记、体裁、速读 / 脉络入口与本章状态; AI 用不了时可一步「先用基础版」。
@@ -13,7 +13,7 @@ import LevelSlider from './LevelSlider.vue'
 import { GUIDE_COLORS, GUIDE_COLOR_DEFAULT, WORD_GUIDE_MIN, WORD_GUIDE_STOPS, guideAccent, guideIntensity } from '../services/readingModes/wordGuideIntensity'
 import { READER_THEMES, resolveReaderTheme } from '../services/readerTheme'
 import { resolvedTheme } from '../services/appearance'
-import type { DjLevel } from '../services/PagewiseCompanion/level'
+import type { CompanionLevel } from '../services/PagewiseCompanion/level'
 
 const props = defineProps<{ dj: PagewiseCompanionController }>()
 const emit = defineEmits<{ 'open-settings': []; 'open-outline': []; 'open-skim': [] }>()
@@ -21,7 +21,7 @@ const emit = defineEmits<{ 'open-settings': []; 'open-outline': []; 'open-skim':
 const settings = useSettings()
 const on = computed(() => props.dj.on.value)
 const level = computed(() => props.dj.level.value)
-const levels: ReadonlyArray<{ value: DjLevel; key: string }> = [
+const levels: ReadonlyArray<{ value: CompanionLevel; key: string }> = [
   { value: 'basic', key: 'companion.levelBasic' },
   { value: 'smart', key: 'companion.levelSmart' },
 ]
@@ -73,7 +73,7 @@ const needsSettings = computed(() => status.value === 'quota' || (status.value =
 const offerBasic = computed(() => needsSettings.value || status.value === 'offline')
 
 const genre = computed({
-  get: () => settings.dianjing.fiction[props.dj.engine.host.bookId] ?? '',
+  get: () => settings.pagewiseCompanion.fiction[props.dj.engine.host.bookId] ?? '',
   set: (v: string) => props.dj.setFiction(v === 'fiction' || v === 'nonfiction' ? v : null),
 })
 const autoGenreLabel = computed(() =>
@@ -159,9 +159,9 @@ function openOutline() {
               v-for="d in densities"
               :key="d.value"
               type="button"
-              :class="{ active: settings.dianjing.density === d.value }"
-              :aria-pressed="settings.dianjing.density === d.value"
-              @click="settings.dianjing.density = d.value"
+              :class="{ active: settings.pagewiseCompanion.density === d.value }"
+              :aria-pressed="settings.pagewiseCompanion.density === d.value"
+              @click="settings.pagewiseCompanion.density = d.value"
             >{{ t(d.key) }}</button>
           </div>
         </div>
@@ -212,9 +212,9 @@ function openOutline() {
               v-for="d in densities"
               :key="d.value"
               type="button"
-              :class="{ active: settings.dianjing.density === d.value }"
-              :aria-pressed="settings.dianjing.density === d.value"
-              @click="settings.dianjing.density = d.value"
+              :class="{ active: settings.pagewiseCompanion.density === d.value }"
+              :aria-pressed="settings.pagewiseCompanion.density === d.value"
+              @click="settings.pagewiseCompanion.density = d.value"
             >{{ t(d.key) }}</button>
           </div>
         </div>
@@ -225,8 +225,8 @@ function openOutline() {
             <label v-for="k in kinds" :key="k.value" class="dj-kind" :class="'dj-kind-' + k.value">
               <input
                 type="checkbox"
-                :checked="settings.dianjing.kinds[k.value] !== false"
-                @change="settings.dianjing.kinds = { ...settings.dianjing.kinds, [k.value]: ($event.target as HTMLInputElement).checked }"
+                :checked="settings.pagewiseCompanion.kinds[k.value] !== false"
+                @change="settings.pagewiseCompanion.kinds = { ...settings.pagewiseCompanion.kinds, [k.value]: ($event.target as HTMLInputElement).checked }"
               />
               <span class="dj-kind-sample" aria-hidden="true" :style="k.value === 'kw' ? { '--sw': guideAccent(guideColor, swatchTheme) } : undefined"></span>
               <span>{{ t(k.key) }}</span>

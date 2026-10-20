@@ -39,9 +39,11 @@ function snapshot(dir) {
   }))
 }
 
-test('1.2 display names and canonical package versions are deterministic', () => {
-  assert.deepEqual(androidVariantMetadata('1.2.0'), { versionName: '1.2.0', versionCode: 1002000, releaseLabel: '知页 1.2', debugLabel: '知页 1.2 试版' })
-  assert.equal(androidVariantMetadata('1.2.3').debugLabel, '知页 1.2.3 试版')
+test('release keeps the product name and debug includes the complete package version', () => {
+  assert.deepEqual(androidVariantMetadata('1.4.0'), { versionName: '1.4.0', versionCode: 1004000, releaseLabel: '知页', debugLabel: '知页 1.4.0 测试版' })
+  assert.deepEqual(androidVariantMetadata('1.3.0'), { versionName: '1.3.0', versionCode: 1003000, releaseLabel: '知页', debugLabel: '知页 1.3.0 测试版' })
+  assert.deepEqual(androidVariantMetadata('1.2.0'), { versionName: '1.2.0', versionCode: 1002000, releaseLabel: '知页', debugLabel: '知页 1.2.0 测试版' })
+  assert.equal(androidVariantMetadata('1.3.2').debugLabel, '知页 1.3.2 测试版')
   for (const version of ['1.2', '01.2.0', '1.2.0-beta', '1.1000.0', '1.2.1000', '9999999.0.0', '0.0.0']) assert.throws(() => androidVariantMetadata(version))
 })
 
@@ -57,8 +59,8 @@ test('prepare uses variant overlays, preserves base branding and unrelated confi
     assert.match(currentGradle, /isMinifyEnabled = true/)
     const properties = readFileSync(join(f.base, propertiesPath), 'utf8')
     assert.match(properties, /versionName=1\.2\.0/); assert.match(properties, /versionCode=1002000/); assert.match(properties, /keep.unmanaged=yes/)
-    assert.match(readFileSync(join(app, 'src/debug/res/values/pagewise_variant.xml'), 'utf8'), />知页 1\.2 试版</)
-    assert.match(readFileSync(join(app, 'src/release/res/values/pagewise_variant.xml'), 'utf8'), />知页 1\.2</)
+    assert.match(readFileSync(join(app, 'src/debug/res/values/pagewise_variant.xml'), 'utf8'), />知页 1\.2\.0 测试版</)
+    assert.match(readFileSync(join(app, 'src/release/res/values/pagewise_variant.xml'), 'utf8'), />知页</)
     assert.equal(readFileSync(join(app, 'src/main/res/values/strings.xml'), 'utf8'), '<resources><string name="app_name">知页</string></resources>')
     const before = snapshot(f.base)
     prepareAndroidVariants(f.base)

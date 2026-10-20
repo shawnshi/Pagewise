@@ -1,5 +1,5 @@
 /**
- * 点睛阅读·基础版「点亮重点词」原型 (纯函数, 只依赖 src/services/readingModes/zhSegment.ts)。
+ * 伴读·基础版「点亮重点词」原型 (纯函数, 只依赖 src/services/readingModes/zhSegment.ts)。
  * 调研与评测见 docs/research/entropy-keyword-highlighting.md。
  *
  * 词的分数 (单位: nat):

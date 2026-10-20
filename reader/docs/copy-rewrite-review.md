@@ -23,9 +23,9 @@
 | `readingMode.typewriterHint` | zh：文字一个个出现，像有人正为你打字，帮你专注在眼前这一句。轻点正文暂停，读过的内容始终可见。<br>en：Words appear one by one, as if typed just for you, keeping you on the line in front of you. Tap to pause; what you've read stays visible. | zh：像有人正为你打字，陪你一句句读。轻点正文暂停。<br>en：Words appear as if someone is typing for you. Tap to pause. | 营·原则 1、4、§4.4：保留打字画面，压缩操作说明；视／思·§8：英文同步含义与术语 |
 | `readingMode.granularity` | zh：粒度 | zh：出字方式 | 视·原则 2、§6.1：用读者熟悉的词替换内部术语 |
 | `readingMode.intensityNormal` | zh：标准<br>en：Standard | zh：适中<br>en：Medium | 思·原则 6、§7：统一名称、动作或档位；视／思·§8：英文统一术语、句首大写及自然表达，与中文对齐 |
-| `dianjing.basicDesc` | zh：按词分色，断句一眼看清，长句也能一口气读顺。<br>en：Color-coded words show you every phrase at a glance, so even long sentences read in one smooth pass. | zh：一眼分清词与词，长句读着不绕<br>en：See words clearly at a glance, even in long sentences | 营·原则 1、§4.4：先说长句读着不绕，删除按词分色的机制说明；视／思·§8：英文同步含义与术语 |
-| `dianjing.density` | zh：密度<br>en：Density | zh：标记多少<br>en：How much to mark | 思·原则 2、§4.12：用「标记多少」说明调整对象；视／思·§8：英文同步含义与术语 |
-| `dianjing.skimDisclaimer` | zh：适合预览和复习，不能代替细读<br>en：For previewing and review — not a substitute for reading | zh：读前预览，读后复习<br>en：Preview before reading, review afterward | 营·原则 3、§6.2：只说明预览和复习的用途；视／思·§8：英文同步含义与术语 |
+| `pagewiseCompanion.basicDesc` | zh：按词分色，断句一眼看清，长句也能一口气读顺。<br>en：Color-coded words show you every phrase at a glance, so even long sentences read in one smooth pass. | zh：一眼分清词与词，长句读着不绕<br>en：See words clearly at a glance, even in long sentences | 营·原则 1、§4.4：先说长句读着不绕，删除按词分色的机制说明；视／思·§8：英文同步含义与术语 |
+| `pagewiseCompanion.density` | zh：密度<br>en：Density | zh：标记多少<br>en：How much to mark | 思·原则 2、§4.12：用「标记多少」说明调整对象；视／思·§8：英文同步含义与术语 |
+| `pagewiseCompanion.skimDisclaimer` | zh：适合预览和复习，不能代替细读<br>en：For previewing and review — not a substitute for reading | zh：读前预览，读后复习<br>en：Preview before reading, review afterward | 营·原则 3、§6.2：只说明预览和复习的用途；视／思·§8：英文同步含义与术语 |
 | `ambient.note` | zh：背景音默认关闭。有歌词的音乐和听得清的人声最容易打断阅读，所以这里只有环境声和纯音乐。<br>en：Off by default. Lyrics and speech you can follow are the most distracting while reading, so only ambient sounds and instrumental music are offered here. | zh：用雨声、风声和纯音乐，陪你安静读书<br>en：Rain, wind and instrumental music to accompany your reading | 营·原则 1、§4.4：介绍雨声、风声和纯音乐，省去默认状态说明；视／思·§8：英文同步含义与术语 |
 | `settings.featuresDesc` | zh：可选功能，默认关闭；开启后才显示相关入口。<br>en：Optional features, off by default. Their entry points appear once turned on. | zh：按需打开，不用的功能不占地方<br>en：Turn on what you need and keep the rest out of the way | 营／思·原则 1、§4.3：说明按需开启后界面更简洁；视／思·§8：英文同步含义与术语 |
 | `settings.pdfRenderer` | zh：PDF 渲染引擎<br>en：PDF renderer | zh：PDF 显示方式<br>en：PDF display | 视·原则 2、§6.1：用读者熟悉的词替换内部术语；视／思·§8：英文统一术语、句首大写及自然表达，与中文对齐 |
@@ -39,7 +39,7 @@
 
 以本次任务开始时的工作区字典为原文，保留此前未提交的修改。共涉及 673 个 key；下表只列发生变化的语言。顶部 30 条在所属分区重复列出，便于按区域完整审阅。规则号引用 [文案规范](copy-guidelines.md)。
 
-`update.*` 未参与改写。所有 key 和各语言原有占位符保持不变，指定的三条点睛阅读文案保持原样。
+`update.*` 未参与改写。所有 key 和各语言原有占位符保持不变，指定的三条伴读文案保持原样。
 
 ## 藏书
 
@@ -628,40 +628,40 @@
 | `settings.aiModelLabel` | zh：模型<br>en：Model | zh：AI 名称<br>en：AI name | 视·原则 2、§6.1：用读者熟悉的词替换内部术语；视／思·§8：英文统一术语、句首大写及自然表达，与中文对齐 |
 | `settings.aiBaseUrlLabel` | zh：接口地址<br>en：Base URL | zh：服务器地址<br>en：Server address | 视·原则 2、§6.1：用读者熟悉的词替换内部术语；视／思·§8：英文统一术语、句首大写及自然表达，与中文对齐 |
 | `settings.aiEditBaseUrl` | zh：修改接口地址<br>en：Edit base URL | zh：修改地址<br>en：Edit server address | 视·原则 2、§6.1：用读者熟悉的词替换内部术语；视／思·§8：英文统一术语、句首大写及自然表达，与中文对齐 |
-| `dianjing.basicDesc` | zh：按词分色，断句一眼看清，长句也能一口气读顺。<br>en：Color-coded words show you every phrase at a glance, so even long sentences read in one smooth pass. | zh：一眼分清词与词，长句读着不绕<br>en：See words clearly at a glance, even in long sentences | 营·原则 1、§4.4：先说长句读着不绕，删除按词分色的机制说明；视／思·§8：英文同步含义与术语 |
-| `dianjing.basicNote` | en：Works offline, ready instantly | en：Works offline, ready when you are | 视／思·§8：英文统一术语、句首大写及自然表达，与中文对齐 |
-| `dianjing.smartDesc` | en：AI reads ahead for you and brings out the key ideas and best lines. | en：AI reads ahead for you, bringing out key concepts and memorable lines | 视／思·§8：英文统一术语、句首大写及自然表达，与中文对齐 |
-| `dianjing.basicUnsupported` | zh：这台设备的系统版本较旧，暂时用不了基础版，可以先用智能版。<br>en：This device’s system is too old for Basic for now. You can use Smart instead. | zh：这台设备暂不支持基础版，试试智能版<br>en：Basic is unavailable on this device. Try Smart | 视／思·原则 4、§4：压缩冗余，明确当前状态或动作；视／思·§8：英文统一术语、句首大写及自然表达，与中文对齐 |
-| `dianjing.consentBasic` | en：Rather stay offline? | en：Use Basic offline | 视／思·§8：英文统一术语、句首大写及自然表达，与中文对齐 |
-| `dianjing.density` | zh：密度<br>en：Density | zh：标记多少<br>en：How much to mark | 思·原则 2、§4.12：用「标记多少」说明调整对象；视／思·§8：英文同步含义与术语 |
-| `dianjing.densityNormal` | zh：标准<br>en：Standard | zh：适中<br>en：Medium | 思·原则 6、§7：统一名称、动作或档位；视／思·§8：英文统一术语、句首大写及自然表达，与中文对齐 |
-| `dianjing.kindKey` | en：Key sentences | en：Key lines | 视／思·§8：英文统一术语、句首大写及自然表达，与中文对齐 |
-| `dianjing.statusQuota` | zh：今日内置额度已用完 · 填入自己的密钥不限额<br>en：Today's built-in quota is used up · add your own key for unlimited use | zh：今日免费额度已用完，明天恢复。也可接入自己的 AI 服务。<br>en：Today's free quota is used up. It resets tomorrow, or connect your own AI service | 思·原则 5、§4.7：说明结果并给出下一步；视／思·§8：英文统一术语、句首大写及自然表达，与中文对齐 |
-| `dianjing.statusBudget` | zh：今日内置通道总额度已用完，明天再来 · 填入自己的密钥不限额<br>en：The built-in channel is out of budget for today · add your own key for unlimited use | zh：今日免费额度暂时用完，明天恢复。也可接入自己的 AI 服务。<br>en：Today's free quota is used up. It resets tomorrow, or connect your own AI service | 思·原则 5、§4.7：说明结果并给出下一步；视·原则 2、§6.1：用读者熟悉的词替换内部术语；视／思·§8：英文统一术语、句首大写及自然表达，与中文对齐 |
-| `dianjing.statusOffline` | zh：离线 · 已缓存的部分照常显示，联网后继续<br>en：Offline · cached parts still show; continues when you're back online | zh：已点睛的部分仍可看，联网后继续<br>en：Offline: saved results are available. Continues when you reconnect | 视·原则 2、§6.1：用读者熟悉的词替换内部术语；视／思·§8：英文统一术语、句首大写及自然表达，与中文对齐 |
-| `dianjing.statusAuth` | zh：AI 服务拒绝了请求，请检查「设置 → AI 助手」里的密钥<br>en：The AI service rejected the request. Check your key in Settings → AI Assistant | zh：暂时连不上 AI，请在「设置 › AI 助手」核对 API Key<br>en：Could not connect to your AI service. Check the API Key in Settings › AI assistant | 视·§5.2–5.4：统一标点、间距和操作动词；视／思·§8：英文统一术语、句首大写及自然表达，与中文对齐 |
-| `dianjing.statusConfig` | zh：「设置 → AI 助手」里的服务还没配置完整（缺地址、模型或密钥）。补全后再试，或在 AI 助手里点「直接使用内置通道」<br>en：The service in Settings → AI Assistant is incomplete (address, model or key missing). Complete it, or tap "Use the built-in channel" in the AI sidebar | zh：AI 设置还没填完，到「AI 助手」补全或点「用内置 AI」<br>en：Finish your AI setup in Settings › AI assistant, or use built-in AI | 视·原则 2、§6.1：用读者熟悉的词替换内部术语；视·§5.2–5.4：统一标点、间距和操作动词；视／思·§8：英文统一术语、句首大写及自然表达，与中文对齐 |
-| `dianjing.unsupported` | zh：本格式暂不支持点睛阅读<br>en：Spotlight Reading doesn't support this format yet | zh：这种格式暂不支持点睛阅读，换本 EPUB 试试<br>en：Spotlight Reading is unavailable for this book. Try an EPUB book | 思·原则 5、§4.7：说明结果并给出下一步；视／思·§8：英文统一术语、句首大写及自然表达，与中文对齐 |
-| `dianjing.remaining` | zh：今日内置额度剩余 {n} 字<br>en：{n} built-in characters left today | zh：今日免费额度剩余 {n} 字<br>en：Today's free quota: {n} characters left | 视／思·原则 4、§4：压缩冗余，明确当前状态或动作；视／思·§8：英文统一术语、句首大写及自然表达，与中文对齐 |
-| `dianjing.channelOwn` | zh：使用你自己的 AI 服务 | zh：自己的 AI 服务 | 视／思·原则 4、§4：压缩冗余，明确当前状态或动作 |
-| `dianjing.channelBuiltin` | zh：内置通道 · DeepSeek-V4-Flash<br>en：Built-in channel · DeepSeek-V4-Flash | zh：内置 AI<br>en：Built-in AI | 视·原则 2、§6.1：用读者熟悉的词替换内部术语；视／思·§8：英文统一术语、句首大写及自然表达，与中文对齐 |
-| `dianjing.clearCache` | zh：清除本书的点睛缓存<br>en：Clear this book's Spotlight cache | zh：清除点睛结果<br>en：Clear this book's saved results | 视·原则 2、§6.1：用读者熟悉的词替换内部术语；视／思·§8：英文统一术语、句首大写及自然表达，与中文对齐 |
-| `dianjing.cacheCleared` | zh：已清除本书的点睛缓存<br>en：Spotlight cache for this book cleared | zh：已清除本书的点睛结果<br>en：Saved Spotlight Reading results cleared | 视·原则 2、§6.1：用读者熟悉的词替换内部术语；视／思·§8：英文统一术语、句首大写及自然表达，与中文对齐 |
-| `dianjing.consentBody` | zh：开启后，你正在读的这本书的正文会分段发送给{service}，用于生成标记，结果只保存在本机。轻阅不保存正文。<br>en：The text of the book you are reading will be sent in chunks to {service} to generate the marks. Results are stored only on this device. LightRead does not keep the text. | zh：让 {service} 帮你找出本书的要句和概念<br>en：Let {service} help you find key lines and concepts as you read | 视／思·原则 4、§4：压缩冗余，明确当前状态或动作；视／思·§8：英文统一术语、句首大写及自然表达，与中文对齐 |
-| `dianjing.consentServiceBuiltin` | zh：内置通道（经轻阅服务器转发给硅基流动）<br>en：the built-in channel (relayed by LightRead's server to SiliconFlow) | zh：内置 AI<br>en：built-in AI | 视·原则 2、§6.1：用读者熟悉的词替换内部术语；视／思·§8：英文统一术语、句首大写及自然表达，与中文对齐 |
-| `dianjing.consentServiceOwn` | zh：你在「设置 → AI 助手」配置的服务（{name}）<br>en：the service you set up in Settings → AI Assistant ({name}) | zh：自己的 AI 服务（{name}）<br>en：your AI service ({name}) | 视·§5.2–5.4：统一标点、间距和操作动词；视／思·§8：英文统一术语、句首大写及自然表达，与中文对齐 |
-| `dianjing.consentOllama` | zh：本机 Ollama：完全离线，速度取决于本机性能。<br>en：Local Ollama: fully offline; speed depends on this device. | zh：使用本机 Ollama，不联网也能点睛<br>en：Use Ollama offline | 视／思·原则 4、§4：压缩冗余，明确当前状态或动作；视／思·§8：英文统一术语、句首大写及自然表达，与中文对齐 |
-| `dianjing.consentNote` | zh：默认只标约 8% 的文字，可以随时调低密度或关闭。AI 也会出错，原文永远是主体。<br>en：Only about 8% of the text is marked by default; you can lower the density or turn it off anytime. AI makes mistakes — the original text always comes first. | zh：标记由 AI 生成，以原文为准<br>en：Marks are AI-generated. Refer to the original text | 视·原则 2、§6.1：用读者熟悉的词替换内部术语；视／思·§8：英文统一术语、句首大写及自然表达，与中文对齐 |
-| `dianjing.aiSourceChapter` | en：AI · based on “{chapter}” | en：AI · based on "{chapter}" | 视／思·§8：英文统一术语、句首大写及自然表达，与中文对齐 |
-| `dianjing.agreeHint` | en：Add to my highlights | en：Add to highlights | 视／思·§8：英文统一术语、句首大写及自然表达，与中文对齐 |
-| `dianjing.addNote` | en：Add a note | en：Add note | 视／思·§8：英文统一术语、句首大写及自然表达，与中文对齐 |
-| `dianjing.adoptFailed` | zh：保存划线失败<br>en：Couldn't save the highlight | zh：没能保存划线，请重试<br>en：Could not save this highlight. Try again | 思·原则 5、§4.7：说明结果并给出下一步；视／思·§8：英文统一术语、句首大写及自然表达，与中文对齐 |
-| `dianjing.keySentence` | en：Key sentence | en：Key line | 视／思·§8：英文统一术语、句首大写及自然表达，与中文对齐 |
-| `dianjing.skimDisclaimer` | zh：适合预览和复习，不能代替细读<br>en：For previewing and review — not a substitute for reading | zh：读前预览，读后复习<br>en：Preview before reading, review afterward | 营·原则 3、§6.2：只说明预览和复习的用途；视／思·§8：英文同步含义与术语 |
-| `dianjing.skimEmpty` | zh：还没有点睛结果。往后读几页，或稍等片刻。 | zh：还没有点睛结果，往后读几页或稍等片刻 | 视／思·原则 4、§4：压缩冗余，明确当前状态或动作 |
-| `dianjing.selectionGroup` | en：Spotlight | en：Spotlight Reading | 视／思·§8：英文统一术语、句首大写及自然表达，与中文对齐 |
-| `dianjing.gists` | zh：要点<br>en：Points | zh：要义<br>en：Summaries | 思·原则 6、§7：统一名称、动作或档位；视／思·§8：英文统一术语、句首大写及自然表达，与中文对齐 |
-| `dianjing.keys` | en：Key sentences | en：Key lines | 视／思·§8：英文统一术语、句首大写及自然表达，与中文对齐 |
+| `pagewiseCompanion.basicDesc` | zh：按词分色，断句一眼看清，长句也能一口气读顺。<br>en：Color-coded words show you every phrase at a glance, so even long sentences read in one smooth pass. | zh：一眼分清词与词，长句读着不绕<br>en：See words clearly at a glance, even in long sentences | 营·原则 1、§4.4：先说长句读着不绕，删除按词分色的机制说明；视／思·§8：英文同步含义与术语 |
+| `pagewiseCompanion.basicNote` | en：Works offline, ready instantly | en：Works offline, ready when you are | 视／思·§8：英文统一术语、句首大写及自然表达，与中文对齐 |
+| `pagewiseCompanion.smartDesc` | en：AI reads ahead for you and brings out the key ideas and best lines. | en：AI reads ahead for you, bringing out key concepts and memorable lines | 视／思·§8：英文统一术语、句首大写及自然表达，与中文对齐 |
+| `pagewiseCompanion.basicUnsupported` | zh：这台设备的系统版本较旧，暂时用不了基础版，可以先用智能版。<br>en：This device’s system is too old for Basic for now. You can use Smart instead. | zh：这台设备暂不支持基础版，试试智能版<br>en：Basic is unavailable on this device. Try Smart | 视／思·原则 4、§4：压缩冗余，明确当前状态或动作；视／思·§8：英文统一术语、句首大写及自然表达，与中文对齐 |
+| `pagewiseCompanion.consentBasic` | en：Rather stay offline? | en：Use Basic offline | 视／思·§8：英文统一术语、句首大写及自然表达，与中文对齐 |
+| `pagewiseCompanion.density` | zh：密度<br>en：Density | zh：标记多少<br>en：How much to mark | 思·原则 2、§4.12：用「标记多少」说明调整对象；视／思·§8：英文同步含义与术语 |
+| `pagewiseCompanion.densityNormal` | zh：标准<br>en：Standard | zh：适中<br>en：Medium | 思·原则 6、§7：统一名称、动作或档位；视／思·§8：英文统一术语、句首大写及自然表达，与中文对齐 |
+| `pagewiseCompanion.kindKey` | en：Key sentences | en：Key lines | 视／思·§8：英文统一术语、句首大写及自然表达，与中文对齐 |
+| `pagewiseCompanion.statusQuota` | zh：今日内置额度已用完 · 填入自己的密钥不限额<br>en：Today's built-in quota is used up · add your own key for unlimited use | zh：今日免费额度已用完，明天恢复。也可接入自己的 AI 服务。<br>en：Today's free quota is used up. It resets tomorrow, or connect your own AI service | 思·原则 5、§4.7：说明结果并给出下一步；视／思·§8：英文统一术语、句首大写及自然表达，与中文对齐 |
+| `pagewiseCompanion.statusBudget` | zh：今日内置通道总额度已用完，明天再来 · 填入自己的密钥不限额<br>en：The built-in channel is out of budget for today · add your own key for unlimited use | zh：今日免费额度暂时用完，明天恢复。也可接入自己的 AI 服务。<br>en：Today's free quota is used up. It resets tomorrow, or connect your own AI service | 思·原则 5、§4.7：说明结果并给出下一步；视·原则 2、§6.1：用读者熟悉的词替换内部术语；视／思·§8：英文统一术语、句首大写及自然表达，与中文对齐 |
+| `pagewiseCompanion.statusOffline` | zh：离线 · 已缓存的部分照常显示，联网后继续<br>en：Offline · cached parts still show; continues when you're back online | zh：已伴读的部分仍可看，联网后继续<br>en：Offline: saved results are available. Continues when you reconnect | 视·原则 2、§6.1：用读者熟悉的词替换内部术语；视／思·§8：英文统一术语、句首大写及自然表达，与中文对齐 |
+| `pagewiseCompanion.statusAuth` | zh：AI 服务拒绝了请求，请检查「设置 → AI 助手」里的密钥<br>en：The AI service rejected the request. Check your key in Settings → AI Assistant | zh：暂时连不上 AI，请在「设置 › AI 助手」核对 API Key<br>en：Could not connect to your AI service. Check the API Key in Settings › AI assistant | 视·§5.2–5.4：统一标点、间距和操作动词；视／思·§8：英文统一术语、句首大写及自然表达，与中文对齐 |
+| `pagewiseCompanion.statusConfig` | zh：「设置 → AI 助手」里的服务还没配置完整（缺地址、模型或密钥）。补全后再试，或在 AI 助手里点「直接使用内置通道」<br>en：The service in Settings → AI Assistant is incomplete (address, model or key missing). Complete it, or tap "Use the built-in channel" in the AI sidebar | zh：AI 设置还没填完，到「AI 助手」补全或点「用内置 AI」<br>en：Finish your AI setup in Settings › AI assistant, or use built-in AI | 视·原则 2、§6.1：用读者熟悉的词替换内部术语；视·§5.2–5.4：统一标点、间距和操作动词；视／思·§8：英文统一术语、句首大写及自然表达，与中文对齐 |
+| `pagewiseCompanion.unsupported` | zh：本格式暂不支持伴读<br>en：Spotlight Reading doesn't support this format yet | zh：这种格式暂不支持伴读，换本 EPUB 试试<br>en：Spotlight Reading is unavailable for this book. Try an EPUB book | 思·原则 5、§4.7：说明结果并给出下一步；视／思·§8：英文统一术语、句首大写及自然表达，与中文对齐 |
+| `pagewiseCompanion.remaining` | zh：今日内置额度剩余 {n} 字<br>en：{n} built-in characters left today | zh：今日免费额度剩余 {n} 字<br>en：Today's free quota: {n} characters left | 视／思·原则 4、§4：压缩冗余，明确当前状态或动作；视／思·§8：英文统一术语、句首大写及自然表达，与中文对齐 |
+| `pagewiseCompanion.channelOwn` | zh：使用你自己的 AI 服务 | zh：自己的 AI 服务 | 视／思·原则 4、§4：压缩冗余，明确当前状态或动作 |
+| `pagewiseCompanion.channelBuiltin` | zh：内置通道 · DeepSeek-V4-Flash<br>en：Built-in channel · DeepSeek-V4-Flash | zh：内置 AI<br>en：Built-in AI | 视·原则 2、§6.1：用读者熟悉的词替换内部术语；视／思·§8：英文统一术语、句首大写及自然表达，与中文对齐 |
+| `pagewiseCompanion.clearCache` | zh：清除本书的伴读缓存<br>en：Clear this book's Spotlight cache | zh：清除伴读结果<br>en：Clear this book's saved results | 视·原则 2、§6.1：用读者熟悉的词替换内部术语；视／思·§8：英文统一术语、句首大写及自然表达，与中文对齐 |
+| `pagewiseCompanion.cacheCleared` | zh：已清除本书的伴读缓存<br>en：Spotlight cache for this book cleared | zh：已清除本书的伴读结果<br>en：Saved Spotlight Reading results cleared | 视·原则 2、§6.1：用读者熟悉的词替换内部术语；视／思·§8：英文统一术语、句首大写及自然表达，与中文对齐 |
+| `pagewiseCompanion.consentBody` | zh：开启后，你正在读的这本书的正文会分段发送给{service}，用于生成标记，结果只保存在本机。轻阅不保存正文。<br>en：The text of the book you are reading will be sent in chunks to {service} to generate the marks. Results are stored only on this device. LightRead does not keep the text. | zh：让 {service} 帮你找出本书的要句和概念<br>en：Let {service} help you find key lines and concepts as you read | 视／思·原则 4、§4：压缩冗余，明确当前状态或动作；视／思·§8：英文统一术语、句首大写及自然表达，与中文对齐 |
+| `pagewiseCompanion.consentServiceBuiltin` | zh：内置通道（经轻阅服务器转发给硅基流动）<br>en：the built-in channel (relayed by LightRead's server to SiliconFlow) | zh：内置 AI<br>en：built-in AI | 视·原则 2、§6.1：用读者熟悉的词替换内部术语；视／思·§8：英文统一术语、句首大写及自然表达，与中文对齐 |
+| `pagewiseCompanion.consentServiceOwn` | zh：你在「设置 → AI 助手」配置的服务（{name}）<br>en：the service you set up in Settings → AI Assistant ({name}) | zh：自己的 AI 服务（{name}）<br>en：your AI service ({name}) | 视·§5.2–5.4：统一标点、间距和操作动词；视／思·§8：英文统一术语、句首大写及自然表达，与中文对齐 |
+| `pagewiseCompanion.consentOllama` | zh：本机 Ollama：完全离线，速度取决于本机性能。<br>en：Local Ollama: fully offline; speed depends on this device. | zh：使用本机 Ollama，不联网也能伴读<br>en：Use Ollama offline | 视／思·原则 4、§4：压缩冗余，明确当前状态或动作；视／思·§8：英文统一术语、句首大写及自然表达，与中文对齐 |
+| `pagewiseCompanion.consentNote` | zh：默认只标约 8% 的文字，可以随时调低密度或关闭。AI 也会出错，原文永远是主体。<br>en：Only about 8% of the text is marked by default; you can lower the density or turn it off anytime. AI makes mistakes — the original text always comes first. | zh：标记由 AI 生成，以原文为准<br>en：Marks are AI-generated. Refer to the original text | 视·原则 2、§6.1：用读者熟悉的词替换内部术语；视／思·§8：英文统一术语、句首大写及自然表达，与中文对齐 |
+| `pagewiseCompanion.aiSourceChapter` | en：AI · based on “{chapter}” | en：AI · based on "{chapter}" | 视／思·§8：英文统一术语、句首大写及自然表达，与中文对齐 |
+| `pagewiseCompanion.agreeHint` | en：Add to my highlights | en：Add to highlights | 视／思·§8：英文统一术语、句首大写及自然表达，与中文对齐 |
+| `pagewiseCompanion.addNote` | en：Add a note | en：Add note | 视／思·§8：英文统一术语、句首大写及自然表达，与中文对齐 |
+| `pagewiseCompanion.adoptFailed` | zh：保存划线失败<br>en：Couldn't save the highlight | zh：没能保存划线，请重试<br>en：Could not save this highlight. Try again | 思·原则 5、§4.7：说明结果并给出下一步；视／思·§8：英文统一术语、句首大写及自然表达，与中文对齐 |
+| `pagewiseCompanion.keySentence` | en：Key sentence | en：Key line | 视／思·§8：英文统一术语、句首大写及自然表达，与中文对齐 |
+| `pagewiseCompanion.skimDisclaimer` | zh：适合预览和复习，不能代替细读<br>en：For previewing and review — not a substitute for reading | zh：读前预览，读后复习<br>en：Preview before reading, review afterward | 营·原则 3、§6.2：只说明预览和复习的用途；视／思·§8：英文同步含义与术语 |
+| `pagewiseCompanion.skimEmpty` | zh：还没有伴读结果。往后读几页，或稍等片刻。 | zh：还没有伴读结果，往后读几页或稍等片刻 | 视／思·原则 4、§4：压缩冗余，明确当前状态或动作 |
+| `pagewiseCompanion.selectionGroup` | en：Spotlight | en：Spotlight Reading | 视／思·§8：英文统一术语、句首大写及自然表达，与中文对齐 |
+| `pagewiseCompanion.gists` | zh：要点<br>en：Points | zh：要义<br>en：Summaries | 思·原则 6、§7：统一名称、动作或档位；视／思·§8：英文统一术语、句首大写及自然表达，与中文对齐 |
+| `pagewiseCompanion.keys` | en：Key sentences | en：Key lines | 视／思·§8：英文统一术语、句首大写及自然表达，与中文对齐 |
 | `ai.title` | en：AI Assistant | en：AI assistant | 视／思·§8：英文统一术语、句首大写及自然表达，与中文对齐 |
 | `ai.intro` | zh：问我这本书相关的任何背景知识; 也可以在正文划选文字, 点「AI 解读」。<br>en：Ask anything about this book; or select text in the page and hit "Ask AI". | zh：读到不懂的地方，选中文字点「AI 解读」<br>en：For a passage you want to understand, select it and tap "Ask AI" | 营·原则 1、4、§4.3–4.4：先说用途或好处，缩短说明；视·§5.2–5.4：统一标点、间距和操作动词；视／思·§8：英文统一术语、句首大写及自然表达，与中文对齐 |
 | `ai.emptyReply` | zh：(无回复内容)<br>en：(empty reply) | zh：还没有收到回答，请重试<br>en：No reply received. Try again | 视·§5.2–5.4：统一标点、间距和操作动词；视／思·§8：英文统一术语、句首大写及自然表达，与中文对齐 |

@@ -9,8 +9,7 @@ export function androidVariantMetadata(version, productName = '知页') {
   const versionCode = major * 1_000_000 + minor * 1_000 + patch
   if (!Number.isSafeInteger(versionCode) || versionCode < 1 || versionCode > 2_100_000_000 || minor > 999 || patch > 999) throw new Error('Android version code is out of range')
   if (typeof productName !== 'string' || !productName.trim() || /[\x00-\x1f]/.test(productName)) throw new Error('Invalid Android product label')
-  const displayVersion = patch === 0 ? `${major}.${minor}` : version
-  return { versionName: version, versionCode, releaseLabel: `${productName} ${displayVersion}`, debugLabel: `${productName} ${displayVersion} 试版` }
+  return { versionName: version, versionCode, releaseLabel: productName, debugLabel: `${productName} ${version} 测试版` }
 }
 
 function regularFile(path) {

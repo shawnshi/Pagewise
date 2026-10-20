@@ -1,12 +1,12 @@
 /**
- * 伴读的输出协议 (纯函数, docs/dianjing-reading.md §6.3): NDJSON 流式解析、字段校验、
+ * 伴读的输出协议 (纯函数, docs/pagewise-companion.md §6.3): NDJSON 流式解析、字段校验、
  * 编号与术语锚定到「本节 (段, 句) + 句内偏移」, 以及按密度档过滤。
  */
 import { resolveParagraph, resolveSentence, sentenceText, type Chunk } from './chunker.ts'
 import { locateTerm } from '../readingModes/keyWords.ts'
 
 export type Density = 'low' | 'normal' | 'high'
-export type DjKind = 'key' | 'term' | 'note'
+export type CompanionKind = 'key' | 'term' | 'note'
 
 /** 模型输出的原始行 (校验前) */
 export type RawItem = Record<string, unknown> & { t?: unknown }
@@ -25,8 +25,8 @@ export interface MetaItem { t: 'meta'; fiction: boolean }
 export interface SumItem { t: 'sum'; text: string }
 export interface PointItem extends SentencePos { t: 'pt'; text: string }
 
-export type DjItem = KeyItem | TermItem | NoteItem | TrItem | GistItem | KwItem
-export type AnyItem = DjItem | MetaItem | SumItem | PointItem
+export type CompanionItem = KeyItem | TermItem | NoteItem | TrItem | GistItem | KwItem
+export type AnyItem = CompanionItem | MetaItem | SumItem | PointItem
 
 /** 字段长度上限 (字符), 超出截断 —— 比提示词要求略宽, 容忍英文 */
 const LIMITS = { why: 60, def: 120, note: 200, gist: 90, tr: 600, q: 40, sum: 400, pt: 90 }
@@ -315,7 +315,7 @@ export function selectTerms(terms: TermItem[], density: Density): TermItem[] {
 }
 
 /** 是否为要落到正文上的条目 (排除 meta / sum / pt) */
-export function isDjItem(v: AnyItem | null): v is DjItem {
+export function isCompanionItem(v: AnyItem | null): v is CompanionItem {
   return !!v && (v.t === 'key' || v.t === 'term' || v.t === 'note' || v.t === 'tr' || v.t === 'gist' || v.t === 'kw')
 }
 

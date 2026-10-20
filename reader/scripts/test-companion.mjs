@@ -1,5 +1,5 @@
 // 伴读的纯函数契约: 提示词 / NDJSON 流式解析 / 编号映射 / 术语锚定 / 密度过滤 / 缓存键 / 体裁识别 / 额度换算 / relay 与客户端提示词同源
-// node --experimental-strip-types --test scripts/test-dianjing.mjs
+// node --experimental-strip-types --test scripts/test-companion.mjs
 import assert from 'node:assert/strict'
 import { readFileSync } from 'node:fs'
 import { test } from 'node:test'
@@ -11,7 +11,7 @@ import {
   costUnits,
   DAILY_BUDGET_CNY,
   DEVICE_DAILY_CHARS,
-  DJ_MODEL,
+  COMPANION_MODEL,
   estimateTokens,
   LEGACY_PROMPT_VERSIONS,
   MAX_TOKENS,
@@ -24,9 +24,9 @@ import { chunkSection, hashText, numberBlocks, requestOrder, resolveSentence, ch
 import { chunkPlainText, findTermSpan, keyWordsUsable, NdjsonParser, resolveItem, selectKeys, selectTerms, SseDeltaParser, wantsKeyWords } from '../src/services/PagewiseCompanion/protocol.ts'
 import { decideFiction, fictionFromMeta, fictionFromText } from '../src/services/PagewiseCompanion/fiction.ts'
 import { bookRange, cacheKey, createMemoryCache, feedbackKey, sectionKey } from '../src/services/PagewiseCompanion/cache.ts'
-import { companionCSS, djColors, companionThemeName, DJ_PRIORITY } from '../src/services/PagewiseCompanion/theme.ts'
+import { companionCSS, companionColors, companionThemeName, COMPANION_PRIORITY } from '../src/services/PagewiseCompanion/theme.ts'
 import { splitSentences } from '../src/services/readAloud.ts'
-import { applyDjAction, dianjingOn, effectiveLevels, migrateLevel, normalizeLevel, smartOnFor } from '../src/services/PagewiseCompanion/level.ts'
+import { applyCompanionAction, companionOn, effectiveLevels, migrateLevel, normalizeLevel, smartOnFor } from '../src/services/PagewiseCompanion/level.ts'
 import { CHAT_MODEL, LEGACY_MODELS, quotaDay, rateLimited, sseToNdjson } from '../relay/src/lib.js'
 
 const sentences = (text, lang = 'zh') => splitSentences(text, lang).map(s => text.slice(s.start, s.end))
@@ -78,7 +78,7 @@ test('提示词: 要义与翻译模式; 调用参数 (关思考, 低温, 流式,
   const tr = buildMessages({ promptVersion: PROMPT_VERSION, mode: 'translate', lang: 'en', book: {}, text: '[1.1] 你好' })
   assert.match(tr[0].content, /into English/)
   const body = buildChatBody({ promptVersion: PROMPT_VERSION, mode: 'mark', lang: 'zh', book: {}, text: '[1.1] x' })
-  assert.equal(body.model, DJ_MODEL)
+  assert.equal(body.model, COMPANION_MODEL)
   assert.equal(body.enable_thinking, false)
   assert.equal(body.stream, true)
   assert.equal(body.temperature, 0.2)
@@ -256,8 +256,8 @@ test('密度: 一次生成三档可用, 重要度优先, 每段最多 2 句, 至
 // ---- 缓存 ----
 
 test('缓存键: 书 + 节 + 块 hash + 模型 + 提示词版本; 按书前缀列出与清除', async () => {
-  const k = cacheKey('book1', 3, 'abcd', DJ_MODEL, PROMPT_VERSION)
-  assert.equal(k, `book1:3:abcd:${DJ_MODEL}:${PROMPT_VERSION}`)
+  const k = cacheKey('book1', 3, 'abcd', COMPANION_MODEL, PROMPT_VERSION)
+  assert.equal(k, `book1:3:abcd:${COMPANION_MODEL}:${PROMPT_VERSION}`)
   assert.notEqual(k, cacheKey('book1', 3, 'abcd', 'other', PROMPT_VERSION))
   assert.equal(sectionKey('b', 2, 'dj1'), 'b:s2:dj1')
   assert.equal(feedbackKey('b', 'x:key:1.2'), 'b:x:key:1.2')
@@ -324,22 +324,22 @@ test('主题取值: 四种正文主题 + 墨水屏; 样式只用颜色与 text-d
   for (const name of ['light', 'sepia', 'green', 'dark']) {
     const css = companionCSS(name)
     assert.match(css, /::highlight\(lr-dj-key\)/)
-    assert.match(css, new RegExp(djColors(name).key))
+    assert.match(css, new RegExp(companionColors(name).key))
     assert.doesNotMatch(css, /font-weight|font-style/)
   }
-  assert.equal(djColors('unknown').key, djColors('light').key)
+  assert.equal(companionColors('unknown').key, companionColors('light').key)
   assert.equal(companionThemeName('dark', true), 'eink-dark')
   assert.equal(companionThemeName('sepia', true), 'eink')
   assert.match(companionCSS('eink'), /dotted #000000/)
   assert.doesNotMatch(companionCSS('eink'), /background-color: rgba/)
   // 优先级低于打字机隐藏层 (100) 与墨迹 (50)
-  assert.ok(Math.max(...Object.values(DJ_PRIORITY)) < 20)
+  assert.ok(Math.max(...Object.values(COMPANION_PRIORITY)) < 20)
 })
 
 // ---- 两个版本: 基础 (按词分色, 不联网) / 智能 (AI) ----
 
 const sw = (over = {}) => ({ level: 'basic', basicOn: false, perBook: {}, consentAll: false, enabled: false, ...over })
-const isOnFor = (st, book) => dianjingOn({ level: st.level, basicOn: st.basicOn, smartOn: smartOnFor(st, book) })
+const isOnFor = (st, book) => companionOn({ level: st.level, basicOn: st.basicOn, smartOn: smartOnFor(st, book) })
 
 test('版本: 未知值归为基础版; 同一时间至多一个版本生效', () => {
   assert.equal(normalizeLevel(undefined), 'basic')
@@ -356,79 +356,79 @@ test('版本: 未知值归为基础版; 同一时间至多一个版本生效', (
 test('迁移 (v14): 在用按词着色 → 开着 + 基础版; 伴读对所有书开着 → 智能版; 两者都开 → 智能版; 新用户 → 关 + 基础版', () => {
   assert.deepEqual(migrateLevel({}), { level: 'basic', wordGuideEnabled: false })
   assert.deepEqual(migrateLevel({ readingMode: { wordGuide: { enabled: true } } }), { level: 'basic', wordGuideEnabled: true })
-  assert.deepEqual(migrateLevel({ dianjing: { consentAll: true, enabled: true, perBook: {} } }), { level: 'smart', wordGuideEnabled: false })
+  assert.deepEqual(migrateLevel({ pagewiseCompanion: { consentAll: true, enabled: true, perBook: {} } }), { level: 'smart', wordGuideEnabled: false })
   assert.deepEqual(
-    migrateLevel({ dianjing: { consentAll: true, enabled: true }, readingMode: { wordGuide: { enabled: true } } }),
+    migrateLevel({ pagewiseCompanion: { consentAll: true, enabled: true }, readingMode: { wordGuide: { enabled: true } } }),
     { level: 'smart', wordGuideEnabled: false },
   )
   // 只给个别书开过伴读: 智能版 (那几本书照旧); 同时开着按词着色也是智能版 (两者都用 → 智能)
-  assert.deepEqual(migrateLevel({ dianjing: { perBook: { a: true } } }), { level: 'smart', wordGuideEnabled: false })
-  assert.deepEqual(migrateLevel({ dianjing: { perBook: { a: true } }, readingMode: { wordGuide: { enabled: true } } }), { level: 'smart', wordGuideEnabled: false })
+  assert.deepEqual(migrateLevel({ pagewiseCompanion: { perBook: { a: true } } }), { level: 'smart', wordGuideEnabled: false })
+  assert.deepEqual(migrateLevel({ pagewiseCompanion: { perBook: { a: true } }, readingMode: { wordGuide: { enabled: true } } }), { level: 'smart', wordGuideEnabled: false })
   // 同意过但都关了: 仍是新用户的默认
-  assert.deepEqual(migrateLevel({ dianjing: { consentAll: true, enabled: false, perBook: { a: false } } }), { level: 'basic', wordGuideEnabled: false })
-  assert.deepEqual(migrateLevel({ dianjing: 'garbage' }), { level: 'basic', wordGuideEnabled: false })
+  assert.deepEqual(migrateLevel({ pagewiseCompanion: { consentAll: true, enabled: false, perBook: { a: false } } }), { level: 'basic', wordGuideEnabled: false })
+  assert.deepEqual(migrateLevel({ pagewiseCompanion: 'garbage' }), { level: 'basic', wordGuideEnabled: false })
 })
 
 test('总开关: 默认基础版一步打开、不需要同意; 再按一次关掉', () => {
-  let r = applyDjAction(sw(), 'a', { kind: 'toggle' })
+  let r = applyCompanionAction(sw(), 'a', { kind: 'toggle' })
   assert.equal(r.needConsent, false)
   assert.equal(r.state.basicOn, true)
   assert.ok(isOnFor(r.state, 'a'))
-  r = applyDjAction(r.state, 'a', { kind: 'toggle' })
+  r = applyCompanionAction(r.state, 'a', { kind: 'toggle' })
   assert.equal(r.state.basicOn, false)
   assert.ok(!isOnFor(r.state, 'a'))
 })
 
 test('总开关: 上次选了智能版 → 按智能版开; 本书没同意过时先弹同意说明, 状态不变', () => {
   const s = sw({ level: 'smart' })
-  let r = applyDjAction(s, 'a', { kind: 'toggle' })
+  let r = applyCompanionAction(s, 'a', { kind: 'toggle' })
   assert.equal(r.needConsent, true)
   assert.equal(r.state, s)
-  r = applyDjAction(s, 'a', { kind: 'consent', scope: 'book' })
+  r = applyCompanionAction(s, 'a', { kind: 'consent', scope: 'book' })
   assert.equal(r.state.level, 'smart')
   assert.equal(r.state.perBook.a, true)
   assert.ok(isOnFor(r.state, 'a'))
   assert.ok(!isOnFor(r.state, 'b'), '仅本书: 别的书不开')
   // 关掉后再开不用再同意
-  r = applyDjAction(r.state, 'a', { kind: 'toggle' })
+  r = applyCompanionAction(r.state, 'a', { kind: 'toggle' })
   assert.equal(r.state.perBook.a, false)
-  r = applyDjAction(r.state, 'a', { kind: 'toggle' })
+  r = applyCompanionAction(r.state, 'a', { kind: 'toggle' })
   assert.equal(r.needConsent, false)
   assert.ok(isOnFor(r.state, 'a'))
 })
 
 test('选版本: 开着时把「开」带到新版本; 关着时只记住选择', () => {
   // 基础开着 → 智能 (已同意): 基础关、智能开
-  let r = applyDjAction(sw({ basicOn: true, perBook: { a: false } }), 'a', { kind: 'setLevel', level: 'smart' })
+  let r = applyCompanionAction(sw({ basicOn: true, perBook: { a: false } }), 'a', { kind: 'setLevel', level: 'smart' })
   assert.deepEqual([r.state.level, r.state.basicOn, r.state.perBook.a], ['smart', false, true])
   // 智能开着 → 基础: 智能本书关、基础开
-  r = applyDjAction(r.state, 'a', { kind: 'setLevel', level: 'basic' })
+  r = applyCompanionAction(r.state, 'a', { kind: 'setLevel', level: 'basic' })
   assert.deepEqual([r.state.level, r.state.basicOn, r.state.perBook.a], ['basic', true, false])
   assert.ok(isOnFor(r.state, 'a'))
   // 基础开着 → 智能 (没同意过): 先弹同意说明, 基础版继续开着
   const s = sw({ basicOn: true })
-  r = applyDjAction(s, 'b', { kind: 'setLevel', level: 'smart' })
+  r = applyCompanionAction(s, 'b', { kind: 'setLevel', level: 'smart' })
   assert.equal(r.needConsent, true)
   assert.equal(r.state.basicOn, true)
   assert.equal(r.state.level, 'basic')
   // 关着: 只改版本, 不打开
-  r = applyDjAction(sw(), 'a', { kind: 'setLevel', level: 'smart' })
+  r = applyCompanionAction(sw(), 'a', { kind: 'setLevel', level: 'smart' })
   assert.deepEqual([r.needConsent, r.state.level, isOnFor(r.state, 'a')], [false, 'smart', false])
 })
 
 test('先用基础版: 智能版用不了或不想联网时一步换成基础版并开着; 同意说明里点它不算同意', () => {
-  let r = applyDjAction(sw({ level: 'smart', perBook: { a: true } }), 'a', { kind: 'switchToBasic' })
+  let r = applyCompanionAction(sw({ level: 'smart', perBook: { a: true } }), 'a', { kind: 'switchToBasic' })
   assert.deepEqual([r.state.level, r.state.basicOn, r.state.perBook.a], ['basic', true, false])
-  r = applyDjAction(sw({ level: 'smart' }), 'b', { kind: 'switchToBasic' })
+  r = applyCompanionAction(sw({ level: 'smart' }), 'b', { kind: 'switchToBasic' })
   assert.deepEqual([r.state.level, r.state.basicOn], ['basic', true])
   assert.ok(!('b' in r.state.perBook), '没有记成已同意')
 })
 
 test('同意「所有书开启」: 智能版对其他书也开着; 在某本书换回基础版只影响这本书的智能版', () => {
-  let r = applyDjAction(sw({ level: 'smart' }), 'a', { kind: 'consent', scope: 'all' })
+  let r = applyCompanionAction(sw({ level: 'smart' }), 'a', { kind: 'consent', scope: 'all' })
   assert.ok(r.state.consentAll && r.state.enabled)
   assert.ok(isOnFor(r.state, 'b'))
-  r = applyDjAction(r.state, 'a', { kind: 'setLevel', level: 'basic' })
+  r = applyCompanionAction(r.state, 'a', { kind: 'setLevel', level: 'basic' })
   assert.ok(isOnFor(r.state, 'a') && r.state.level === 'basic')
   // 基础版是全局的: 其他书也是基础版开着
   assert.ok(isOnFor(r.state, 'b'))

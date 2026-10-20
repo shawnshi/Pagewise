@@ -80,7 +80,7 @@ test('PW-VIS-04: the book-only baseline is sparse and never mutates global or la
   globalThis.localStorage = { getItem: k => data.get(k) ?? null, setItem: (k, v) => data.set(k, v), removeItem: k => data.delete(k) }
   setActivePinia(createPinia())
   const store = useSettings()
-  const globalBefore = JSON.stringify({ reader: store.reader, modes: store.readingMode, dianjing: store.dianjing })
+  const globalBefore = JSON.stringify({ reader: store.reader, modes: store.readingMode, pagewiseCompanion: store.pagewiseCompanion })
   store.setBookTypography('A', { publicationBaseline: true, fontSize: 21, theme: 'green' })
   assert.equal(store.getEffectiveTypography('A', 'zh').publicationBaseline, true)
   assert.equal(store.getEffectiveTypography('A', 'zh').theme, 'green')
@@ -95,5 +95,5 @@ test('PW-VIS-04: the book-only baseline is sparse and never mutates global or la
   assert.equal(store.typographyLanguages.zh.publicationBaseline, undefined)
   assert.equal(store.typographyBooks.A.publicationBaseline, true)
   assert.equal(store.getEffectiveTypography('B', 'zh').publicationBaseline, false)
-  assert.equal(JSON.stringify({ reader: store.reader, modes: store.readingMode, dianjing: store.dianjing }), globalBefore)
+  assert.equal(JSON.stringify({ reader: store.reader, modes: store.readingMode, pagewiseCompanion: store.pagewiseCompanion }), globalBefore)
 })

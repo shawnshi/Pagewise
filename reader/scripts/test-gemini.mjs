@@ -70,24 +70,24 @@ function sse(chunks, closed = true) {
 test('Gemini preset uses exact stable model and official OpenAI-compatible endpoint', () => {
   const preset = AI_PROVIDERS.find(p => p.id === 'gemini')
   assert.ok(preset)
-  assert.equal(preset.defaultModel, 'gemini-3.8-flash')
+  assert.equal(preset.defaultModel, 'gemini-4-argon')
   assert.equal(preset.baseUrl, GEMINI_URL)
   assert.equal(preset.needsKey, true)
   assert.throws(() => providerById('not-a-provider'), /config|provider/i)
 })
 
 test('switching isolates credentials and restores every saved configuration', async () => {
-  const s = reset({ version: 14, aiProvider: 'siliconflow', aiBaseUrl: 'https://synthetic.invalid/v1', aiApiKey: 'synthetic-old-key', aiModel: 'custom-old-model' })
+  const s = reset({ version: 14, aiProvider: 'deepseek', aiBaseUrl: 'https://synthetic.invalid/v1', aiApiKey: 'synthetic-old-key', aiModel: 'custom-old-model' })
   s.selectAiProvider('gemini')
   assert.equal(s.aiApiKey, '')
   assert.equal(s.aiBaseUrl, GEMINI_URL)
-  assert.equal(s.aiModel, 'gemini-3.8-flash')
+  assert.equal(s.aiModel, 'gemini-4-argon')
   assert.equal(aiConfigured(), false)
   await assert.rejects(collect(), /config|key/i)
   assert.equal(transport.calls.length, 0)
   s.aiApiKey = 'synthetic-new-key'
   s.aiModel = 'custom-gemini-model'
-  s.selectAiProvider('siliconflow')
+  s.selectAiProvider('deepseek')
   assert.equal(s.aiApiKey, 'synthetic-old-key')
   assert.equal(s.aiBaseUrl, 'https://synthetic.invalid/v1')
   assert.equal(s.aiModel, 'custom-old-model')
@@ -106,10 +106,18 @@ test('legacy settings never silently migrate active provider/model/URL/key', () 
   ]) {
     const s = reset(data)
     for (const field of ['aiProvider', 'aiBaseUrl', 'aiApiKey', 'aiModel']) assert.equal(s[field], data[field], field)
+    if (data.aiProvider !== 'trial') assert.equal(aiConfigured(), false)
     s.selectAiProvider('gemini')
     assert.equal(s.aiApiKey, '')
-    s.selectAiProvider(data.aiProvider)
-    for (const field of ['aiProvider', 'aiBaseUrl', 'aiApiKey', 'aiModel']) assert.equal(s[field], data[field], field)
+    if (data.aiProvider === 'trial') {
+      s.selectAiProvider(data.aiProvider)
+      for (const field of ['aiProvider', 'aiBaseUrl', 'aiApiKey', 'aiModel']) assert.equal(s[field], data[field], field)
+    } else {
+      assert.equal(s.aiProfiles[data.aiProvider].apiKey, data.aiApiKey)
+      assert.throws(() => s.selectAiProvider(data.aiProvider), /unknown provider/)
+      assert.equal(s.aiProvider, 'gemini')
+      assert.equal(s.aiApiKey, '')
+    }
   }
 })
 
@@ -117,7 +125,7 @@ test('profiles persist via the real settings watcher and survive fresh store loa
   const s = gemini()
   s.persistOnChange()
   s.aiModel = 'persisted-gemini-model'
-  s.selectAiProvider('custom')
+  s.selectAiProvider('openai')
   s.aiBaseUrl = 'https://synthetic.invalid/api'
   s.aiApiKey = 'synthetic-custom-key'
   s.aiModel = 'persisted-custom-model'
@@ -126,11 +134,11 @@ test('profiles persist via the real settings watcher and survive fresh store loa
   const data = await new Response(saved.get(KEY)).json()
   setActivePinia(createPinia())
   const restored = useSettings()
-  assert.equal(restored.aiProvider, 'custom')
+  assert.equal(restored.aiProvider, 'openai')
   restored.selectAiProvider('gemini')
   assert.equal(restored.aiApiKey, 'synthetic-gemini-key')
   assert.equal(restored.aiModel, 'persisted-gemini-model')
-  restored.selectAiProvider('custom')
+  restored.selectAiProvider('openai')
   assert.equal(restored.aiBaseUrl, data.aiBaseUrl)
   assert.equal(restored.aiApiKey, 'synthetic-custom-key')
 })
@@ -146,7 +154,7 @@ test('malformed profiles cannot overwrite active fields or inject credentials', 
 
 test('JSON request joins endpoint once and preserves default/custom model identifiers', async () => {
   const s = gemini()
-  for (const [base, model] of [[GEMINI_URL, 'gemini-3.8-flash'], [GEMINI_URL.replace(/\/$/, ''), 'custom-gemini-id'], ['https://synthetic.invalid/proxy///', 'other-model']]) {
+  for (const [base, model] of [[GEMINI_URL, 'gemini-4-argon'], [GEMINI_URL, 'gemini-3.8-flash'], [GEMINI_URL.replace(/\/$/, ''), 'custom-gemini-id'], ['https://synthetic.invalid/proxy///', 'other-model']]) {
     s.aiBaseUrl = base
     s.aiModel = model
     assert.deepEqual(await collect(), ['OK'])
@@ -156,7 +164,7 @@ test('JSON request joins endpoint once and preserves default/custom model identi
     assert.equal(init.headers.authorization, 'Bearer synthetic-gemini-key')
     assert.equal(init.headers['x-device-id'], undefined)
     const body = await new Response(init.body).json()
-    assert.deepEqual(body, { model, messages, stream: true, temperature: 0.6 })
+    assert.deepEqual(body, { model, messages, stream: true, ...(model === 'gemini-4-argon' ? {} : { temperature: 0.6 }) })
     assert.equal(init.raw, true)
   }
 })
@@ -198,9 +206,38 @@ test('transport failure propagates without fallback', async () => {
 test('SSE spans chunks/UTF-8 and accepts final event without trailing newline', async () => {
   gemini()
   const bytes = new TextEncoder().encode('data: {"choices":[{"delta":{"content":"你好"}}]}\r\n\r\n')
-  const source = sse([': heartbeat\n', bytes.slice(0, 43), bytes.slice(43, 44), bytes.slice(44), 'data: {"choices":[', '{"delta":{"content":" tail"}}]}'])
+  const source = sse([': heartbeat\n', bytes.slice(0, 43), bytes.slice(43, 44), bytes.slice(44), 'data: {"choices":[', '{"delta":{"content":" tail"},"finish_reason":"stop"}]}'])
   assert.deepEqual(await collect(), ['你好', ' tail'])
   assert.equal(source.stream.locked, false)
+})
+
+test('a closed stream without a completion reason remains an explicit incomplete-output error', async () => {
+  gemini()
+  sse(['data: {"choices":[{"delta":{"content":"partial"}}]}\n'])
+  await assert.rejects(collect(), /Incomplete AI output/)
+})
+
+test('current OpenAI/OpenRouter model requests omit unsupported sampling without switching endpoints', async () => {
+  for (const provider of ['openai', 'openrouter']) {
+    const s = reset()
+    s.selectAiProvider(provider)
+    s.aiApiKey = `synthetic-${provider}-only`
+    assert.deepEqual(await collect(), ['OK'])
+    const [url, , init] = transport.calls.at(-1)
+    const body = await new Response(init.body).json()
+    assert.equal(url, providerById(provider).baseUrl + '/chat/completions')
+    assert.equal(body.model, providerById(provider).defaultModel)
+    assert.equal(body.temperature, undefined)
+    assert.equal(init.headers.authorization, `Bearer synthetic-${provider}-only`)
+    assert.equal(transport.calls.length, 1)
+  }
+})
+
+test('built-in trial never forwards a user API key', async () => {
+  const s = reset()
+  s.aiApiKey = 'synthetic-must-not-reach-trial'
+  assert.deepEqual(await collect(), ['OK'])
+  assert.equal(transport.calls[0][2].headers.authorization, undefined)
 })
 
 test('DONE and early consumer exit cancel unread stream and release lock', async () => {

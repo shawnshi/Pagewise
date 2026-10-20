@@ -1,6 +1,6 @@
 # Android 单机部署与签名
 
-当前范围是侧载部署到 Note X3 Pro，不是应用商店发行。**当前 Release 与 Debug 均为 1.1.0 / 1001000**，已并行安装；包摘要、启动检查和残留验收项见 [1.1.0 安装记录](deployment-1.1-status.md)。早期 1.0.0 构建日志和旧中间 Debug 测试不代表当前包已经通过相同场景。
+当前范围是侧载部署到 Note X3 Pro，不是应用商店发行。**当前 Release 与 Debug 均为 1.4.0 / 1004000**，已同签名覆盖安装并通过前端启动就绪检查；桌面名称分别为 **知页**、**知页 1.4.0 测试版**。包摘要、验证范围和限制见 [1.4.0 安装记录](deployment-1.4-status.md)。书籍读取与文件夹扫描问题尚未确认修复，安装和启动检查不能代替这些场景验收。
 
 ## 构建与包身份
 
@@ -17,7 +17,7 @@ npm run android:build:release   # Release
 
 通用 Release 入口不会自动携带本机签名配置，可能生成 unsigned APK。不得把 unsigned APK 当作已签名交付物，也不得把超时写成顶层构建命令成功。若采用分阶段构建，只能复用已校验且与源码绑定的产物，保留实际任务结果，不能任意跳过未完成的编译步骤。
 
-- 正式包名固定为 `io.pagewise.reader`；Debug 使用 `io.pagewise.reader.debug`，私有数据相互独立。
+- 正式包名固定为 `io.pagewise.reader`，显示名称保持“知页”；Debug 使用 `io.pagewise.reader.debug`，显示名称为“知页 {完整版本号} 测试版”，私有数据相互独立。
 - 覆盖升级保持正式包名、既有证书及递增 versionCode；不卸载、不清数据、不自动复制书库或账户设置。
 - 切换 Debug/Release 不会自动迁移数据。确需迁移时另行授权并验证应用支持的导出/导入流程。
 - Release 应开启 R8，关闭 debuggable。APK 更新与 GitHub main 推送都不会自动部署 relay。

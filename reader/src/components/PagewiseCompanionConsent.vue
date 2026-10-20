@@ -14,7 +14,7 @@ const settings = useSettings()
 const first = ref<HTMLButtonElement | null>(null)
 
 const own = computed(() => {
-  const mode = settings.dianjing.channel
+  const mode = settings.pagewiseCompanion.channel
   const p = providerById(settings.aiProvider)
   const configured = p.id !== 'trial' && aiConfigured()
   return mode === 'own' || (mode === 'auto' && configured)

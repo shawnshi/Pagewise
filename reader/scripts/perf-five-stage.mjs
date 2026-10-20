@@ -110,7 +110,7 @@ export function installObserver({ settingsVersion = 16, profile = 'default' } = 
     const range = loc?.range, box = range?.getBoundingClientRect?.()
     return { identity: loc?.cfi ?? '', section: loc?.section?.current ?? contents[0]?.index, ready: !document.querySelector('.reader > .state') && !!doc?.body?.textContent?.includes('SYNTHETIC_BODY') && !!range && !!box && (box.width > 0 || box.height > 0), bodyMarker: !!doc?.body?.textContent?.includes('SYNTHETIC_BODY') }
   }
-  localStorage.setItem('lightread-settings', JSON.stringify({ version: settingsVersion, language: 'en', ttsEngine: 'system', ...(profile === 'eink' ? { readingMode: { eink: { enabled: true, prompted: true } } } : {}), dianjing: { enabled: false }, pdf: { renderer: 'mupdf', layout: 'original', mode: 'paged', fit: 'fitP', spreadMode: 'single' }, reader: { flow: 'paginated', maxColumnCount: 1, portraitScroll: false, continuousScroll: false } }))
+  localStorage.setItem('lightread-settings', JSON.stringify({ version: settingsVersion, language: 'en', ttsEngine: 'system', ...(profile === 'eink' ? { readingMode: { eink: { enabled: true, prompted: true } } } : {}), pagewiseCompanion: { enabled: false }, pdf: { renderer: 'mupdf', layout: 'original', mode: 'paged', fit: 'fitP', spreadMode: 'single' }, reader: { flow: 'paginated', maxColumnCount: 1, portraitScroll: false, continuousScroll: false } }))
 }
 export async function browserCommit(page, before, format, timeout, expected) {
   await page.waitForFunction(({ before, format, expected }) => {

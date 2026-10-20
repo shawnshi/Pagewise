@@ -9,7 +9,7 @@
  * 上游: SiliconFlow `deepseek-ai/DeepSeek-V4-Flash`, 强制 enable_thinking:false。
  *  - 试用通道: 旧客户端传来的 glm-4.x-flash 一律映射到 V4-Flash; SiliconFlow 出错且配置了
  *    UPSTREAM_KEY (智谱) 时退回智谱免费的 glm-4.7-flash。
- *  - 伴读: V4-Flash 不可用时退回 DJ_FALLBACK_MODEL, 实际模型写在响应头 x-dj-model (进入客户端缓存键)。
+ *  - 伴读: V4-Flash 不可用时退回 COMPANION_FALLBACK_MODEL, 实际模型写在响应头 x-dj-model (进入客户端缓存键)。
  *
  * 防线 (由外向内):
  *  1. 每 IP / 每设备每分钟限速 (isolate 内存滑动窗口)
@@ -31,8 +31,8 @@ import {
   costUnits,
   DAILY_BUDGET_CNY,
   DEVICE_DAILY_CHARS,
-  DJ_FALLBACK_MODEL,
-  DJ_MODEL,
+  COMPANION_FALLBACK_MODEL,
+  COMPANION_MODEL,
   estimateTokens,
   IP_DAILY_CHARS,
   PROMPT_VERSION,
@@ -49,8 +49,8 @@ const ZHIPU_FALLBACK_MODEL = 'glm-4.7-flash'
 const MAX_TOKENS = 1024
 const MAX_CONTEXT_CHARS = 32_000
 const CHAT_PER_IP_PER_MIN = 10
-const DJ_PER_DEVICE_PER_MIN = 20
-const DJ_PER_IP_PER_MIN = 60
+const COMPANION_PER_DEVICE_PER_MIN = 20
+const COMPANION_PER_IP_PER_MIN = 60
 
 const CORS = {
   'access-control-allow-origin': '*',
@@ -203,7 +203,7 @@ async function handleChat(request, env, ctx) {
 async function handlePagewiseCompanion(request, env, ctx) {
   if (!env.SILICONFLOW_KEY) return err(503, '伴读内置通道尚未配置, 请在设置中填入自己的 API Key', 'config')
   const { ip, device } = clientIds(request)
-  if (rateLimited(`dd:${device}`, DJ_PER_DEVICE_PER_MIN) || rateLimited(`di:${ip}`, DJ_PER_IP_PER_MIN)) {
+  if (rateLimited(`dd:${device}`, COMPANION_PER_DEVICE_PER_MIN) || rateLimited(`di:${ip}`, COMPANION_PER_IP_PER_MIN)) {
     return err(429, '请求过于频繁, 请稍后再试', 'rate')
   }
   let raw
@@ -241,14 +241,14 @@ async function handlePagewiseCompanion(request, env, ctx) {
   }
 
   const abort = new AbortController()
-  let model = DJ_MODEL
+  let model = COMPANION_MODEL
   let upstream
   try {
-    upstream = await siliconflow(env, buildChatBody(req, DJ_MODEL), abort.signal)
+    upstream = await siliconflow(env, buildChatBody(req, COMPANION_MODEL), abort.signal)
     if (!upstream.ok && upstream.status !== 400) {
-      console.warn('dianjing primary failed:', upstream.status)
-      model = DJ_FALLBACK_MODEL
-      upstream = await siliconflow(env, buildChatBody(req, DJ_FALLBACK_MODEL), abort.signal)
+      console.warn('pagewiseCompanion primary failed:', upstream.status)
+      model = COMPANION_FALLBACK_MODEL
+      upstream = await siliconflow(env, buildChatBody(req, COMPANION_FALLBACK_MODEL), abort.signal)
     }
   } catch (e) {
     return err(502, `上游服务暂时不可用: ${e?.message ?? e}`)
@@ -268,7 +268,7 @@ async function handlePagewiseCompanion(request, env, ctx) {
       await sseToNdjson(upstream.body, s => { writer.write(encoder.encode(s)).catch(() => abort.abort()) }, s => { output += s })
       await writer.close()
     } catch (e) {
-      console.warn('dianjing stream failed:', e?.message)
+      console.warn('pagewiseCompanion stream failed:', e?.message)
       abort.abort()
       try { await writer.abort(e) } catch { /* The downstream stream has already failed. */ }
     } finally {

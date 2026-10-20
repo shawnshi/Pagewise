@@ -797,14 +797,17 @@ async function clearSelectedTags() {
       <RouterLink v-if="hasFolderIssue" class="btn" to="/settings?section=folder">{{ t('library.folderSettings') }}</RouterLink>
     </section>
 
-    <nav v-if="allBooks.length" ref="categoryNav" class="category-tabs" :aria-label="t('library.categoryNavigation')">
-      <button v-for="category in categoryTabs" :key="category.id" type="button"
-        class="btn category-tab" :class="{ 'category-active': categoryFilter === category.id }"
-        :data-category="category.id" :aria-pressed="categoryFilter === category.id"
-        @click="selectCategory(category.id)">
-        <span>{{ category.label }}</span><span class="category-count">{{ category.count }}</span>
-      </button>
-    </nav>
+    <div v-if="allBooks.length" class="category-toolbar">
+      <button type="button" class="btn open-filter" :aria-expanded="!!filterDraft" aria-controls="library-filters" @click="openAdvancedFilter">{{ t('library.filters') }}{{ hasActiveChips ? ' · ' + query.total : '' }}</button>
+      <nav ref="categoryNav" class="category-tabs" :aria-label="t('library.categoryNavigation')">
+        <button v-for="category in categoryTabs" :key="category.id" type="button"
+          class="btn category-tab" :class="{ 'category-active': categoryFilter === category.id }"
+          :data-category="category.id" :aria-pressed="categoryFilter === category.id"
+          @click="selectCategory(category.id)">
+          <span>{{ category.label }}</span><span class="category-count">{{ category.count }}</span>
+        </button>
+      </nav>
+    </div>
 
     <section v-if="lastReadingBook && !manageMode" class="resume-card" :aria-label="t('catalog.continueReading')">
       <strong>{{ lastReadingBook.title }}</strong>
@@ -813,9 +816,8 @@ async function clearSelectedTags() {
     </section>
 
     <section v-if="allBooks.length" class="library-filters" :aria-label="t('library.filters')">
-      <div class="filter-toolbar">
-        <button type="button" class="btn open-filter" :aria-expanded="!!filterDraft" aria-controls="library-filters" @click="openAdvancedFilter">{{ t('library.filters') }}{{ hasActiveChips ? ' · ' + query.total : '' }}</button>
-        <button v-if="unavailableReturn" type="button" class="btn" @click="restoreUnavailableFilters">{{ t('library.restoreFilters') }}</button>
+      <div v-if="unavailableReturn" class="filter-toolbar">
+        <button type="button" class="btn" @click="restoreUnavailableFilters">{{ t('library.restoreFilters') }}</button>
       </div>
       <div v-if="filterDraft" id="library-filters" ref="filterPanel" class="filter-panel">
         <fieldset>
@@ -1102,15 +1104,26 @@ async function clearSelectedTags() {
   width: 148px;
   min-height: 48px;
 }
+.category-toolbar {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-width: 0;
+  margin-bottom: 12px;
+}
+.category-toolbar > .open-filter {
+  flex: 0 0 auto;
+  white-space: nowrap;
+}
 .category-tabs {
   display: flex;
+  flex: 1;
   gap: 8px;
   min-width: 0;
   max-width: 100%;
   overflow-x: auto;
   overscroll-behavior-x: contain;
   padding: 4px;
-  margin-bottom: 12px;
   scrollbar-width: thin;
 }
 .category-tab {

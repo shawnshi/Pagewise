@@ -64,7 +64,6 @@ async function setup(viewport = { width: 992, height: 1322 }, locale = 'zh') {
   const initial = settingsDefaults(); initial.language = locale; initial.reader.portraitScroll = false
   await page.addInitScript(state => {
     if (!localStorage.getItem('lightread-settings')) localStorage.setItem('lightread-settings', JSON.stringify(state))
-    sessionStorage.setItem('lightread-dianjing-intro-seen', '1')
     window.__typographyObservedErrors = []
     window.addEventListener('error', event => { window.__typographyObservedErrors.push(event.message) })
   }, initial)
@@ -423,10 +422,10 @@ test('PW-VIS-04: a real book-only publication baseline cancels cleanly, suspends
     const before = await f.page.evaluate(async () => {
       const v = document.querySelector('.reader').__vueParentComponent.setupState
       v.settings.reader.theme = 'green'
-      v.settings.dianjing.level = 'basic'
+      v.settings.pagewiseCompanion.level = 'basic'
       v.settings.readingMode.wordGuide.enabled = true
       await Promise.resolve()
-      return JSON.stringify({ reader: v.settings.reader, readingMode: v.settings.readingMode, dianjing: v.settings.dianjing })
+      return JSON.stringify({ reader: v.settings.reader, readingMode: v.settings.readingMode, pagewiseCompanion: v.settings.pagewiseCompanion })
     })
     let d = await panel(f.page)
     await d.locator('.tp-publication-baseline input').check()
@@ -438,12 +437,12 @@ test('PW-VIS-04: a real book-only publication baseline cancels cleanly, suspends
     const inspect = () => f.page.evaluate(() => {
       const v = document.querySelector('.reader').__vueParentComponent.setupState
       return { baseline: v.publicationBaseline, theme: v.effectiveReader.theme, storedTheme: v.effectiveTypography.theme,
-        wordGuide: v.modes.wordGuideActive.value, dianjing: v.dj.on.value, colors: JSON.parse(JSON.stringify(v.themeColors)),
-        prefs: JSON.stringify({ reader: v.settings.reader, readingMode: v.settings.readingMode, dianjing: v.settings.dianjing }) }
+        wordGuide: v.modes.wordGuideActive.value, pagewiseCompanion: v.dj.on.value, colors: JSON.parse(JSON.stringify(v.themeColors)),
+        prefs: JSON.stringify({ reader: v.settings.reader, readingMode: v.settings.readingMode, pagewiseCompanion: v.settings.pagewiseCompanion }) }
     })
     const active = await inspect()
     assert.equal(active.baseline, true); assert.equal(active.theme, 'light'); assert.equal(active.storedTheme, 'green')
-    assert.equal(active.wordGuide, false); assert.equal(active.dianjing, false)
+    assert.equal(active.wordGuide, false); assert.equal(active.pagewiseCompanion, false)
     assert.equal(active.colors.bg, '#ffffff'); assert.equal(active.colors.fg, '#000000'); assert.equal(active.prefs, before)
     assert.deepEqual(Object.keys((await state(f.page)).books[f.ids.MIX]), ['publicationBaseline'])
     await f.page.evaluate(() => document.querySelector('.reader').__vueParentComponent.setupState.hideBars())

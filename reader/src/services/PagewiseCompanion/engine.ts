@@ -1,25 +1,25 @@
 /**
- * 伴读引擎 (docs/dianjing-reading.md §6.1 流水线):
+ * 伴读引擎 (docs/pagewise-companion.md §6.1 流水线):
  * 章节加载 → 文本模型 (段/句, 与听书同编号) → 分块 → 查缓存 → 未命中排队 (当前块优先, 并发 2–3)
  * → 流式请求 → 逐行校验 / 锚定 → 绘制 → 写缓存 → 章内完成后汇总要义。
  *
- * 不依赖 Vue: 宿主 (usePagewiseCompanion) 提供 DjHost, 引擎通过 onChange 通知界面刷新。
+ * 不依赖 Vue: 宿主 (usePagewiseCompanion) 提供 CompanionHost, 引擎通过 onChange 通知界面刷新。
  */
 import { chunkIndexForBlock, chunkSection, hashText, requestOrder, type Chunk } from './chunker.ts'
-import { DjError, streamPagewiseCompanion, type DjChannel } from './client.ts'
-import { cacheKey, feedbackKey, getDjCache, sectionKey, type ChunkRecord, type DjCache, type FeedbackRecord, type SectionSummary } from './cache.ts'
+import { CompanionError, streamPagewiseCompanion, type CompanionChannel } from './client.ts'
+import { cacheKey, feedbackKey, getCompanionCache, sectionKey, type ChunkRecord, type CompanionCache, type FeedbackRecord, type SectionSummary } from './cache.ts'
 import { decideFiction, fictionFromMeta, fictionFromText, type FictionVerdict } from './fiction.ts'
-import { createDjLayer, hitTest, type DjLayer, type HitTarget } from './layer.ts'
-import { buildSummarySource, planMarkInput, DJ_FALLBACK_MODEL, DJ_MODEL, LEGACY_PROMPT_VERSIONS, PROMPT_VERSION } from './prompt.ts'
+import { createCompanionLayer, hitTest, type CompanionLayer, type HitTarget } from './layer.ts'
+import { buildSummarySource, planMarkInput, COMPANION_FALLBACK_MODEL, COMPANION_MODEL, LEGACY_PROMPT_VERSIONS, PROMPT_VERSION } from './prompt.ts'
 import {
-  isDjItem,
+  isCompanionItem,
   keyWordsUsable,
   resolveItem,
   wantsKeyWords,
   selectKeys,
   selectTerms,
   type Density,
-  type DjItem,
+  type CompanionItem,
   type KeyItem,
   type NoteItem,
   type PointItem,
@@ -29,13 +29,13 @@ import {
   type GistItem,
 } from './protocol.ts'
 import { SectionTextModel } from './textModel.ts'
-import type { DjColors } from './theme.ts'
+import type { CompanionColors } from './theme.ts'
 
-export type DjStatus = 'idle' | 'consent' | 'loading' | 'ready' | 'quota' | 'error' | 'offline' | 'unsupported'
+export type CompanionStatus = 'idle' | 'consent' | 'loading' | 'ready' | 'quota' | 'error' | 'offline' | 'unsupported'
 
-export interface DjKinds { key: boolean; term: boolean; note: boolean }
+export interface CompanionKinds { key: boolean; term: boolean; note: boolean }
 
-export interface DjBookInfo {
+export interface CompanionBookInfo {
   title?: string
   author?: string
   /** 书的语言 (BCP47) */
@@ -44,9 +44,9 @@ export interface DjBookInfo {
   tags?: string[]
 }
 
-export interface DjHost {
+export interface CompanionHost {
   bookId: string
-  book(): DjBookInfo
+  book(): CompanionBookInfo
   /** 界面语言 */
   uiLang(): 'zh' | 'en'
   chapterTitle(section: number): string
@@ -56,11 +56,11 @@ export interface DjHost {
   /** 未渲染的分节文档 (预取下一章); 不可用返回 null */
   sectionDoc(section: number): Promise<Document | null>
   /** 当前通道; null 表示未配置 */
-  channel(): DjChannel | null
+  channel(): CompanionChannel | null
   density(): Density
-  kinds(): DjKinds
+  kinds(): CompanionKinds
   fictionOverride(): 'fiction' | 'nonfiction' | null
-  colors(): DjColors
+  colors(): CompanionColors
   getOverlayer(section: number): any
   concurrency(): number
   /** 墨水屏 / 减少动效: 标记攒到下次翻页再画 */
@@ -70,14 +70,14 @@ export interface DjHost {
   onKeyWords?(section: number | null): void
 }
 
-export interface DjPosition { section: number; block: number; sentence: number }
+export interface CompanionPosition { section: number; block: number; sentence: number }
 
 export interface ChunkState {
   chunk: Chunk
   status: 'idle' | 'queued' | 'loading' | 'done' | 'error'
-  items: DjItem[]
+  items: CompanionItem[]
   model?: string
-  error?: DjError
+  error?: CompanionError
   failedAt?: number
   /** 这一块的 AI 重点词可用 (否则这一块用离线结果) */
   kw?: boolean
@@ -88,7 +88,7 @@ export interface SectionState {
   model: SectionTextModel
   chunks: ChunkState[]
   /** 已渲染 (foliate iframe) 的文档才有绘制层 */
-  layer?: DjLayer
+  layer?: CompanionLayer
   rendered: boolean
   totalChars: number
   summary?: SectionSummary
@@ -116,15 +116,15 @@ const RETRY_ERROR_MS = 30_000
 const MIN_SECTION_CHARS = 40
 
 export class PagewiseCompanion {
-  readonly host: DjHost
-  readonly cache: DjCache
+  readonly host: CompanionHost
+  readonly cache: CompanionCache
   sections = new Map<number, SectionState>()
-  status: DjStatus = 'idle'
-  error: DjError | null = null
+  status: CompanionStatus = 'idle'
+  error: CompanionError | null = null
   remaining: number | undefined
   active = false
   /** 读者当前位置 (防剧透与预取) */
-  position: DjPosition | null = null
+  position: CompanionPosition | null = null
   /** 速读视图: 要句加底色 */
   band = false
   dismissed = new Set<string>()
@@ -145,7 +145,7 @@ export class PagewiseCompanion {
   #kwLoaded = false
   #onOnline = () => { if (this.status === 'offline') { this.status = 'loading'; this.#schedule() } }
 
-  constructor(host: DjHost, cache: DjCache = getDjCache()) {
+  constructor(host: CompanionHost, cache: CompanionCache = getCompanionCache()) {
     this.host = host
     this.cache = cache
     this.#metaVerdict = fictionFromMeta({ ...host.book(), title: host.book().title })
@@ -253,10 +253,10 @@ export class PagewiseCompanion {
     s.rendered = false
   }
 
-  #ensureLayer(s: SectionState): DjLayer | null {
+  #ensureLayer(s: SectionState): CompanionLayer | null {
     if (!s.rendered) return null
     if (!s.layer) {
-      s.layer = createDjLayer(s.model.doc, {
+      s.layer = createCompanionLayer(s.model.doc, {
         getOverlayer: () => this.host.getOverlayer(s.index),
         colors: () => this.host.colors(),
       })
@@ -267,7 +267,7 @@ export class PagewiseCompanion {
   #models(): string[] {
     const ch = this.host.channel()
     if (!ch) return []
-    return ch.kind === 'builtin' ? [DJ_MODEL, DJ_FALLBACK_MODEL] : [ch.model ?? '']
+    return ch.kind === 'builtin' ? [COMPANION_MODEL, COMPANION_FALLBACK_MODEL] : [ch.model ?? '']
   }
 
   /** 从缓存补齐本节已完成的块与要义 */
@@ -331,7 +331,7 @@ export class PagewiseCompanion {
   #schedule() {
     if (!this.active || this.#disposed) return
     if (this.status === 'quota' || this.status === 'offline') return
-    if (!this.host.channel()) { this.status = 'error'; this.error = new DjError('config', 'not configured'); this.host.onChange(); return }
+    if (!this.host.channel()) { this.status = 'error'; this.error = new CompanionError('config', 'not configured'); this.host.onChange(); return }
     const p = this.position
     const want: Array<{ section: number; chunk: number }> = []
     const cur = p ? this.sections.get(p.section) : [...this.sections.values()].find(s => s.rendered)
@@ -447,7 +447,7 @@ export class PagewiseCompanion {
           fictionSeen = it.fiction
           return
         }
-        if (!isDjItem(it) || c.items.some(x => x.id === it.id)) return
+        if (!isCompanionItem(it) || c.items.some(x => x.id === it.id)) return
         c.items.push(it)
         this.#schedulePaint(s.index)
       }, ctrl.signal)
@@ -461,7 +461,7 @@ export class PagewiseCompanion {
           this.#controllers.delete(ctrl)
           return this.#request(s, c, 1)
         }
-        throw new DjError('http', 'Incomplete JSON analysis: missing valid paragraph gists or genre')
+        throw new CompanionError('http', 'Incomplete JSON analysis: missing valid paragraph gists or genre')
       }
       if (fictionSeen !== undefined && this.fictionSource === 'default') this.#setModelVerdict(fictionSeen)
       c.status = 'done'
@@ -479,7 +479,7 @@ export class PagewiseCompanion {
       this.#paint(s.index)
       this.#maybeSummarize(s)
     } catch (e) {
-      const err = e instanceof DjError ? e : new DjError('http', String(e))
+      const err = e instanceof CompanionError ? e : new CompanionError('http', String(e))
       if (err.code === 'aborted') { c.status = 'idle'; return }
       c.status = 'error'
       c.failedAt = Date.now()
@@ -831,17 +831,17 @@ export class PagewiseCompanion {
         const ref = String(raw.s ?? '').match(/^(?:([1-9]\d*)|\[([1-9]\d*)\])$/)
         const id = Number(ref?.[1] ?? ref?.[2])
         const k = keyList[id - 1]
-        if (!k || pointIds.has(id) || points.length >= 3 || !raw.text.trim()) throw new DjError('http', 'Invalid summary reference or point count')
+        if (!k || pointIds.has(id) || points.length >= 3 || !raw.text.trim()) throw new CompanionError('http', 'Invalid summary reference or point count')
         pointIds.add(id)
         points.push({ t: 'pt', block: k.block, sentence: k.sentence, text: raw.text.trim().slice(0, 90) })
       }
     }).then(async () => {
-      if (!text) throw new DjError('http', 'Incomplete summary output')
+      if (!text) throw new CompanionError('http', 'Incomplete summary output')
       s.summary = { key: sectionKey(this.host.bookId, s.index, PROMPT_VERSION), bookId: this.host.bookId, section: s.index, basis: this.#basis(s), text, points, at: Date.now() }
       await this.cache.put('sections', s.summary).catch(() => {})
       this.host.onChange()
     }).catch(e => {
-      this.error = e instanceof DjError ? e : new DjError('http', String(e))
+      this.error = e instanceof CompanionError ? e : new CompanionError('http', String(e))
       if (this.error.code === 'version') { this.status = 'error'; this.#discardQueuedRequests() }
       this.host.onChange()
     }).finally(() => { s.summaryLoading = false })
@@ -869,7 +869,7 @@ export class PagewiseCompanion {
   // ---- 跳转 ----
 
   /** 位置 → Range (已加载分节直接取; 否则用未渲染文档) */
-  async rangeFor(pos: DjPosition): Promise<Range | null> {
+  async rangeFor(pos: CompanionPosition): Promise<Range | null> {
     let s = this.sections.get(pos.section)
     if (!s) {
       const doc = await this.host.sectionDoc(pos.section).catch(() => null)
@@ -879,7 +879,7 @@ export class PagewiseCompanion {
     return s.model.sentenceRange(pos.block, pos.sentence)
   }
 
-  flash(pos: DjPosition) {
+  flash(pos: CompanionPosition) {
     const s = this.sections.get(pos.section)
     const layer = s ? this.#ensureLayer(s) : null
     const r = s?.model.sentenceRange(pos.block, pos.sentence)

@@ -1,5 +1,5 @@
 /**
- * 伴读的绘制层 (DOM), docs/dianjing-reading.md §3.2: 不改 DOM。
+ * 伴读的绘制层 (DOM), docs/pagewise-companion.md §3.2: 不改 DOM。
  *
  * 主路径: CSS Custom Highlight API —— Highlight 构造函数与 CSS.highlights 都取自 doc.defaultView
  * (每个 iframe 文档一套注册表), 样式 ::highlight(lr-dj-*) 由 getReaderCSS 静态注入。
@@ -10,22 +10,22 @@
  * 注意: 打字机的兜底清理 clearReadingModeMarks() 会删掉所有 `lr-` 开头的 Highlight;
  * 这里每次 paint / ensure() 都会把自己的 Highlight 重新登记回去。
  */
-import { DJ_PRIORITY, HL_BAND, HL_FLASH, HL_KEY, HL_TERM, type DjColors } from './theme.ts'
+import { COMPANION_PRIORITY, HL_BAND, HL_FLASH, HL_KEY, HL_TERM, type CompanionColors } from './theme.ts'
 
 const SVG_NS = 'http://www.w3.org/2000/svg'
 const OV_MARKS = 'lr-dj-marks'
 const OV_NOTES = 'lr-dj-notes'
 
-export interface DjPaint {
+export interface CompanionPaint {
   keys: Range[]
   terms: Range[]
   notes: Range[]
 }
 
-export interface DjLayer {
+export interface CompanionLayer {
   readonly mode: 'highlight' | 'overlay'
   readonly doc: Document
-  paint(p: DjPaint): void
+  paint(p: CompanionPaint): void
   /** 速读视图: 要句加底色 (null 清除) */
   setBand(ranges: Range[] | null): void
   /** 跳转后让一句闪 1 秒 */
@@ -59,17 +59,17 @@ const rectsOf = (r: Range): DOMRect[] => {
   try { return Array.from(r.getClientRects()).filter(x => x.width > 0 && x.height > 0) } catch { return [] }
 }
 
-export function createDjLayer(
+export function createCompanionLayer(
   doc: Document,
   opts: {
     getOverlayer: () => any
-    colors: () => DjColors
+    colors: () => CompanionColors
     forceOverlay?: boolean
   },
-): DjLayer {
+): CompanionLayer {
   const win = doc.defaultView as any
   const useHl = !opts.forceOverlay && supportsHighlightApi(win)
-  let state: DjPaint = { keys: [], terms: [], notes: [] }
+  let state: CompanionPaint = { keys: [], terms: [], notes: [] }
   let band: Range[] | null = null
   let flashTimer: ReturnType<typeof setTimeout> | undefined
 
@@ -87,10 +87,10 @@ export function createDjLayer(
       try { h.priority = priority } catch { /* 旧实现无 priority */ }
       hl[name] = h
     }
-    make(HL_BAND, DJ_PRIORITY.band)
-    make(HL_KEY, DJ_PRIORITY.key)
-    make(HL_TERM, DJ_PRIORITY.term)
-    make(HL_FLASH, DJ_PRIORITY.flash)
+    make(HL_BAND, COMPANION_PRIORITY.band)
+    make(HL_KEY, COMPANION_PRIORITY.key)
+    make(HL_TERM, COMPANION_PRIORITY.term)
+    make(HL_FLASH, COMPANION_PRIORITY.flash)
   }
 
   const ensure = () => {

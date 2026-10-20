@@ -1,7 +1,7 @@
 {
   "name": "pagewise",
   "private": true,
-  "version": "1.2.0",
+  "version": "1.4.0",
   "type": "module",
   "scripts": {
     "dev": "vite --configLoader runner",
@@ -31,9 +31,11 @@
     "test:epub-compat": "node --experimental-strip-types --test scripts/test-epub-compat.mjs",
     "test:compat": "node --experimental-strip-types --test scripts/test-compat.mjs scripts/test-epub-compat.mjs scripts/test-system-language.mjs",
     "check:release": "node scripts/check-release.mjs",
+    "test:ai-providers": "node --experimental-strip-types --test scripts/test-ai-providers.mjs scripts/test-gemini.mjs",
+    "e2e:ai-providers": "node scripts/test-ai-providers-browser.mjs && node scripts/test-gemini-selector.mjs",
     "test:listen-eta": "node --experimental-strip-types --test scripts/test-listen-eta.mjs",
     "test:read-aloud": "node --experimental-strip-types --test scripts/test-read-aloud.mjs scripts/test-listen-player.mjs scripts/test-voice-catalog.mjs",
-    "test:dianjing": "node --experimental-strip-types --test scripts/test-dianjing.mjs",
+    "test:companion": "node --experimental-strip-types --test scripts/test-companion.mjs scripts/test-companion-boundaries.mjs scripts/test-companion-compat.mjs scripts/test-companion-lifecycle.mjs scripts/test-companion-names.mjs",
     "test:native-back": "node --experimental-strip-types --test scripts/test-native-reader-back.mjs scripts/test-native-back-pages.mjs",
     "test:system-tts": "node --experimental-strip-types --test scripts/test-system-tts.mjs scripts/test-system-tts-runtime.mjs scripts/test-system-tts-player.mjs scripts/test-native-speech-session.mjs scripts/test-native-speech-callers.mjs",
     "test:ambient-usage-removal": "node --experimental-strip-types --test scripts/test-ambient-usage-removal.mjs scripts/test-reader-more-browser.mjs",

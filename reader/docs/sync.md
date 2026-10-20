@@ -58,7 +58,7 @@ InfiniCLOUD 每个账号的 WebDAV 节点不同（`https://<节点>.teracloud.jp
 用户在一台设备上改的阅读、外观、听书、AI、WebDAV 等设置随同步（WebDAV 与轻阅账号都走同一套文档）带到其他设备。实现：`src/services/sync/settingsSync.ts`（纯函数）、`settingsTracker.ts`（记录修改时间）、engine 的 `settings` 端口。
 
 - **开关（按设备，本身不同步）**：`settings.syncSettings`（默认开）关闭时本机既不发出也不落地设置，但写自己的文档时照样转写别的设备的设置；`settings.syncSecrets`（默认关）控制本机是否把密钥写进文档。
-- **粒度**：每个设置路径一个 LWW 寄存器，嵌套对象按子键（`reader.*`、`pdf.*`、`readingMode.typewriter.*` …）；数组 / 字典型的值（`githubBookRepos`、`ambient.layers`、`dianjing.kinds`）整体 LWW。
+- **粒度**：每个设置路径一个 LWW 寄存器，嵌套对象按子键（`reader.*`、`pdf.*`、`readingMode.typewriter.*` …）；数组 / 字典型的值（`githubBookRepos`、`ambient.layers`、`pagewiseCompanion.kinds`）整体 LWW。
 - **stamp = 修改时间，不是同步时间**：`settingsTracker` 深度监听可同步的值，变化时记 `t = max(现在, 已知 t + 1)`（时钟偏慢也能盖过刚收到的值），存 localStorage `lightread-settings-sync`。第一次见到某项时：与默认值相同记 0（从没改过，不写进文档，任何设备的值都能盖过它），否则记 1（改过但不知何时：胜过默认值，输给之后的任何修改）。不依赖基线，所以关掉再打开「同步设置」、换远端都按修改时间收敛。
 - **本机文档** = 基线里已知的设置 ∪ 本机各项（修改时间 > 0 的，`stamp.d` 为本机；从别处收到的沿用来源的 stamp，与来源文档完全一致）。
 - **落地**：只落白名单路径，且合并结果的 stamp 新于本机的修改时间、值的类型与本机相符。落地时同时更新本机的修改时间与快照，所以收到的值不会被当成本机修改再发出去（不会来回打架）。同步前一刻还没被监听记下的修改，端口 `read()` 会先补记。
@@ -74,9 +74,9 @@ InfiniCLOUD 每个账号的 WebDAV 节点不同（`https://<节点>.teracloud.jp
 
 | 归类 | 设置 |
 |---|---|
-| 同步 | `language`、`appearance`；`reader.*`（字号、行距、页边距、主题、排版方式、栏数、字体名、两端对齐、字距、进度显示）；`pdf.*`；`githubBookRepos`；`autoReadSeconds`；`ttsRate`、`edgeVoice`、`localVoiceId`；`aiProvider`、`aiBaseUrl`、`aiModel`；`webdavUrl`、`webdavUser`、`webdavProvider`；`dailyGoalMinutes`；`dianjing` 的 `level`（点睛阅读选的版本）、`enabled`、`consentAll`、`density`、`kinds`、`channel`、`chapterCard`；`readingMode` 的 `typewriter.*`、`lyric.*`、`wordGuide.*`、`immersive.*`、`eyeCare.*`、`night.*`；`ambient.*` |
+| 同步 | `language`、`appearance`；`reader.*`（字号、行距、页边距、主题、排版方式、栏数、字体名、两端对齐、字距、进度显示）；`pdf.*`；`githubBookRepos`；`autoReadSeconds`；`ttsRate`、`edgeVoice`、`localVoiceId`；`aiProvider`、`aiBaseUrl`、`aiModel`；`webdavUrl`、`webdavUser`、`webdavProvider`；`dailyGoalMinutes`；`pagewiseCompanion` 的 `level`（伴读选的版本）、`enabled`、`consentAll`、`density`、`kinds`、`channel`、`chapterCard`；`readingMode` 的 `typewriter.*`、`lyric.*`、`wordGuide.*`、`immersive.*`、`eyeCare.*`、`night.*`；`ambient.*` |
 | 密钥（仅 `syncSecrets`） | `webdavPass`、`aiApiKey` |
-| 只属于本机 | `version`；`customFonts`（字体文件在本机）；`libraryRoot`、`calibrePath`（本机路径）；`httpProxy`、`corsProxy`（网络环境）；`paperAgentEngine`、`paperAgentExecutables`（本机安装的引擎）；`ttsEngine`（本地离线音色要下载模型，网页没有）、`ttsVoice`（系统音色因系统而异）；`usageStats`（关掉的设备不会被别处打开）；`syncSettings`、`syncSecrets`；`webdavSyncAuto`、`webdavSyncFiles`（自动同步、是否传书籍文件按设备）；`dianjing.perBook`、`dianjing.fiction`（键是本机书 id）；`readingMode.presets`、`readingMode.largeText`、`readingMode.eink`（预设开关与快照） |
+| 只属于本机 | `version`；`customFonts`（字体文件在本机）；`libraryRoot`、`calibrePath`（本机路径）；`httpProxy`、`corsProxy`（网络环境）；`paperAgentEngine`、`paperAgentExecutables`（本机安装的引擎）；`ttsEngine`（本地离线音色要下载模型，网页没有）、`ttsVoice`（系统音色因系统而异）；`usageStats`（关掉的设备不会被别处打开）；`syncSettings`、`syncSecrets`；`webdavSyncAuto`、`webdavSyncFiles`（自动同步、是否传书籍文件按设备）；`pagewiseCompanion.perBook`、`pagewiseCompanion.fiction`（键是本机书 id）；`readingMode.presets`、`readingMode.largeText`、`readingMode.eink`（预设开关与快照） |
 
 书源（含 OPDS 账号密码）是书库记录，不属于设置，一直随 `sources` 同步，不受 `syncSecrets` 控制（理由见下一节）。
 

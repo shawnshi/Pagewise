@@ -1,5 +1,5 @@
 /**
- * 伴读与 ReaderView 的对接层 (docs/dianjing-reading.md)。逻辑在 services/PagewiseCompanion/*, 这里只做 Vue 状态与接线。
+ * 伴读与 ReaderView 的对接层 (docs/pagewise-companion.md)。逻辑在 services/PagewiseCompanion/*, 这里只做 Vue 状态与接线。
  *
  * ## 接线清单 (ReaderView.vue, 由主会话完成)
  *
@@ -60,15 +60,15 @@ import { useSettings } from '../stores/settings'
 import { t } from '../i18n'
 import { toast } from '../services/toast'
 import { aiConfigured, providerById, TRIAL_BASE_URL, type ReaderAssistantContext } from '../services/ai'
-import { PagewiseCompanion, type CardTarget, type DjPosition, type DjStatus } from '../services/PagewiseCompanion/engine'
-import { streamPagewiseCompanion, type DjChannel } from '../services/PagewiseCompanion/client'
-import { djColors } from '../services/PagewiseCompanion/theme'
+import { PagewiseCompanion, type CardTarget, type CompanionPosition, type CompanionStatus } from '../services/PagewiseCompanion/engine'
+import { streamPagewiseCompanion, type CompanionChannel } from '../services/PagewiseCompanion/client'
+import { companionColors } from '../services/PagewiseCompanion/theme'
 import { selectKeys, selectTerms, type Density, type KeyItem, type TermItem } from '../services/PagewiseCompanion/protocol'
 import type { ChunkRecord } from '../services/PagewiseCompanion/cache'
-import { getDjCache } from '../services/PagewiseCompanion/cache'
-import { applyDjAction, normalizeLevel, smartOnFor, type DjAction, type DjLevel, type DjSwitchState } from '../services/PagewiseCompanion/level'
+import { getCompanionCache } from '../services/PagewiseCompanion/cache'
+import { applyCompanionAction, normalizeLevel, smartOnFor, type CompanionAction, type CompanionLevel, type CompanionSwitchState } from '../services/PagewiseCompanion/level'
 
-export interface DjMeta {
+export interface CompanionMeta {
   title?: string
   author?: string
   language?: string
@@ -79,7 +79,7 @@ export interface DjMeta {
 export interface UsePagewiseCompanionOptions {
   getView: () => any
   bookId: string
-  getMeta: () => DjMeta | null | undefined
+  getMeta: () => CompanionMeta | null | undefined
   /** companionThemeName(正文主题, 墨水屏) */
   getThemeName: () => string
   isEink?: () => boolean
@@ -106,7 +106,7 @@ export interface UsePagewiseCompanionOptions {
   onKeyWords?: (section: number | null) => void
 }
 
-export interface DjCardState {
+export interface CompanionCardState {
   target: CardTarget
   translation?: string
   translating?: boolean
@@ -114,7 +114,7 @@ export interface DjCardState {
   translateFailure?: unknown
 }
 
-export interface OutlinePoint { text: string; pos: DjPosition; why?: string; r?: number }
+export interface OutlinePoint { text: string; pos: CompanionPosition; why?: string; r?: number }
 export interface OutlineSection {
   section: number
   title: string
@@ -126,7 +126,7 @@ export interface OutlineSection {
 }
 export interface OutlineData {
   sections: OutlineSection[]
-  glossary: Array<{ q: string; def: string; pos: DjPosition }>
+  glossary: Array<{ q: string; def: string; pos: CompanionPosition }>
   /** 叙述类: 只列到读者当前位置 */
   spoilerSafe: boolean
 }
@@ -139,14 +139,14 @@ const isMobile = () => {
 
 export function usePagewiseCompanion(opts: UsePagewiseCompanionOptions) {
   const settings = useSettings()
-  const prefs = computed(() => settings.dianjing)
+  const prefs = computed(() => settings.pagewiseCompanion)
 
   /** 引擎状态变化的版本号 (引擎是普通对象, 用它驱动计算属性) */
   const tick = ref(0)
   const bump = () => { tick.value++ }
 
   const consentOpen = ref(false)
-  const card = shallowRef<DjCardState | null>(null)
+  const card = shallowRef<CompanionCardState | null>(null)
   const outlineOpen = ref(false)
   const skimOpen = ref(false)
   const outline = shallowRef<OutlineData | null>(null)
@@ -154,18 +154,20 @@ export function usePagewiseCompanion(opts: UsePagewiseCompanionOptions) {
   const chapterCardCollapsed = ref<Record<number, boolean>>({})
   const selectionKey = shallowRef<CardTarget | null>(null)
   const supported = ref(true)
-  let pendingFlash: DjPosition | null = null
+  let pendingFlash: CompanionPosition | null = null
   let disposed = false
-  let translationRequest: { controller: AbortController; card: DjCardState; previous: DjCardState } | null = null
+  let translationRequest: { controller: AbortController; card: CompanionCardState; previous: CompanionCardState } | null = null
 
   let reducedMotion = false
   try { reducedMotion = !!window.matchMedia?.('(prefers-reduced-motion: reduce)').matches } catch { /* 无 matchMedia */ }
 
-  const channel = (): DjChannel | null => {
+  const channel = (): CompanionChannel | null => {
     const mode = prefs.value.channel
-    const provider = providerById(settings.aiProvider)
+    let provider
+    try { provider = providerById(settings.aiProvider) }
+    catch { return null } // Retired/unknown saved services stay inactive; never route them to the trial service.
     const own = provider.id !== 'trial' && aiConfigured() && !settings.aiBaseUrl.startsWith(TRIAL_BASE_URL)
-    const ownChannel: DjChannel = { kind: 'own', baseUrl: settings.aiBaseUrl, apiKey: settings.aiApiKey, model: settings.aiModel }
+    const ownChannel: CompanionChannel = { kind: 'own', baseUrl: settings.aiBaseUrl, apiKey: settings.aiApiKey, model: settings.aiModel }
     if (mode === 'own') return own ? ownChannel : null
     if (mode === 'auto' && own) return ownChannel
     return { kind: 'builtin', baseUrl: TRIAL_BASE_URL }
@@ -206,7 +208,7 @@ export function usePagewiseCompanion(opts: UsePagewiseCompanionOptions) {
     density: () => prefs.value.density as Density,
     kinds: () => prefs.value.kinds,
     fictionOverride: () => prefs.value.fiction[opts.bookId] ?? null,
-    colors: () => djColors(opts.getThemeName()),
+    colors: () => companionColors(opts.getThemeName()),
     getOverlayer: i => view()?.renderer?.getContents?.()?.find((c: any) => c.index === i)?.overlayer ?? null,
     concurrency: () => (isMobile() ? 2 : 3),
     batchPaint: () => !!opts.isEink?.() || reducedMotion,
@@ -215,7 +217,7 @@ export function usePagewiseCompanion(opts: UsePagewiseCompanionOptions) {
   })
 
   /** 选的版本: 基础 (按词着色) / 智能 (AI) */
-  const level = computed<DjLevel>(() => normalizeLevel(prefs.value.level))
+  const level = computed<CompanionLevel>(() => normalizeLevel(prefs.value.level))
   /** 智能版在本书开着 (只在选了智能版时为 true; AI 引擎随它启停) */
   const enabled = computed(() => !opts.presentationSuppressed?.() && level.value === 'smart' && smartOnFor(prefs.value, opts.bookId))
   const basicOn = computed(() => !opts.presentationSuppressed?.() && level.value === 'basic' && !!opts.basic?.isOn())
@@ -225,7 +227,7 @@ export function usePagewiseCompanion(opts: UsePagewiseCompanionOptions) {
   /** 这本书能用「重点词」(中文书) */
   const keyWordsSupported = computed(() => opts.basic?.keyWordsSupported?.() ?? true)
 
-  const status = computed<DjStatus>(() => {
+  const status = computed<CompanionStatus>(() => {
     void tick.value
     if (!supported.value) return 'unsupported'
     if (consentOpen.value) return 'consent'
@@ -241,7 +243,7 @@ export function usePagewiseCompanion(opts: UsePagewiseCompanionOptions) {
 
   const density = computed<Density>({
     get: () => prefs.value.density as Density,
-    set: v => { settings.dianjing.density = v },
+    set: v => { settings.pagewiseCompanion.density = v },
   })
 
   // ---- 开关 ----
@@ -260,27 +262,27 @@ export function usePagewiseCompanion(opts: UsePagewiseCompanionOptions) {
   }
 
   /** 走一步开关状态机 (services/PagewiseCompanion/level.ts), 把变化写回设置; 返回 false 表示先弹了同意说明 */
-  function apply(action: DjAction): boolean {
+  function apply(action: CompanionAction): boolean {
     if (opts.presentationSuppressed?.()) return false
     const p = prefs.value
-    const before: DjSwitchState = {
+    const before: CompanionSwitchState = {
       level: level.value,
       basicOn: !!opts.basic?.isOn(),
       perBook: p.perBook,
       consentAll: p.consentAll,
       enabled: p.enabled,
     }
-    const { state, needConsent } = applyDjAction(before, opts.bookId, action)
+    const { state, needConsent } = applyCompanionAction(before, opts.bookId, action)
     if (needConsent) {
       opts.beforeOverlay?.()
       consentOpen.value = true
       return false
     }
     if (state.basicOn !== before.basicOn) opts.basic?.set(state.basicOn)
-    if (state.consentAll !== p.consentAll) settings.dianjing.consentAll = state.consentAll
-    if (state.enabled !== p.enabled) settings.dianjing.enabled = state.enabled
-    if (state.perBook[opts.bookId] !== p.perBook[opts.bookId]) settings.dianjing.perBook = state.perBook
-    if (state.level !== p.level) settings.dianjing.level = state.level
+    if (state.consentAll !== p.consentAll) settings.pagewiseCompanion.consentAll = state.consentAll
+    if (state.enabled !== p.enabled) settings.pagewiseCompanion.enabled = state.enabled
+    if (state.perBook[opts.bookId] !== p.perBook[opts.bookId]) settings.pagewiseCompanion.perBook = state.perBook
+    if (state.level !== p.level) settings.pagewiseCompanion.level = state.level
     return true
   }
 
@@ -295,7 +297,7 @@ export function usePagewiseCompanion(opts: UsePagewiseCompanionOptions) {
   }
 
   /** 选版本 (面板里的「基础 / 智能」): 开着时把「开」带到新版本 (智能版未同意时先弹同意说明, 期间基础版照常开着) */
-  function setLevel(next: DjLevel) {
+  function setLevel(next: CompanionLevel) {
     apply({ kind: 'setLevel', level: next })
   }
 
@@ -476,7 +478,7 @@ export function usePagewiseCompanion(opts: UsePagewiseCompanionOptions) {
 
   // ---- 跳转 ----
 
-  async function goTo(pos: DjPosition) {
+  async function goTo(pos: CompanionPosition) {
     const v = view()
     if (!v) return
     try {
@@ -555,9 +557,9 @@ export function usePagewiseCompanion(opts: UsePagewiseCompanionOptions) {
       }
       const pos = engine.position
       const spoilerSafe = engine.fiction
-      const before = (p: DjPosition) => !spoilerSafe || !pos || p.section < pos.section || (p.section === pos.section && (p.block < pos.block || (p.block === pos.block && p.sentence <= pos.sentence)))
+      const before = (p: CompanionPosition) => !spoilerSafe || !pos || p.section < pos.section || (p.section === pos.section && (p.block < pos.block || (p.block === pos.block && p.sentence <= pos.sentence)))
       const bySection = new Map<number, OutlineSection>()
-      const glossary = new Map<string, { q: string; def: string; pos: DjPosition }>()
+      const glossary = new Map<string, { q: string; def: string; pos: CompanionPosition }>()
       const dens = prefs.value.density as Density
       const recs = [...latest.values()].sort((a, b) => a.section - b.section || a.chunkIndex - b.chunkIndex)
       for (const rec of recs) {
@@ -692,14 +694,14 @@ export function usePagewiseCompanion(opts: UsePagewiseCompanionOptions) {
   }
 
   async function cacheSize(): Promise<number> {
-    return getDjCache().size()
+    return getCompanionCache().size()
   }
 
   function setFiction(v: 'fiction' | 'nonfiction' | null) {
     const next = { ...prefs.value.fiction }
     if (v) next[opts.bookId] = v
     else delete next[opts.bookId]
-    settings.dianjing.fiction = next
+    settings.pagewiseCompanion.fiction = next
   }
 
   function dispose() {

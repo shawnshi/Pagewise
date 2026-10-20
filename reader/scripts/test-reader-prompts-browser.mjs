@@ -40,12 +40,13 @@ async function fresh() {
   })
   page = await context.newPage()
   page.on('pageerror', e => results.pageErrors.push(e.message))
-  await page.goto(origin + '/#/library', { waitUntil: 'networkidle' })
+  await page.goto(origin + '/#/library', { waitUntil: 'domcontentloaded', timeout: 45000 })
+  await page.locator('.library').waitFor({ timeout: 45000 })
   await page.evaluate(async () => {
     const { useSettings } = await import('/src/stores/settings.ts')
     const s = useSettings()
-    s.language = 'en'; s.aiProvider = 'custom'; s.aiBaseUrl = location.origin + '/qa-model/v1'; s.aiModel = 'synthetic-only'; s.aiApiKey = ''
-    s.corsProxy = ''; s.httpProxy = ''; s.dianjing.channel = 'own'; s.dianjing.enabled = false
+    s.language = 'en'; s.aiProvider = 'openai'; s.aiBaseUrl = location.origin + '/qa-model/v1'; s.aiModel = 'synthetic-only'; s.aiApiKey = 'synthetic-local-only'
+    s.corsProxy = ''; s.httpProxy = ''; s.pagewiseCompanion.channel = 'own'; s.pagewiseCompanion.enabled = false
     const original = window.fetch.bind(window)
     window.__qa = { calls: [], plans: [], frame: text => `data: ${JSON.stringify({ choices: [{ delta: { content: text } }] })}\n\n` }
     window.fetch = async (url, init) => {
@@ -288,10 +289,13 @@ try {
       // Opt in only this synthetic book; isolate background I/O, not the translation guard.
       window.__qa.backgroundChannel = dj.engine.host.channel
       dj.engine.host.channel = () => null
-      settings.dianjing.level = 'smart'
-      settings.dianjing.perBook[bookId] = true
+      settings.pagewiseCompanion.level = 'smart'
+      settings.pagewiseCompanion.perBook[bookId] = true
       await Promise.resolve()
-      if (!dj.active.value) throw Error('FIXTURE: synthetic Companion consent must be active')
+      if (!dj.active.value) throw Error('FIXTURE: synthetic Companion consent must be active ' + JSON.stringify({
+        level: settings.pagewiseCompanion.level, perBook: settings.pagewiseCompanion.perBook, bookId,
+        supported: dj.supported.value, publicationBaseline: v.publicationBaseline, route: location.hash,
+      }))
       v.panel = 'none'
       const block = s.model.sectionBlocks().find(b => b.sentences.some(text => text.includes('SOURCE_IGNORE_POLICY')))?.block
       if (block === undefined) throw Error('FIXTURE: translation source paragraph missing')
@@ -325,7 +329,7 @@ try {
       const dj = document.querySelector('.reader').__vueParentComponent.setupState.dj
       dj.closeCard()
       const settings = (await import('/src/stores/settings.ts')).useSettings()
-      settings.dianjing.perBook[bookId] = false
+      settings.pagewiseCompanion.perBook[bookId] = false
       await Promise.resolve()
       dj.engine.host.channel = window.__qa.backgroundChannel
       delete window.__qa.backgroundChannel

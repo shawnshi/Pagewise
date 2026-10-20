@@ -7,6 +7,7 @@ import * as prompt from '../src/services/PagewiseCompanion/prompt.ts'
 import { SseDeltaParser, resolveItem } from '../src/services/PagewiseCompanion/protocol.ts'
 import { chunkSection } from '../src/services/PagewiseCompanion/chunker.ts'
 import { sseToNdjson } from '../relay/src/lib.js'
+import { compatibleChatBody } from '../src/services/aiProviders.ts'
 
 const code = ts.transpileModule(readFileSync(new URL('../src/services/ai.ts', import.meta.url), 'utf8'), {
   compilerOptions: { module: ts.ModuleKind.CommonJS, target: ts.ScriptTarget.ES2022 },
@@ -22,7 +23,7 @@ function loadAi(response) {
       if (!response) throw Error('Settings forbidden')
       return { aiProvider: 'unit', aiBaseUrl: 'https://unit.invalid', aiModel: 'synthetic-model', aiApiKey: '', language: 'en' }
     } }
-    if (id === './aiProviders.ts') return { AI_PROVIDERS: [], providerById: () => ({ id: 'unit', needsKey: false }) }
+    if (id === './aiProviders.ts') return { AI_PROVIDERS: [], compatibleChatBody, providerById: () => ({ id: 'unit', needsKey: false }) }
     throw Error(`Unexpected dependency: ${id}`)
   } })
   return { ai: exports, calls }

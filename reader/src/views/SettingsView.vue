@@ -3,6 +3,7 @@ import { computed, nextTick, onBeforeUnmount, onMounted, reactive, ref, watch } 
 import { useRoute } from 'vue-router'
 import { getStorage, isTauri } from '../storage'
 import { useSettings } from '../stores/settings'
+import { serializeCompanionSettings } from '../services/PagewiseCompanion/compatibility.ts'
 import { useLibrary } from '../stores/library'
 import { exportBackup, exportBackupToSink, importBackup, LIBRARY_ARCHIVE_EXTENSION } from '../services/backup'
 import { downloadArchiveBlob, exportLibraryArchiveToDevice } from '../services/archiveExport'
@@ -11,9 +12,11 @@ import { toast } from '../services/toast'
 import { CURRENT_VERSION } from '../services/appVersion'
 import { t } from '../i18n'
 import { loadLibrarySession, saveLibrarySession } from '../services/librarySession'
-import { providerById, chatStream } from '../services/ai'
+import { aiConfigured, providerById, chatStream } from '../services/ai'
+import { isSelectableAiProvider } from '../services/aiProviders.ts'
 import AppIcon from '../components/AppIcon.vue'
 import AiProviderSelector from '../components/AiProviderSelector.vue'
+import AiModelSelector from '../components/AiModelSelector.vue'
 import TypographyCalibration from '../components/TypographyCalibration.vue'
 import { useFolderLibrary } from '../services/folderLibrary'
 
@@ -174,12 +177,15 @@ async function testProxy() {
 const aiTesting = ref(false)
 const aiTestResult = ref('')
 const aiBaseUrlOpen = ref(false)
+const aiReady = computed(() => aiConfigured())
+const aiNeedsKey = computed(() => isSelectableAiProvider(settings.aiProvider) && providerById(settings.aiProvider).needsKey)
+const aiCanEditBaseUrl = computed(() => isSelectableAiProvider(settings.aiProvider) && settings.aiProvider !== 'trial')
 const aiShowBaseUrl = computed(() => {
   try {
     const preset = providerById(settings.aiProvider)
-    return aiBaseUrlOpen.value || preset.id === 'custom' || !settings.aiBaseUrl || settings.aiBaseUrl !== preset.baseUrl
+    return aiCanEditBaseUrl.value && (aiBaseUrlOpen.value || !settings.aiBaseUrl || settings.aiBaseUrl !== preset.baseUrl)
   } catch {
-    return true
+    return false
   }
 })
 const aiDocsUrl = computed(() => {
@@ -251,7 +257,7 @@ async function changeLibraryRoot() {
       await migrateLibraryTo(picked, msg => (migrating.value = msg))
     }
     settings.libraryRoot = picked
-    localStorage.setItem('lightread-settings', JSON.stringify(settings.$state))
+    localStorage.setItem('lightread-settings', JSON.stringify(serializeCompanionSettings(settings.$state)))
     toast(t('settings.locationSwitched'), 'success')
     setTimeout(() => location.reload(), 800)
   } catch (e: any) {
@@ -262,7 +268,7 @@ async function changeLibraryRoot() {
 function resetLibraryRoot() {
   if (!confirm(t('settings.resetLocationConfirm'))) return
   settings.libraryRoot = ''
-  localStorage.setItem('lightread-settings', JSON.stringify(settings.$state))
+  localStorage.setItem('lightread-settings', JSON.stringify(serializeCompanionSettings(settings.$state)))
   setTimeout(() => location.reload(), 300)
 }
 async function doExport() {
@@ -415,13 +421,13 @@ const APPEARANCE_OPTIONS = [
         <div class="field field-wide">
           <AiProviderSelector />
         </div>
-        <div class="field"><label class="field-label" for="ai-model">{{ t('settings.aiModelLabel') }}</label><input id="ai-model" v-model="settings.aiModel" class="input" autocapitalize="off" spellcheck="false" :placeholder="t('settings.aiModelPh')" /></div>
-        <div v-if="aiShowBaseUrl" class="field field-wide"><label class="field-label" for="ai-base-url">{{ t('settings.aiBaseUrlLabel') }}</label><input id="ai-base-url" v-model="settings.aiBaseUrl" class="input" type="url" inputmode="url" autocapitalize="off" spellcheck="false" placeholder="https://api.siliconflow.cn/v1" /></div>
-        <div class="field field-wide"><label class="field-label" for="ai-key">API Key</label><input id="ai-key" v-model="settings.aiApiKey" class="input" type="password" :placeholder="t('settings.aiKeyPh')" autocomplete="new-password" /></div>
+        <AiModelSelector />
+        <div v-if="aiShowBaseUrl" class="field field-wide"><label class="field-label" for="ai-base-url">{{ t('settings.aiBaseUrlLabel') }}</label><input id="ai-base-url" v-model="settings.aiBaseUrl" class="input" type="url" inputmode="url" autocapitalize="off" spellcheck="false" placeholder="https://api.openai.com/v1" /></div>
+        <div v-if="aiNeedsKey" class="field field-wide"><label class="field-label" for="ai-key">API Key</label><input id="ai-key" v-model="settings.aiApiKey" class="input" type="password" :placeholder="t('settings.aiKeyPh')" autocomplete="new-password" /></div>
       </div>
       <div class="ai-actions">
-        <button class="btn btn-primary" :disabled="aiTesting || !settings.aiBaseUrl || !settings.aiModel" @click="testAi">{{ aiTesting ? t('settings.testing') : t('settings.aiTest') }}</button>
-        <button v-if="!aiShowBaseUrl" type="button" class="link-btn" @click="aiBaseUrlOpen = true">{{ t('settings.aiEditBaseUrl') }}</button>
+        <button class="btn btn-primary" :disabled="aiTesting || !aiReady" @click="testAi">{{ aiTesting ? t('settings.testing') : t('settings.aiTest') }}</button>
+        <button v-if="aiCanEditBaseUrl && !aiShowBaseUrl" type="button" class="link-btn" @click="aiBaseUrlOpen = true">{{ t('settings.aiEditBaseUrl') }}</button>
         <button v-if="aiDocsUrl" type="button" class="link-btn" @click="openAiDocs">{{ t('settings.aiGetKey') }}</button>
       </div>
       <div v-if="aiTestResult" class="status-info" role="status">{{ aiTestResult }}</div>

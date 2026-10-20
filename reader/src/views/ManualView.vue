@@ -7,6 +7,7 @@ import { computed, nextTick, onMounted, ref, watch } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 import { marked, type Tokens } from 'marked'
 import { t } from '../i18n'
+import { companionManualFile } from '../services/PagewiseCompanion/compatibility.ts'
 
 const route = useRoute()
 const router = useRouter()
@@ -19,7 +20,8 @@ const files = Object.keys(loaders)
   .map(p => p.split('/').pop()!)
   .sort((a, b) => (a === 'README.md' ? -1 : b === 'README.md' ? 1 : a.localeCompare(b)))
 const titles = ref<Record<string, string>>({})
-const current = ref<string>(files.includes(String(route.query.doc)) ? String(route.query.doc) : 'README.md')
+const requestedManual = companionManualFile(String(route.query.doc))
+const current = ref<string>(files.includes(requestedManual) ? requestedManual : 'README.md')
 const html = ref('')
 const loading = ref(false)
 const article = ref<HTMLElement>()
@@ -81,7 +83,7 @@ onMounted(async () => {
   }
 })
 
-const chapters = computed(() => files.map(f => ({ file: f, title: titles.value[f] ?? f.replace(/\.md$/, '').replace('点睛阅读', '伴读') })))
+const chapters = computed(() => files.map(f => ({ file: f, title: titles.value[f] ?? f.replace(/\.md$/, '') })))
 
 async function openExternal(url: string) {
   const { openUrl } = await import('@tauri-apps/plugin-opener')

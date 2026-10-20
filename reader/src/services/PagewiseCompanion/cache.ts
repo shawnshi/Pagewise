@@ -1,5 +1,5 @@
 /**
- * 伴读的本地缓存 (docs/dianjing-reading.md §6.5): IndexedDB 库 `lightread-dianjing`。
+ * 伴读的本地缓存 (docs/pagewise-companion.md §6.5): IndexedDB 库 `lightread-dianjing`。
  * 网页、Tauri webview、Android WebView 都有 IndexedDB; 打不开 (隐私模式、配额) 时退回内存, 不影响阅读。
  *
  * stores:
@@ -8,7 +8,7 @@
  *  - feedback: key = `${bookId}:${itemId}` → FeedbackRecord (不是重点 / 已采纳)
  * 键都以 `${bookId}:` 开头, 便于按书前缀列出 (脉络、速读) 与清除本书缓存。
  */
-import type { DjItem, PointItem } from './protocol.ts'
+import type { CompanionItem, PointItem } from './protocol.ts'
 
 export interface ChunkRecord {
   key: string
@@ -23,7 +23,7 @@ export interface ChunkRecord {
   /** 本块第一段 / 最后一段 (脉络排序、位置判断) */
   firstBlock: number
   lastBlock: number
-  items: DjItem[]
+  items: CompanionItem[]
   /** 要句原文 (按 id; 速读 / 脉络在未加载的章节也能显示), 截断到 160 字 */
   texts: Record<string, string>
   /** 每句长度 (按 `${block}.${sentence}`), 密度预算用 */
@@ -78,7 +78,7 @@ export function bookRange(bookId: string): [string, string] {
 
 type StoreName = 'chunks' | 'sections' | 'feedback'
 
-export interface DjCache {
+export interface CompanionCache {
   get<T>(store: StoreName, key: string): Promise<T | undefined>
   put<T extends { key: string }>(store: StoreName, value: T): Promise<void>
   listBook<T>(store: StoreName, bookId: string): Promise<T[]>
@@ -88,7 +88,7 @@ export interface DjCache {
 }
 
 /** 内存实现 (测试、IndexedDB 不可用时) */
-export function createMemoryCache(): DjCache {
+export function createMemoryCache(): CompanionCache {
   const stores: Record<StoreName, Map<string, any>> = { chunks: new Map(), sections: new Map(), feedback: new Map() }
   return {
     async get(store, key) { return stores[store].get(key) },
@@ -129,15 +129,15 @@ function openDb(): Promise<IDBDatabase> {
   })
 }
 
-export function createIdbCache(): DjCache {
+export function createIdbCache(): CompanionCache {
   let dbp: Promise<IDBDatabase> | null = null
-  let fallback: DjCache | null = null
+  let fallback: CompanionCache | null = null
   const db = () => (dbp ??= openDb())
   const withStore = async <T>(store: StoreName, mode: IDBTransactionMode, fn: (s: IDBObjectStore) => IDBRequest<T>): Promise<T> => {
     const d = await db()
     return req(fn(d.transaction(store, mode).objectStore(store)))
   }
-  const safe = async <T>(fn: () => Promise<T>, mem: (c: DjCache) => Promise<T>): Promise<T> => {
+  const safe = async <T>(fn: () => Promise<T>, mem: (c: CompanionCache) => Promise<T>): Promise<T> => {
     if (fallback) return mem(fallback)
     try {
       return await fn()
@@ -170,12 +170,12 @@ export function createIdbCache(): DjCache {
   }
 }
 
-let shared: DjCache | null = null
+let shared: CompanionCache | null = null
 /** 全局缓存实例 (惰性打开) */
-export function getDjCache(): DjCache {
+export function getCompanionCache(): CompanionCache {
   if (!shared) shared = typeof indexedDB === 'undefined' ? createMemoryCache() : createIdbCache()
   return shared
 }
 
 /** 测试用: 替换全局实例 */
-export function setDjCache(c: DjCache | null) { shared = c }
+export function setCompanionCache(c: CompanionCache | null) { shared = c }

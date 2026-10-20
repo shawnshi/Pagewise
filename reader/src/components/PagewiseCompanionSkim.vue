@@ -6,7 +6,7 @@
 import { computed, onBeforeUnmount, onMounted, ref } from 'vue'
 import { t } from '../i18n'
 import type { PagewiseCompanionController } from '../composables/usePagewiseCompanion'
-import type { DjPosition } from '../services/PagewiseCompanion/engine'
+import type { CompanionPosition } from '../services/PagewiseCompanion/engine'
 
 const props = defineProps<{ dj: PagewiseCompanionController }>()
 const emit = defineEmits<{ close: [] }>()
@@ -18,7 +18,7 @@ function close() {
   props.dj.closeSkim()
   emit('close')
 }
-function go(pos: DjPosition) {
+function go(pos: CompanionPosition) {
   close()
   void props.dj.goTo(pos)
 }

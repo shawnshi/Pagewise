@@ -1,10 +1,10 @@
 /**
- * 伴读的正文主题取值与静态样式 (docs/dianjing-reading.md §3.3)。
+ * 伴读的正文主题取值与静态样式 (docs/pagewise-companion.md §3.3)。
  * 这些是正文主题的取值 (不是外壳令牌), 由 readerTheme.getReaderCSS() 按主题写入 iframe。
  * 纯函数、零依赖: readerTheme.ts 与回退绘制 (overlayer) 共用同一张表。
  */
 
-export interface DjColors {
+export interface CompanionColors {
   /** 要句: 朱 */
   key: string
   /** 概念: 墨青 */
@@ -17,7 +17,7 @@ export interface DjColors {
   eink?: boolean
 }
 
-export const DJ_COLORS: Record<string, DjColors> = {
+export const COMPANION_COLORS: Record<string, CompanionColors> = {
   light: { key: '#c2410c', term: '#0f6e6e', note: '#9a6700', band: 'rgba(194,65,12,.10)' },
   sepia: { key: '#b03a12', term: '#1d6560', note: '#8a5a00', band: 'rgba(176,58,18,.10)' },
   green: { key: '#9c2f0c', term: '#0b4f63', note: '#6e4700', band: 'rgba(156,47,12,.10)' },
@@ -31,8 +31,8 @@ export function companionThemeName(theme: string, eink = false): string {
   return eink ? (theme === 'dark' ? 'eink-dark' : 'eink') : theme
 }
 
-export function djColors(theme: string): DjColors {
-  return DJ_COLORS[theme] ?? DJ_COLORS.light
+export function companionColors(theme: string): CompanionColors {
+  return COMPANION_COLORS[theme] ?? COMPANION_COLORS.light
 }
 
 export const HL_KEY = 'lr-dj-key'
@@ -44,11 +44,11 @@ export const HL_FLASH = 'lr-dj-flash'
  * 叠加优先级 (§5): 打字机隐藏层 100 > 墨迹 50 > 听书当前句 / 歌词聚焦 (≥20) > 伴读 (10–13) > 仿生阅读 (<10)。
  * 用户自己的划线画在 overlayer (SVG 色块) 上, 不参与 Highlight 优先级, 视觉上始终是色块 (R7)。
  */
-export const DJ_PRIORITY = { band: 10, key: 11, term: 12, flash: 13 }
+export const COMPANION_PRIORITY = { band: 10, key: 11, term: 12, flash: 13 }
 
 /** 注入到 iframe 的 ::highlight 规则 (只用颜色与 text-decoration, 不改字形, 不重排) */
 export function companionCSS(theme: string): string {
-  const c = djColors(theme)
+  const c = companionColors(theme)
   if (c.eink) {
     const ink = c.key
     return `

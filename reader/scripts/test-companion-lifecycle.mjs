@@ -6,6 +6,8 @@ import { test } from 'node:test'
 import vm from 'node:vm'
 import * as vue from 'vue'
 import ts from 'typescript'
+import * as companionCompatibility from '../src/services/PagewiseCompanion/compatibility.ts'
+import { providerById } from '../src/services/aiProviders.ts'
 
 const source = process.env.COMPANION_COMPOSABLE_SOURCE
   ? readFileSync(process.env.COMPANION_COMPOSABLE_SOURCE, 'utf8')
@@ -24,22 +26,25 @@ function load(code, dependencies = {}) {
   })
   return exports
 }
-const level = load(readFileSync(new URL('../src/services/PagewiseCompanion/level.ts', import.meta.url), 'utf8'))
+const level = load(readFileSync(new URL('../src/services/PagewiseCompanion/level.ts', import.meta.url), 'utf8'), {
+  './compatibility.ts': companionCompatibility,
+})
 
 function fixture(t, initial = {}) {
   const settings = vue.reactive({
     language: 'zh', aiProvider: 'trial', aiBaseUrl: '', aiApiKey: '', aiModel: '',
-    dianjing: {
+    pagewiseCompanion: {
       level: 'smart', enabled: true, consentAll: true, perBook: {}, channel: 'builtin',
       density: 'normal', kinds: { key: true, term: true, note: true }, fiction: {},
     },
   })
-  if (initial.disabled) settings.dianjing.enabled = false
-  if (initial.unconfigured) settings.dianjing.channel = 'own'
+  if (initial.disabled) settings.pagewiseCompanion.enabled = false
+  if (initial.unconfigured) settings.pagewiseCompanion.channel = 'own'
   const view = vue.reactive({ isFixedLayout: !!initial.fixed })
   const suppressed = vue.ref(false)
   const calls = []
   class Engine {
+    constructor(host) { this.host = host }
     active = false
     sections = new Map()
     starts = 0
@@ -57,7 +62,7 @@ function fixture(t, initial = {}) {
     '../stores/settings': { useSettings: () => settings },
     '../i18n': { t: key => key },
     '../services/toast': { toast: () => {} },
-    '../services/ai': { aiConfigured: () => false, providerById: () => ({ id: 'trial' }), TRIAL_BASE_URL: 'https://synthetic.invalid' },
+    '../services/ai': { aiConfigured: () => false, providerById, TRIAL_BASE_URL: 'https://synthetic.invalid' },
     '../services/PagewiseCompanion/engine': { PagewiseCompanion: Engine },
     '../services/PagewiseCompanion/client': {
       streamPagewiseCompanion(request, channel, onItem, signal) {
@@ -68,9 +73,9 @@ function fixture(t, initial = {}) {
         })
       },
     },
-    '../services/PagewiseCompanion/theme': { djColors: () => ({}) },
+    '../services/PagewiseCompanion/theme': { companionColors: () => ({}) },
     '../services/PagewiseCompanion/protocol': {},
-    '../services/PagewiseCompanion/cache': { getDjCache: () => { throw Error('Cache access forbidden') } },
+    '../services/PagewiseCompanion/cache': { getCompanionCache: () => { throw Error('Cache access forbidden') } },
     '../services/PagewiseCompanion/level': level,
   })
   const scope = vue.effectScope()
@@ -87,6 +92,28 @@ function fixture(t, initial = {}) {
   const open = (value = target()) => { dj.openKeyCard(value); return value }
   return { dj, settings, view, suppressed, calls, scope, open, target }
 }
+test('retired saved AI providers do not throw or fall through to the trial companion channel', t => {
+  const f = fixture(t)
+  for (const id of ['siliconflow', 'custom', 'unknown']) {
+    f.settings.aiProvider = id
+    for (const channel of ['own', 'auto', 'builtin']) {
+      f.settings.pagewiseCompanion.channel = channel
+      assert.equal(f.dj.engine.host.channel(), null)
+    }
+  }
+  assert.equal(f.calls.length, 0)
+})
+
+test('adding or denying a strict per-book authorization updates the mounted reactive active flag', t => {
+  const f = fixture(t, { disabled: true })
+  f.settings.pagewiseCompanion.consentAll = false
+  assert.equal(f.dj.active.value, false)
+  f.settings.pagewiseCompanion.perBook['synthetic-book'] = true
+  assert.equal(f.dj.active.value, true)
+  f.settings.pagewiseCompanion.perBook['synthetic-book'] = false
+  assert.equal(f.dj.active.value, false)
+})
+
 const row = text => ({ t: 'tr', s: '1.1', text })
 const finish = async (call, pending, text = 'Synthetic translation') => {
   call.emit(row(text)); call.finish(); await pending
@@ -97,7 +124,7 @@ for (const [name, cancel] of [
   ['close overlays', f => f.dj.closeOverlays()],
   ['target replacement', f => f.open()],
   ['direct card replacement', f => { f.dj.card.value = { target: f.target(), rect: {} } }],
-  ['disable', f => { f.settings.dianjing.enabled = false }],
+  ['disable', f => { f.settings.pagewiseCompanion.enabled = false }],
   ['switch to basic', f => f.dj.setLevel('basic')],
   ['presentation suppression', f => { f.suppressed.value = true }],
   ['unsupported', f => { f.dj.supported.value = false }],
@@ -170,7 +197,7 @@ test('same target reopened without retry remains untouched by old successful fin
 })
 
 for (const [name, prepare] of [
-  ['disabled', f => { f.settings.dianjing.enabled = false }],
+  ['disabled', f => { f.settings.pagewiseCompanion.enabled = false }],
   ['unsupported', f => { f.dj.supported.value = false }],
   ['fixed layout', f => { f.view.isFixedLayout = true; f.dj.onSectionLoad({ doc: {}, index: 0 }) }],
   ['suppressed', f => { f.suppressed.value = true }],
@@ -198,8 +225,8 @@ test('initial fixed layout and unconfigured own channel send nothing', async t =
 test('disable then re-enable in same tick cancels, sends no automatic retry, allows explicit retry', async t => {
   const f = fixture(t); f.open()
   const old = f.dj.translate()
-  f.settings.dianjing.enabled = false
-  f.settings.dianjing.enabled = true
+  f.settings.pagewiseCompanion.enabled = false
+  f.settings.pagewiseCompanion.enabled = true
   await vue.nextTick()
   assert.equal(f.calls[0].signal?.aborted, true)
   assert.equal(f.dj.card.value.translating, false)
@@ -305,7 +332,7 @@ test('canceling a retry restores the previous partial/error state, not a false s
   const first = f.dj.translate(), originalError = new Error('Preserve this real failure')
   f.calls[0].emit(row('Partial output')); f.calls[0].fail(originalError); await first
   const retry = f.dj.translate()
-  f.settings.dianjing.enabled = false
+  f.settings.pagewiseCompanion.enabled = false
   assert.equal(f.dj.card.value.translating, false)
   assert.equal(f.dj.card.value.translateError, true)
   assert.equal(f.dj.card.value.translateFailure, originalError)
@@ -324,8 +351,8 @@ test('retry after ordinary transport rejection and disposal are idempotent', asy
   f.dj.dispose(); f.dj.dispose(); f.scope.stop()
   assert.equal(f.dj.engine.disposals, 1)
   const starts = f.dj.engine.starts
-  f.settings.dianjing.enabled = false; await vue.nextTick()
-  f.settings.dianjing.enabled = true; await vue.nextTick()
+  f.settings.pagewiseCompanion.enabled = false; await vue.nextTick()
+  f.settings.pagewiseCompanion.enabled = true; await vue.nextTick()
   assert.equal(f.dj.engine.starts, starts, 'Disposed engine cannot restart via live watchers')
   await f.dj.translate()
   assert.equal(f.calls.length, 2)

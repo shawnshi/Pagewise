@@ -117,7 +117,7 @@ for (const width of [992, 390]) test(`actual Vue app ${width}px: folder status, 
       const { useSettings } = await import('/src/stores/settings.ts'); const s = useSettings()
       return { provider: s.aiProvider, model: s.aiModel, key: s.aiApiKey, base: s.aiBaseUrl }
     })
-    assert.deepEqual(selected, { provider: 'gemini', model: 'gemini-3.8-flash', key: '', base: 'https://generativelanguage.googleapis.com/v1beta/openai/' })
+    assert.deepEqual(selected, { provider: 'gemini', model: 'gemini-4-argon', key: '', base: 'https://generativelanguage.googleapis.com/v1beta/openai/' })
     await page.goto(base + `/#/read/${bookId}`, { waitUntil: 'networkidle' })
     await page.locator('.reader').waitFor()
     await page.locator('.bar.top').hover()

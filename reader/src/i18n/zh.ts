@@ -702,7 +702,12 @@ export default {
   'settings.importDone': '已导入 {books} 本书、{annotations} 条笔记、{sources} 个书源',
   'settings.navLabel': '设置分区',
   'settings.navReading': '阅读',
-  'settings.aiModelLabel': 'AI 名称',
+  'settings.aiModelLabel': '模型',
+  'settings.aiModelDefault': '最新默认',
+  'settings.aiSavedModel': '已保存：{model}',
+  'settings.aiModelCatalog': '模型目录核验日期：{date}；可用性取决于服务商与账户权限',
+  'settings.aiChooseSupported': '请选择支持的 AI 服务',
+  'settings.aiRetiredProvider': '原 AI 服务已停止提供选项，配置仍保留。请主动选择新服务并配置对应密钥，不会自动转发到其他服务。',
   'settings.aiBaseUrlLabel': '服务器地址',
   'settings.aiEditBaseUrl': '修改地址',
 

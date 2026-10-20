@@ -7,16 +7,16 @@
 import { computed, ref } from 'vue'
 import { t } from '../i18n'
 import type { PagewiseCompanionController } from '../composables/usePagewiseCompanion'
-import type { DjPosition } from '../services/PagewiseCompanion/engine'
+import type { CompanionPosition } from '../services/PagewiseCompanion/engine'
 
 const props = defineProps<{ dj: PagewiseCompanionController; embedded?: boolean }>()
-const emit = defineEmits<{ close: []; navigate: [pos: DjPosition] }>()
+const emit = defineEmits<{ close: []; navigate: [pos: CompanionPosition] }>()
 
 const tab = ref<'outline' | 'glossary'>('outline')
 const data = computed(() => props.dj.outline.value)
 const loading = computed(() => props.dj.outlineLoading.value)
 
-function go(pos: DjPosition) {
+function go(pos: CompanionPosition) {
   void props.dj.goTo(pos)
   emit('navigate', pos)
   if (!props.embedded && window.matchMedia?.('(max-width: 600px)').matches) close()

@@ -81,7 +81,7 @@ const typographyApplying = ref(false)
 const typographyFontWarning = ref(false)
 // Scene refs exist before typography getters so mode initialization cannot hit a TDZ.
 const lateModes = shallowRef<ReturnType<typeof useReadingModes>>()
-const lateDj = shallowRef<ReturnType<typeof usePagewiseCompanion>>()
+const lateCompanion = shallowRef<ReturnType<typeof usePagewiseCompanion>>()
 const bookTypographyContext = shallowRef<BookTypographyContext>({ ...UNKNOWN_TYPOGRAPHY_CONTEXT })
 const typographyDpr = ref(globalThis.devicePixelRatio || 1)
 const typographyTextScale = ref(measureTextScale(document) ?? 1)
@@ -3140,7 +3140,7 @@ const modes = useReadingModes({
   },
   isAutoReading: () => autoReading.value,
   pauseWhen: () => panel.value !== 'none' || settingsOpen.value || ttsPanel.value || jumpOpen.value
-    || readerMoreOpen.value || !!activeAnnotation.value || !!lateDj.value?.overlayOpen.value,
+    || readerMoreOpen.value || !!activeAnnotation.value || !!lateCompanion.value?.overlayOpen.value,
   beforePanelOpen: closeOverlays,
   // 沉浸: 安卓隐藏系统栏 + 常亮 (网页 / 桌面用 Wake Lock), 并收起工具栏
   onImmersiveChange: on => {
@@ -3158,7 +3158,7 @@ watch(sheetOpen, open => {
   }
 })
 
-// ---- 伴读 (docs/dianjing-reading.md) ----
+// ---- 伴读 (docs/pagewise-companion.md) ----
 const dj = usePagewiseCompanion({
   getView: () => view,
   presentationSuppressed: () => publicationBaseline.value,
@@ -3207,7 +3207,7 @@ const dj = usePagewiseCompanion({
   // 智能版的 AI 重点词到了: 「重点词」层重新取词 (逐块替换离线结果)
   onKeyWords: () => modes.refreshKeyWords(),
 })
-lateDj.value = dj
+lateCompanion.value = dj
 
 // 「重点词」(伴读): 书的分节 (后台全书统计)、体裁 (小说不剧透)、智能版的 AI 词
 modes.setKeyWordSource({

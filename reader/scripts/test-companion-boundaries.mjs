@@ -7,6 +7,7 @@ import { chunkSection, resolveSentence } from '../src/services/PagewiseCompanion
 import * as prompt from '../src/services/PagewiseCompanion/prompt.ts'
 import * as protocol from '../src/services/PagewiseCompanion/protocol.ts'
 import worker from '../relay/src/index.js'
+import { compatibleChatBody } from '../src/services/aiProviders.ts'
 
 function client(fetchRemote) {
   const code = ts.transpileModule(readFileSync(new URL('../src/services/PagewiseCompanion/client.ts', import.meta.url), 'utf8'), {
@@ -15,6 +16,7 @@ function client(fetchRemote) {
   const exports = {}
   vm.runInNewContext(code, { exports, TextDecoder, require(id) {
     if (id === '../net') return { fetchRemote }
+    if (id === '../aiProviders.ts') return { compatibleChatBody }
     if (id === '../ai') return { TRIAL_BASE_URL: 'https://synthetic.invalid/v1', trialDeviceId: () => 'synthetic-test-device' }
     if (id === './prompt.ts') return prompt
     if (id === './protocol.ts') return protocol

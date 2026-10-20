@@ -6,7 +6,8 @@ import type { TypographyApplyPayload } from '../services/readerTypography.ts'
 import { DIM_MAX } from '../services/readingModes/eyeCare.ts'
 import { isTauri } from '../storage/types.ts'
 import { normalizeRetiredLyricSettings } from '../services/readingModes/retiredSettings.ts'
-import { BASIC_MARK_DEFAULT, migrateLevel, normalizeLevel, savedBasicMark, type BasicMark, type DjLevel } from '../services/PagewiseCompanion/level.ts'
+import { BASIC_MARK_DEFAULT, migrateLevel, normalizeLevel, savedBasicMark, type BasicMark, type CompanionLevel } from '../services/PagewiseCompanion/level.ts'
+import { LEGACY_COMPANION_SETTINGS_KEY, readCompanionPreferences, serializeCompanionSettings } from '../services/PagewiseCompanion/compatibility.ts'
 
 export type TypographyDisplayMode = 'optimized' | 'publisher' | 'repair'
 export type TypographyScope = 'book' | 'language'
@@ -344,7 +345,7 @@ export interface PresetRecordPrefs {
 /** 阅读模式 (docs/research/reading-modes-landscape.md §5) */
 export interface ReadingModePrefs {
   typewriter: TypewriterPrefs
-  /** 伴读基础版 (按词分色; 默认关): 西文词首强调 / 中文分词交替着色。enabled 只在 dianjing.level 为 basic 时生效 */
+  /** 伴读基础版 (按词分色; 默认关): 西文词首强调 / 中文分词交替着色。enabled 只在 pagewiseCompanion.level 为 basic 时生效 */
   wordGuide: {
     enabled: boolean
     style: 'auto' | 'alternate' | 'fixation'
@@ -354,7 +355,7 @@ export interface ReadingModePrefs {
     /** 着色颜色 (精选配色之一) */
     color: 'teal' | 'indigo' | 'amber' | 'rose' | 'forest'
     /**
-     * 基础版标什么: boundary = 词与词 (相邻的词交替着色); keywords = 重点词 (离线挑出每段最要紧的词, 密度随 dianjing.density)。
+     * 基础版标什么: boundary = 词与词 (相邻的词交替着色); keywords = 重点词 (离线挑出每段最要紧的词, 密度随 pagewiseCompanion.density)。
      * 新安装默认重点词; 已有存档没有这个字段时保持词与词 (load 里补, 不升版本)。
      */
     mark: BasicMark
@@ -382,12 +383,12 @@ export interface CustomFontRec {
 }
 
 /**
- * 伴读 (docs/dianjing-reading.md §4.1, services/PagewiseCompanion/level.ts): 两个版本——
+ * 伴读 (docs/pagewise-companion.md §4.1, services/PagewiseCompanion/level.ts): 两个版本——
  * 基础版 (按词分色, 不联网; 开关即 readingMode.wordGuide.enabled) 与智能版 (AI, 下面这些字段; 首次开启需同意)。
  */
 export interface PagewiseCompanionPrefs {
   /** 选的版本 (默认基础版); 「伴读开着」= 这个版本开着 */
-  level: DjLevel
+  level: CompanionLevel
   /** 智能版: 「所有书开启」后的全局开关 (perBook 未设置的书跟随它) */
   enabled: boolean
   /** 已同意「所有书开启」 */
@@ -448,7 +449,7 @@ interface SettingsState {
   /** 阅读记录: 每日阅读目标 (分钟), 0 表示不设目标 */
   dailyGoalMinutes: number
   /** 伴读 */
-  dianjing: PagewiseCompanionPrefs
+  pagewiseCompanion: PagewiseCompanionPrefs
   /** 阅读模式 (打字机等) */
   readingMode: ReadingModePrefs
   /** 语言默认排版配置 (例如 'zh', 'en') */
@@ -501,7 +502,7 @@ const defaults: SettingsState = {
   aiModel: 'deepseek-ai/DeepSeek-V4-Flash',
   aiProfiles: {},
   dailyGoalMinutes: 30,
-  dianjing: {
+  pagewiseCompanion: {
     level: 'basic',
     enabled: false,
     consentAll: false,
@@ -583,6 +584,8 @@ function load(): SettingsState {
     const raw = localStorage.getItem(STORAGE_KEY)
     if (!raw) return firstRunDefaults()
     const saved = JSON.parse(raw)
+    saved.pagewiseCompanion = readCompanionPreferences(saved)
+    delete saved[LEGACY_COMPANION_SETTINGS_KEY]
     // 退役功能不再进入内存或随后持久化的设置；其余偏好保持不变。
     delete saved.ambient
     delete saved.usageStats
@@ -597,10 +600,10 @@ function load(): SettingsState {
       typographyLanguages: normalizeTypographyLanguages(saved.typographyLanguages),
       typographyBooks: normalizeTypographyBooks(saved.typographyBooks),
       readingMode: mergeReadingMode(saved.readingMode),
-      dianjing: {
-        ...structuredClone(defaults.dianjing),
-        ...(saved.dianjing && typeof saved.dianjing === 'object' ? saved.dianjing : {}),
-        kinds: { ...defaults.dianjing.kinds, ...(saved.dianjing?.kinds ?? {}) },
+      pagewiseCompanion: {
+        ...structuredClone(defaults.pagewiseCompanion),
+        ...(saved.pagewiseCompanion && typeof saved.pagewiseCompanion === 'object' ? saved.pagewiseCompanion : {}),
+        kinds: { ...defaults.pagewiseCompanion.kinds, ...(saved.pagewiseCompanion?.kinds ?? {}) },
       },
     }
     if (!['system', 'light', 'dark'].includes(merged.appearance)) merged.appearance = 'system'
@@ -638,12 +641,12 @@ function load(): SettingsState {
       merged.readingMode.wordGuide.color = 'rose'
     }
     // v14: 按词着色并入伴读成为基础版, 原伴读为智能版; 按旧存档里在用的功能选版本 (services/PagewiseCompanion/level.ts)
-    if ((saved.version ?? 1) < 14 && saved.dianjing?.level == null) {
+    if ((saved.version ?? 1) < 14 && saved.pagewiseCompanion?.level == null) {
       const m = migrateLevel(saved)
-      merged.dianjing.level = m.level
+      merged.pagewiseCompanion.level = m.level
       merged.readingMode.wordGuide.enabled = m.wordGuideEnabled
     }
-    merged.dianjing.level = normalizeLevel(merged.dianjing.level)
+    merged.pagewiseCompanion.level = normalizeLevel(merged.pagewiseCompanion.level)
     // 基础版「标什么」: 新增字段, 已有存档保持原来的词与词 (新安装默认重点词); 不需要升版本
     merged.readingMode.wordGuide.mark = savedBasicMark(saved.readingMode?.wordGuide?.mark)
     merged.version = SETTINGS_VERSION
@@ -680,7 +683,7 @@ export const useSettings = defineStore('settings', {
         state => {
           clearTimeout(timer)
           timer = setTimeout(
-            () => localStorage.setItem(STORAGE_KEY, JSON.stringify(state)),
+            () => localStorage.setItem(STORAGE_KEY, JSON.stringify(serializeCompanionSettings(state))),
             300,
           )
         },
@@ -694,13 +697,13 @@ export const useSettings = defineStore('settings', {
       const { typographyLanguages, typographyBooks } = prepareTypographyCommit(this, payload)
       const patch = { typographyLanguages, typographyBooks,
         readingMode: { ...this.readingMode, eyeCare: { ...this.readingMode.eyeCare, dim: clampNum(payload.dim, 0, DIM_MAX, this.readingMode.eyeCare.dim) } } }
-      localStorage.setItem(STORAGE_KEY, JSON.stringify({ ...this.$state, ...patch }))
+      localStorage.setItem(STORAGE_KEY, JSON.stringify(serializeCompanionSettings({ ...this.$state, ...patch })))
       this.$patch(state => { Object.assign(state, patch) })
     },
     setTypographyCalibration(value: unknown) {
       const typographyCalibration = value === null ? null : normalizeTypographyCalibration(value)
       if (value !== null && !typographyCalibration) throw new Error('无效的显示校准')
-      localStorage.setItem(STORAGE_KEY, JSON.stringify({ ...this.$state, typographyCalibration }))
+      localStorage.setItem(STORAGE_KEY, JSON.stringify(serializeCompanionSettings({ ...this.$state, typographyCalibration })))
       this.typographyCalibration = typographyCalibration
     },
     setBookTypography(bookId: string, settings: Partial<TypographySettings>) {

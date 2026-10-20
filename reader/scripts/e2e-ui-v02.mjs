@@ -78,7 +78,7 @@ try {
     return route.continue()
   })
   await context.addInitScript(()=>{
-    if(!localStorage.getItem('lightread-settings'))localStorage.setItem('lightread-settings',JSON.stringify({language:'zh',version:14,appearance:'dark',readingMode:{eink:{enabled:true}},reader:{theme:'light',flow:'paginated',portraitScroll:false},dianjing:{enabled:false},sync:{autoSync:false}}))
+    if(!localStorage.getItem('lightread-settings'))localStorage.setItem('lightread-settings',JSON.stringify({language:'zh',version:14,appearance:'dark',readingMode:{eink:{enabled:true}},reader:{theme:'light',flow:'paginated',portraitScroll:false},pagewiseCompanion:{enabled:false},sync:{autoSync:false}}))
   })
   page=await context.newPage()
   page.setDefaultTimeout(8000)
