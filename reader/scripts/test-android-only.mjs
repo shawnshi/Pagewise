@@ -136,7 +136,7 @@ test('Android project preparation installs managed resources and is idempotent',
   mkdirSync(cache, { recursive: true })
   const fixture = mkdtempSync(join(cache, 'android-project-test-'))
   try {
-    for (const path of ['package.json', 'scripts/prepare-android-project.mjs', 'src-tauri/tauri.conf.json', 'src-tauri/android/MainActivity.kt']) {
+    for (const path of ['package.json', 'scripts/prepare-android-project.mjs', 'src-tauri/tauri.conf.json', 'src-tauri/android/MainActivity.kt', 'src-tauri/android/ReaderWindowState.kt']) {
       mkdirSync(dirname(join(fixture, path)), { recursive: true })
       cpSync(join(root, path), join(fixture, path))
     }

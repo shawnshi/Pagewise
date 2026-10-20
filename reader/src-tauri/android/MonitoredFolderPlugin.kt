@@ -21,7 +21,6 @@ import app.tauri.plugin.JSArray
 import app.tauri.plugin.JSObject
 import app.tauri.plugin.Plugin
 import org.json.JSONObject
-import java.io.ByteArrayOutputStream
 import java.io.File
 import java.io.FileNotFoundException
 import java.io.FileOutputStream
@@ -35,9 +34,6 @@ import java.util.concurrent.TimeUnit
 import java.util.concurrent.atomic.AtomicBoolean
 
 private const val MAX_READ_BYTES = 64L * 1024 * 1024
-
-/** 超过该大小时不再经 base64 字符串传输, 改为原生临时文件。 */
-private const val BASE64_MAX_BYTES = 8L * 1024 * 1024
 
 /** Only the system tree picker can create a registry entry; no caller-supplied URI is opened. */
 @TauriPlugin
@@ -536,7 +532,6 @@ class MonitoredFolderPlugin(
             val document = DocumentsContract.buildDocumentUriUsingTree(folder.uri, id)
             // Prefix-string checks are not tree membership checks. Fail closed for providers without isChildDocument.
             if (!DocumentsContract.isChildDocument(resolver, root, document)) throw Failure("invalid_reference")
-            var sourceSize: Long? = null
             resolver
                 .query(
                     document,
@@ -556,7 +551,7 @@ class MonitoredFolderPlugin(
                     ) {
                         throw Failure("invalid_reference")
                     }
-                    sourceSize = if (it.isNull(2)) null else it.getLong(2)
+                    val sourceSize = if (it.isNull(2)) null else it.getLong(2)
                     if ((sourceSize ?: 0L) > MAX_READ_BYTES) throw Failure("resource_limit")
                 } ?: throw Failure("unavailable")
             check(cancellation, deadline)
@@ -570,27 +565,9 @@ class MonitoredFolderPlugin(
                 }
             handler.postDelayed(closeOnTimeout, (deadline - SystemClock.elapsedRealtime()).coerceAtLeast(1))
             try {
-                // Base64 经 JSBridge 时 Java 字符串按 UTF-16 计算: 40 MB 文件需要约 107 MB 连续分配,
-                // 会直接 OutOfMemoryError 杀死进程。大文件改由原生流式写入应用 cache, 前端再用
-                // plugin-fs 按二进制读取并立即删除临时文件。
-                val result =
-                    if (sourceSize == null || sourceSize!! > BASE64_MAX_BYTES) {
-                        JSObject().put("path", writeTempDocument(descriptor, cancellation, deadline))
-                    } else {
-                        android.os.ParcelFileDescriptor.AutoCloseInputStream(descriptor).use { stream ->
-                            val output = ByteArrayOutputStream()
-                            val buffer = ByteArray(65536)
-                            while (true) {
-                                check(cancellation, deadline)
-                                val count = stream.read(buffer)
-                                if (count < 0) break
-                                if (output.size().toLong() + count > MAX_READ_BYTES) throw Failure("resource_limit")
-                                output.write(buffer, 0, count)
-                            }
-                            check(cancellation, deadline)
-                            JSObject().put("data", android.util.Base64.encodeToString(output.toByteArray(), android.util.Base64.NO_WRAP))
-                        }
-                    }
+                // Provider sizes are untrusted (including files that grow during reading). Always spool
+                // with the actual-byte limit; otherwise an understated size can create a huge UTF-16 Base64 string.
+                val result = JSObject().put("path", writeTempDocument(descriptor, cancellation, deadline))
                 try {
                     check(cancellation, deadline)
                     authorized(folder.id)
@@ -605,7 +582,7 @@ class MonitoredFolderPlugin(
             }
         }
 
-    /** 大文件: 流式写 cache/pagewise-read/<uuid>.bin; 过期临时文件一小时清理。 */
+    /** 流式写 cache/pagewise-read/<uuid>.bin; 过期临时文件一小时清理。 */
     private fun writeTempDocument(
         descriptor: android.os.ParcelFileDescriptor,
         cancellation: CancellationSignal,

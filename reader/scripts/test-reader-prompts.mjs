@@ -3,9 +3,9 @@ import assert from 'node:assert/strict'
 import { readFileSync } from 'node:fs'
 import vm from 'node:vm'
 import ts from 'typescript'
-import * as prompt from '../src/services/dianjing/prompt.ts'
-import { SseDeltaParser, resolveItem } from '../src/services/dianjing/protocol.ts'
-import { chunkSection } from '../src/services/dianjing/chunker.ts'
+import * as prompt from '../src/services/PagewiseCompanion/prompt.ts'
+import { SseDeltaParser, resolveItem } from '../src/services/PagewiseCompanion/protocol.ts'
+import { chunkSection } from '../src/services/PagewiseCompanion/chunker.ts'
 import { sseToNdjson } from '../relay/src/lib.js'
 
 const code = ts.transpileModule(readFileSync(new URL('../src/services/ai.ts', import.meta.url), 'utf8'), {
@@ -68,7 +68,7 @@ test('reader bounds context/history and excludes incomplete, system and empty re
   assert.equal(JSON.parse(missing.at(-1).content).context.kind, 'unavailable')
 })
 
-test('Dianjing data is JSON, unknown genre is spoiler-protected and old prompts are not reused', () => {
+test('PagewiseCompanion data is JSON, unknown genre is spoiler-protected and old prompts are not reused', () => {
   for (const lang of ['zh', 'en']) {
     const messages = prompt.buildMessages(req({ lang, book: { title: 'TITLE_ATTACK', author: 'AUTHOR_ATTACK' }, chapter: 'CHAPTER_ATTACK' }))
     assert.match(messages[0].content, lang === 'zh' ? /剧透/ : /spoiler/i)

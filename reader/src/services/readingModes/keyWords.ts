@@ -1,5 +1,5 @@
 /**
- * 点睛阅读「重点词」的离线选词引擎 (纯函数, 无 DOM、无依赖, 可在 Worker 与 node 里跑)。
+ * 伴读「重点词」的离线选词引擎 (纯函数, 无 DOM、无依赖, 可在 Worker 与 node 里跑)。
  * 调研与评测: docs/research/entropy-keyword-highlighting.md (统计算法 V3), docs/research/llm-keyword-selection.md (AI 选词)。
  * 原型: docs/research/prototypes/keyHighlight.ts —— 本文件是它的产品实现, 打分与排布规则保持一致。
  *

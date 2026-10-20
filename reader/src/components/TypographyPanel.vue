@@ -322,6 +322,25 @@ function onDim(e: Event) {
   }
 }
 
+function onColdLight(e: Event) {
+  const n = Number((e.target as HTMLInputElement).value)
+  if (Number.isFinite(n)) {
+    props.modes.setColdLight?.(n)
+  }
+}
+
+function onWarmLight(e: Event) {
+  const n = Number((e.target as HTMLInputElement).value)
+  if (Number.isFinite(n)) {
+    props.modes.setWarmLight?.(n)
+  }
+}
+
+function toggleFrontLight() {
+  const current = props.modes.frontLightState?.value?.enabled ?? true
+  props.modes.setFrontLightEnabled?.(!current)
+}
+
 // 场景提示
 const sceneNames = computed(() => {
   const names: string[] = []
@@ -442,6 +461,7 @@ async function onApply() {
 }
 
 onMounted(async () => {
+  props.modes.syncFrontLightState?.()
   void loadSystemFonts()
   if (!props.focus) return
   await nextTick()
@@ -697,6 +717,57 @@ let systemFontsLoading = false
         <span class="tp-unit-val">{{ draft.dim }}%</span>
       </div>
       <p v-if="modes.einkActive.value" class="set-note" role="note">{{ t('reader.einkColorNote') }}</p>
+    </section>
+
+    <!-- 文石双色温硬件前光 (FrontLightController) -->
+    <section
+      v-if="modes.frontLightState?.value?.supported"
+      class="tp-group"
+      data-section="frontlight"
+      :aria-label="t('reader.frontLight')"
+    >
+      <h3 class="tp-title">{{ t('reader.frontLight') }}</h3>
+      <div class="set-row">
+        <span class="tp-label">{{ t('reader.frontLight') }}</span>
+        <div class="seg" role="group" :aria-label="t('reader.frontLight')">
+          <button
+            type="button"
+            :class="{ active: modes.frontLightState.value.enabled }"
+            :aria-pressed="modes.frontLightState.value.enabled"
+            @click="toggleFrontLight"
+          >
+            {{ modes.frontLightState.value.enabled ? t('reader.frontLightOn') : t('reader.frontLightOff') }}
+          </button>
+        </div>
+      </div>
+      <div class="set-row">
+        <span class="tp-label">{{ t('reader.coldLight') }}</span>
+        <input
+          type="range"
+          min="0"
+          max="100"
+          step="5"
+          :value="modes.frontLightState.value.cold"
+          :aria-label="t('reader.coldLight')"
+          :aria-valuetext="`${modes.frontLightState.value.cold}%`"
+          @input="onColdLight"
+        />
+        <span class="tp-unit-val">{{ modes.frontLightState.value.cold }}%</span>
+      </div>
+      <div v-if="modes.frontLightState.value.ctmSupported" class="set-row">
+        <span class="tp-label">{{ t('reader.warmLight') }}</span>
+        <input
+          type="range"
+          min="0"
+          max="100"
+          step="5"
+          :value="modes.frontLightState.value.warm"
+          :aria-label="t('reader.warmLight')"
+          :aria-valuetext="`${modes.frontLightState.value.warm}%`"
+          @input="onWarmLight"
+        />
+        <span class="tp-unit-val">{{ modes.frontLightState.value.warm }}%</span>
+      </div>
     </section>
 
     <!-- 版式 -->

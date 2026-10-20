@@ -3,22 +3,22 @@
  *
  * 路由:
  *  - POST /v1/chat/completions  阅读 AI 助手的试用通道 (OpenAI 兼容, SSE 透传)
- *  - POST /v1/dianjing          点睛阅读专用接口 (提示词在服务端拼装, NDJSON 流)
+ *  - POST /v1/dianjing          伴读专用接口 (提示词在服务端拼装, NDJSON 流)
  *  - GET  /v1/models            可用模型 (静态)
  *
  * 上游: SiliconFlow `deepseek-ai/DeepSeek-V4-Flash`, 强制 enable_thinking:false。
  *  - 试用通道: 旧客户端传来的 glm-4.x-flash 一律映射到 V4-Flash; SiliconFlow 出错且配置了
  *    UPSTREAM_KEY (智谱) 时退回智谱免费的 glm-4.7-flash。
- *  - 点睛: V4-Flash 不可用时退回 DJ_FALLBACK_MODEL, 实际模型写在响应头 x-dj-model (进入客户端缓存键)。
+ *  - 伴读: V4-Flash 不可用时退回 DJ_FALLBACK_MODEL, 实际模型写在响应头 x-dj-model (进入客户端缓存键)。
  *
  * 防线 (由外向内):
  *  1. 每 IP / 每设备每分钟限速 (isolate 内存滑动窗口)
- *  2. 试用通道: 设备 + IP 每日次数 (D1); 点睛: 设备 + IP 每日字数 (D1)
+ *  2. 试用通道: 设备 + IP 每日次数 (D1); 伴读: 设备 + IP 每日字数 (D1)
  *  3. 全站每日预算 (D1, 按 token 估算成本, 万分之一元为单位), 超出返回 429 code=budget
- *  4. 点睛只接受固定 schema (服务端拼提示词), 不能当通用代理; max_tokens 与长度上限
+ *  4. 伴读只接受固定 schema (服务端拼提示词), 不能当通用代理; max_tokens 与长度上限
  *  D1 故障时不阻断服务, 退化为仅内存限速。
  *
- * 提示词与额度换算来自 src/services/dianjing/prompt.ts (wrangler/esbuild 直接打包, 与客户端单一来源)。
+ * 提示词与额度换算来自 src/services/PagewiseCompanion/prompt.ts (wrangler/esbuild 直接打包, 与客户端单一来源)。
  *
  * 部署: cd relay && npx wrangler deploy
  * 密钥: npx wrangler secret put SILICONFLOW_KEY   (可选 UPSTREAM_KEY: 智谱, 作试用通道备用)
@@ -38,7 +38,7 @@ import {
   PROMPT_VERSION,
   sanitizeRequest,
   validateRequest,
-} from '../../src/services/dianjing/prompt.ts'
+} from '../../src/services/PagewiseCompanion/prompt.ts'
 import { CHAT_MODEL, LEGACY_MODELS, quotaDay, rateLimited, sseToNdjson } from './lib.js'
 
 const SF_BASE = 'https://api.siliconflow.cn/v1'
@@ -198,10 +198,10 @@ async function handleChat(request, env, ctx) {
   return new Response(upstream.body, { status: upstream.status, headers })
 }
 
-// ---- 点睛阅读: /v1/dianjing ----
+// ---- 伴读: /v1/dianjing ----
 
-async function handleDianjing(request, env, ctx) {
-  if (!env.SILICONFLOW_KEY) return err(503, '点睛阅读内置通道尚未配置, 请在设置中填入自己的 API Key', 'config')
+async function handlePagewiseCompanion(request, env, ctx) {
+  if (!env.SILICONFLOW_KEY) return err(503, '伴读内置通道尚未配置, 请在设置中填入自己的 API Key', 'config')
   const { ip, device } = clientIds(request)
   if (rateLimited(`dd:${device}`, DJ_PER_DEVICE_PER_MIN) || rateLimited(`di:${ip}`, DJ_PER_IP_PER_MIN)) {
     return err(429, '请求过于频繁, 请稍后再试', 'rate')
@@ -231,7 +231,7 @@ async function handleDianjing(request, env, ctx) {
     ])
     // 本次之前未超额就放行 (最后一块不被截断)
     if (deviceChars - chars >= deviceQuota || ipChars - chars >= ipQuota) {
-      return json(429, { error: { message: '今日点睛内置额度已用完 · 填入自己的密钥不限额', code: 'quota' } }, { 'x-dj-remaining': '0' })
+      return json(429, { error: { message: '今日伴读内置额度已用完 · 填入自己的密钥不限额', code: 'quota' } }, { 'x-dj-remaining': '0' })
     }
     remaining = Math.max(0, deviceQuota - deviceChars)
     const cleanup = maybeCleanup(env)
@@ -297,7 +297,7 @@ export default {
       return json(200, { object: 'list', data: [{ id: CHAT_MODEL, object: 'model', owned_by: 'lightread' }], dianjingPromptVersion: PROMPT_VERSION }, { 'x-dj-prompt-version': PROMPT_VERSION })
     }
     if (request.method === 'POST' && url.pathname.endsWith('/dianjing')) {
-      return handleDianjing(request, env, ctx)
+      return handlePagewiseCompanion(request, env, ctx)
     }
     if (request.method === 'POST' && url.pathname.endsWith('/chat/completions')) {
       return handleChat(request, env, ctx)

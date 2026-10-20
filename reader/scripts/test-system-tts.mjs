@@ -68,7 +68,9 @@ test('Android plugin registers TextToSpeech and publishes import/export-safe com
   assert.match(service, /process_restart/)
   assert.match(service, /MediaSession/)
   assert.match(kotlin, /fun session\(/)
-  assert.doesNotMatch(read('src-tauri/android/MainActivity.kt'), /keepWebViewAlive|override fun onPause/)
+  const activity = read('src-tauri/android/MainActivity.kt')
+  assert.doesNotMatch(activity, /keepWebViewAlive|pauseTimers|resumeTimers/)
+  assert.match(activity, /override fun onPause\(\) \{[\s\S]*?super.onPause\(\)/)
 
   const rust = read('src-tauri/src/system_tts.rs')
   assert.match(rust, /register_android_plugin\("io\.pagewise\.reader", "SystemTtsPlugin"\)/)

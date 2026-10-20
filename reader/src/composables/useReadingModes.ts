@@ -5,7 +5,7 @@
  * 模式 (一个名字一个模式): 场景 = 夜读 / 护眼 / 墨水屏 / 大字 / 沉浸 (一键套用一组排版值, 关闭恢复;
  * 值本身只在「排版」面板里调, 见 docs/reader-panels.md);
  * 带读 = 自动翻页 / 打字机 / 听书 (同一时刻只运行一个);
- * 按词着色 = 点睛阅读基础版 (开关在点睛阅读里, 绘制在这里)。
+ * 按词着色 = 伴读基础版 (开关在伴读里, 绘制在这里)。
  *
  * ## 接线清单 (ReaderView.vue)
  *
@@ -24,7 +24,7 @@
  *   refreshMarginals: updateMarginals,
  *   onReminder: () => { stopAutoRead() },           // 休息提醒出现时打字机已自动暂停
  * })
- * (按词着色是点睛阅读的基础版: 开关由 useDianjing 统一管理 (传入 basic: { isOn, set, supported }),
+ * (按词着色是伴读的基础版: 开关由 usePagewiseCompanion 统一管理 (传入 basic: { isOn, set, supported }),
  *  这里只在 settings.dianjing.level 为 basic 时绘制, 与智能版天然互斥。)
  * ```
  *
@@ -50,7 +50,7 @@
  *    <ReadingModePanel v-if="modes.panelOpen.value" :modes="modes" :progress="readingModeProgress"
  *      :auto-reading="autoReading" :tts-active="ttsState === 'playing'" v-model:auto-read-seconds="settings.autoReadSeconds"
  *      @start-auto="startAutoRead" @stop-auto="stopAutoRead" @open-tts="openTTSPanel" @close="modes.closePanel()">
- *      <template #top><DianjingToggle … /></template>
+ *      <template #top><PagewiseCompanionToggle … /></template>
  *    </ReadingModePanel>
  *    <ReadingModeMini :modes="modes" :bars-visible="barsVisible" :progress="readingModeProgress" />
  *    <ReadingModeLayer :modes="modes" />   (调暗遮罩、休息提醒、全局模式样式)
@@ -65,6 +65,9 @@
  * 12. onBeforeUnmount: `modes.dispose()` (清除所有阅读模式高亮、沉浸回调 false)。
  */
 import { computed, onScopeDispose, ref, shallowRef, watch } from 'vue'
+import { getNativeReaderEnvironment } from '../services/nativeReaderEnvironment'
+import { onyxEpd, clampGcIntervalPages, type OnyxEpdMode } from '../services/onyxEpd'
+import { onyxFrontLight, type OnyxFrontLightState, type OnyxLightPresetId } from '../services/onyxFrontLight'
 import { useSettings } from '../stores/settings'
 import { t } from '../i18n'
 import { toast } from '../services/toast'
@@ -107,13 +110,13 @@ import {
 } from '../services/readingModes/eyeCare'
 import { WordGuideLayer } from '../services/readingModes/wordGuideLayer'
 import { guideIntensity } from '../services/readingModes/wordGuideIntensity'
-import { normalizeLevel, smartOnFor } from '../services/dianjing/level'
+import { normalizeLevel, smartOnFor } from '../services/PagewiseCompanion/level'
 import { KeyWordLayer, looksChinese, type KwSmartInput } from '../services/readingModes/keyWordsLayer'
 import { disposeKeyWordService, keyWordService, type KwBookHost } from '../services/readingModes/keyWordsClient'
 import type { KwLevel } from '../services/readingModes/keyWords'
 
 /**
- * 「重点词」的数据来源 (由阅读器在点睛阅读接好后设置, 见 setKeyWordSource):
+ * 「重点词」的数据来源 (由阅读器在伴读接好后设置, 见 setKeyWordSource):
  * 书 id 与分节 (后台全书统计)、体裁 (小说不剧透)、智能版的 AI 词与分块。
  */
 export interface KeyWordSource extends KwBookHost {
@@ -247,12 +250,14 @@ export function useReadingModes(opts: UseReadingModesOptions) {
     if (on === nightOn.value) return
     if (on) {
       engage(by === 'schedule' ? 'nightAuto' : 'night', { 'reader.theme': 'dark' })
+      if (frontLightState.value.supported) applyFrontLightPreset('night')
       return
     }
     for (const id of ['nightAuto', 'night']) {
       if (settings.readingMode.presets[id] && theme.value === 'dark') release(id)
     }
     if (isNightTheme(theme.value, appDark())) settings.reader.theme = themeAfterRelease(theme.value, 'night', appDark())
+    if (frontLightState.value.supported) applyFrontLightPreset(eyeCareOn.value ? 'eyecare' : 'daylight')
   }
   function toggleNight() { setNight(!nightOn.value) }
 
@@ -263,11 +268,13 @@ export function useReadingModes(opts: UseReadingModesOptions) {
     if (on) {
       engage('eyeCare', { 'reader.theme': settings.readingMode.eyeCare.theme })
       breakTimer = newBreakTimer(Date.now())
+      if (frontLightState.value.supported) applyFrontLightPreset('eyecare')
       return
     }
     if (settings.readingMode.presets.eyeCare && isEyeCareTheme(theme.value)) release('eyeCare')
     if (isEyeCareTheme(theme.value)) settings.reader.theme = themeAfterRelease(theme.value, 'eyeCare', appDark())
     reminderDue.value = false
+    if (frontLightState.value.supported) applyFrontLightPreset(nightOn.value ? 'night' : 'daylight')
   }
   function toggleEyeCare() { setEyeCare(!eyeCareOn.value) }
   function setEyeCareTheme(v: 'sepia' | 'green') {
@@ -322,6 +329,8 @@ export function useReadingModes(opts: UseReadingModesOptions) {
   function toggleEink() { setEink(!einkActive.value) }
   const einkDevice = (() => {
     try {
+      const environment = getNativeReaderEnvironment()
+      if (environment.status === 'available' && environment.value.boox) return true
       return looksLikeEinkDevice(navigator.userAgent, {
         update: window.matchMedia?.('(update: slow)')?.matches ? 'slow' : undefined,
         monochrome: !!window.matchMedia?.('(monochrome)')?.matches,
@@ -333,6 +342,42 @@ export function useReadingModes(opts: UseReadingModesOptions) {
   /** 识别到墨水屏设备且用户还没处理过: 阅读器可提示一次「要开启墨水屏吗？」 */
   const einkSuggested = computed(() => einkDevice && !settings.readingMode.eink.enabled && !settings.readingMode.eink.suggestDismissed)
   function dismissEinkSuggestion() { settings.readingMode.eink.suggestDismissed = true }
+
+  // ---- 文石 EPD 刷新与双色温硬件前光 ----
+  const einkGcInterval = computed(() => clampGcIntervalPages(settings.readingMode.eink.gcIntervalPages ?? 10, 10))
+  function setEinkGcInterval(pages: number) {
+    const clamped = clampGcIntervalPages(pages, 10)
+    settings.readingMode.eink.gcIntervalPages = clamped
+    onyxEpd.configureGcInterval(clamped)
+  }
+  function repaintEinkNow(mode: OnyxEpdMode = 'gc') {
+    onyxEpd.repaint(mode)
+  }
+  watch(einkGcInterval, pages => {
+    onyxEpd.configureGcInterval(pages)
+  }, { immediate: true })
+  watch(panelOpen, open => {
+    if (!open && (einkActive.value || einkDevice)) {
+      onyxEpd.repaintAfterOverlayClose('regal')
+    }
+  })
+
+  const frontLightState = ref<OnyxFrontLightState>(onyxFrontLight.getState())
+  function syncFrontLightState() {
+    frontLightState.value = onyxFrontLight.refresh()
+  }
+  function setFrontLightEnabled(on: boolean) {
+    frontLightState.value = onyxFrontLight.setEnabled(on)
+  }
+  function setColdLight(percent: number) {
+    frontLightState.value = onyxFrontLight.setCold(percent)
+  }
+  function setWarmLight(percent: number) {
+    frontLightState.value = onyxFrontLight.setWarm(percent)
+  }
+  function applyFrontLightPreset(preset: OnyxLightPresetId) {
+    frontLightState.value = onyxFrontLight.applyPreset(preset)
+  }
 
   // ---- 大字 ----
   const largeTextOn = computed(() => !!settings.readingMode.largeText.enabled)
@@ -645,7 +690,7 @@ export function useReadingModes(opts: UseReadingModesOptions) {
   const largeUi = largeTextOn
 
   // =====================================================================
-  // 按词着色 = 点睛阅读基础版 (开关见 useDianjing; 只在选了基础版时绘制)
+  // 按词着色 = 伴读基础版 (开关见 usePagewiseCompanion; 只在选了基础版时绘制)
   // =====================================================================
 
   /** Highlight API 可用 (旧 WebView 画不了按词着色) */
@@ -790,7 +835,7 @@ export function useReadingModes(opts: UseReadingModesOptions) {
     }
   }
 
-  /** 基础版开关 (由 useDianjing 调用; 选版本在那里) */
+  /** 基础版开关 (由 usePagewiseCompanion 调用; 选版本在那里) */
   function setWordGuide(on: boolean) {
     settings.readingMode.wordGuide.enabled = on
   }
@@ -989,6 +1034,12 @@ export function useReadingModes(opts: UseReadingModesOptions) {
       const doc = detail?.range?.startContainer?.ownerDocument
       const slot = doc ? contentOf(doc) : null
       if (slot) followPrimary(slot.doc, slot.index)
+      if (einkActive.value || einkDevice) {
+        onyxEpd.enterFastMode('scroll', 'du')
+        onyxEpd.scheduleExitFastMode(180)
+      }
+    } else if (einkActive.value || einkDevice) {
+      onyxEpd.notifyPageTurn()
     }
     controller.value?.onRelocate(detail?.range ?? null)
     if (wordGuideActive.value) syncWordGuide(detail?.range?.startContainer?.ownerDocument ?? null, detail?.range ?? null)
@@ -1132,6 +1183,15 @@ export function useReadingModes(opts: UseReadingModesOptions) {
     setEink,
     einkSuggested,
     dismissEinkSuggestion,
+    einkGcInterval,
+    setEinkGcInterval,
+    repaintEinkNow,
+    frontLightState,
+    syncFrontLightState,
+    setFrontLightEnabled,
+    setColdLight,
+    setWarmLight,
+    applyFrontLightPreset,
     largeTextOn,
     largeUi,
     toggleLargeText,
@@ -1162,7 +1222,7 @@ export function useReadingModes(opts: UseReadingModesOptions) {
     start,
     startTypewriter: start,
     toggleTypewriter,
-    // ---- 按词着色 / 重点词 (点睛阅读) ----
+    // ---- 按词着色 / 重点词 (伴读) ----
     wordGuideActive,
     wordGuideSupported,
     setWordGuide,

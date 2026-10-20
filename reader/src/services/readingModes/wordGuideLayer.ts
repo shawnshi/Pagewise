@@ -8,7 +8,7 @@
  * 下载完后每一层重绘一次 (只一次, 不循环)。
  *
  * 高亮名: lr-wg-alt-l / lr-wg-alt-n (中文交替着色, 轻 / 标准), lr-wg-tail (西文词尾降到 70%);
- * 样式由 readerTheme.getReaderCSS 静态注入, 优先级低于打字机、歌词与点睛阅读。
+ * 样式由 readerTheme.getReaderCSS 静态注入, 优先级低于打字机、歌词与伴读。
  */
 import { SectionText } from './blocks.ts'
 import { guideSpans, usesZhLexicon, type GuideSpans } from './wordGuide.ts'

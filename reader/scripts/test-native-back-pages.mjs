@@ -49,9 +49,10 @@ test('a page slot that declines lets the native fallback run', () => {
 test('library, notes and detail pages route Back through the shared page slot', () => {
   const library = source('LibraryView.vue')
   assert.match(library, /useNativeBack\(dismissLibraryLayer\)/, 'LibraryView delegates Esc/Back dismissal to one layer stack')
-  for (const layer of ['filterDraft', 'showTagManage', 'showTagModal', 'manageMode']) {
+  for (const layer of ['filterDraft', 'showTagModal', 'manageMode']) {
     assert.match(library, new RegExp(`if \\(${layer}\\.value\\)`), `LibraryView layer ${layer} is dismissible`)
   }
+  assert.doesNotMatch(library, /showTagManage|openTagManage/, 'retired global tag manager is not a Back layer')
 
   const notes = source('NotesView.vue')
   assert.match(notes, /useNativeBack\(\(\) => \{/, 'NotesView registers a page Back handler')

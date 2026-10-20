@@ -1,3 +1,5 @@
+import { onyxNativeAccelerator, type OnyxNativePdfInfo } from './onyxNativeAccelerator.ts'
+
 export interface PdfRasterResult { bitmap: ImageBitmap; renderer: string }
 export interface PdfRasterRequest { page: number; width: number; height: number; renderer: string }
 type Job = { id: number; revision: number; request: PdfRasterRequest; priority: number; resolve: (result: PdfRasterResult) => void; reject: (error: Error) => void }
@@ -21,10 +23,20 @@ export class PdfRasterClient {
   private blob: Blob
   private factory: () => Worker
   private deadline: number
+  private nativeBookRelPath = ''
   constructor(blob: Blob, factory = () => new Worker(new URL('./pdfRaster.worker.ts', import.meta.url), { type: 'module' }), deadline = 20_000) {
     this.blob = blob
     this.factory = factory
     this.deadline = deadline
+  }
+  setNativeBookPath(bookRelPath: string): OnyxNativePdfInfo | null {
+    this.nativeBookRelPath = bookRelPath.trim()
+    if (!this.nativeBookRelPath) return null
+    return onyxNativeAccelerator.openNativePdfInfo(this.nativeBookRelPath)
+  }
+  renderNativeDataUrl(page: number, width: number, height: number): string {
+    if (!this.nativeBookRelPath) return ''
+    return onyxNativeAccelerator.renderNativePdfPage(this.nativeBookRelPath, page, width, height)
   }
   setRevision(revision: number) {
     if (this.revision === revision) return

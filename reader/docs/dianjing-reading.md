@@ -1,5 +1,7 @@
-# 点睛阅读 · 调研与产品设计
+# 伴读 · 历史调研与产品设计
 
+> 当前命名（2026-10-20）：界面为「伴读 / Companion」，内部模块为 `PagewiseCompanion`。下文保留初始设计及历史命名，不代表当前验收状态；本次实现与验证见 `../../docs/companion-20261020.md`。
+>
 > 2026-10-05 · 状态：设计稿，尚未实现 · 范围：可重排书籍（foliate：EPUB/MOBI/AZW3/FB2 + TXT/MD/HTML）；PDF 论文不在本期
 > 相关：`docs/reading-experience-plan.md`（需求 F1–F6、Q5）、`docs/reading-modes.md`（打字机、Highlight API 方案）、`docs/sync.md`、`src/services/ai.ts`、`relay/`
 > 命名：**点睛阅读**（取「画龙点睛」：AI 预读全书，为你点出书中的「睛」）。曾用名「结构化阅读」，此前也叫过 AI 辅读、AI 速读、AI 预读、重点标注；以后统一叫点睛阅读，不再使用这些名字。

@@ -6,6 +6,8 @@
  * 单页达到数百 MiB。这里给单页总像素设上限，超出时等比降低栅格化分辨率，由 CSS
  * 放大显示；文字仍然可读，但内存与主线程耗时保持有界。
  */
+import { nativePdfPixelBudget } from './nativeReaderEnvironment.ts'
+
 export const PDF_MAX_RENDER_PIXELS = 12_000_000
 export const PDF_MAX_DIM = 8192
 
@@ -24,8 +26,9 @@ export function pdfRenderTarget(displayW: number, displayH: number, dpr: number,
   let width = Math.max(1, Math.round(w * scale))
   let height = Math.max(1, Math.round(h * scale))
   const pixels = width * height
-  if (pixels > PDF_MAX_RENDER_PIXELS) {
-    const factor = Math.sqrt(PDF_MAX_RENDER_PIXELS / pixels)
+  const budget = nativePdfPixelBudget(PDF_MAX_RENDER_PIXELS)
+  if (pixels > budget) {
+    const factor = Math.sqrt(budget / pixels)
     width = Math.max(1, Math.floor(width * factor))
     height = Math.max(1, Math.floor(height * factor))
   }

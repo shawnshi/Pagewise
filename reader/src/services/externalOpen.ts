@@ -3,6 +3,7 @@ import { invoke } from '@tauri-apps/api/core'
 import { listen, type UnlistenFn } from '@tauri-apps/api/event'
 import { importFile } from './importer'
 import { detectFormat } from './format'
+import { onyxNativeAccelerator } from './onyxNativeAccelerator'
 import { useLibrary } from '../stores/library'
 import { toast } from './toast'
 
@@ -20,8 +21,31 @@ async function drainOpenFiles(router: Router) {
     do {
       rerun = false
       const paths = await invoke<string[]>('take_open_files')
+      const nativeStaged = onyxNativeAccelerator.drainExternalOpenQueue()
       let lastBookId: string | undefined
       let lastFormat: ReturnType<typeof detectFormat> = null
+      for (const staged of nativeStaged) {
+        const name = staged.fileName || 'document'
+        try {
+          const relTarget = `books/.staged-open-${Date.now()}-${name.replace(/[^a-zA-Z0-9._-]/g, '_')}`
+          if (!onyxNativeAccelerator.commitStagedExternalFile(staged.stagedPath, relTarget)) {
+            throw new Error('Failed to stage external document')
+          }
+          const { readFile, remove, BaseDirectory } = await import('@tauri-apps/plugin-fs')
+          try {
+            const bytes = await readFile(relTarget, { baseDir: BaseDirectory.AppLocalData })
+            const buffer = bytes.buffer.slice(bytes.byteOffset, bytes.byteOffset + bytes.byteLength) as ArrayBuffer
+            const result = await importFile(new File([buffer], name), '系统打开')
+            if (!result.ok) throw new Error(result.error)
+            lastBookId = result.bookId
+            lastFormat = detectFormat(name)
+          } finally {
+            await remove(relTarget, { baseDir: BaseDirectory.AppLocalData }).catch(() => {})
+          }
+        } catch (error: any) {
+          toast(`${name}: ${error?.message ?? error}`, 'error', 6000)
+        }
+      }
       for (const path of paths) {
         const name = path.split(/[\\/]/).pop() || 'document'
         try {
@@ -60,6 +84,12 @@ async function drainOpenFiles(router: Router) {
 /** 同时覆盖冷启动和应用已运行时的系统文件打开事件。 */
 export async function startExternalOpen(router: Router): Promise<UnlistenFn> {
   const unlisten = await listen('open-files', () => drainOpenFiles(router))
+  const unlistenNative = onyxNativeAccelerator.onNativeExternalOpen(() => {
+    void drainOpenFiles(router)
+  })
   await drainOpenFiles(router)
-  return unlisten
+  return () => {
+    unlisten()
+    unlistenNative()
+  }
 }

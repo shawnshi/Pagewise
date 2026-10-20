@@ -46,16 +46,19 @@ import { createDebouncedDraftSaver, loadNoteDraft, removeNoteDraft, type Debounc
 import ReadingModeMini from '../components/ReadingModeMini.vue'
 import { useReadingModes } from '../composables/useReadingModes'
 import ReadingModeLayer from '../components/ReadingModeLayer.vue'
-import DianjingToggle from '../components/DianjingToggle.vue'
-import DianjingConsent from '../components/DianjingConsent.vue'
-import DianjingCard from '../components/DianjingCard.vue'
-import DianjingChapterCard from '../components/DianjingChapterCard.vue'
-import DianjingOutline from '../components/DianjingOutline.vue'
-import DianjingSkim from '../components/DianjingSkim.vue'
-import DianjingStatus from '../components/DianjingStatus.vue'
+import OnyxInkLayer from '../components/OnyxInkLayer.vue'
+import { onyxEpd } from '../services/onyxEpd'
+import { onyxNativeAccelerator } from '../services/onyxNativeAccelerator'
+import PagewiseCompanionToggle from '../components/PagewiseCompanionToggle.vue'
+import PagewiseCompanionConsent from '../components/PagewiseCompanionConsent.vue'
+import PagewiseCompanionCard from '../components/PagewiseCompanionCard.vue'
+import PagewiseCompanionChapterCard from '../components/PagewiseCompanionChapterCard.vue'
+import PagewiseCompanionOutline from '../components/PagewiseCompanionOutline.vue'
+import PagewiseCompanionSkim from '../components/PagewiseCompanionSkim.vue'
+import PagewiseCompanionStatus from '../components/PagewiseCompanionStatus.vue'
 import AppIcon from '../components/AppIcon.vue'
-import { useDianjing } from '../composables/useDianjing'
-import { djThemeName } from '../services/dianjing/theme'
+import { usePagewiseCompanion } from '../composables/usePagewiseCompanion'
+import { companionThemeName } from '../services/PagewiseCompanion/theme'
 import type { ReadingModeProgress } from '../services/readingModes/progress'
 import { buildSmartToc, findCurrentSmartItem, flattenToc } from '../services/smartToc'
 import {
@@ -72,12 +75,13 @@ const bookId = String(route.params.id)
 
 const container = ref<HTMLElement>()
 const meta = ref<BookMeta>()
+const scribbleEnabled = ref(false)
 const pendingTypography = ref<TypographyApplyPayload | null>(null)
 const typographyApplying = ref(false)
 const typographyFontWarning = ref(false)
 // Scene refs exist before typography getters so mode initialization cannot hit a TDZ.
 const lateModes = shallowRef<ReturnType<typeof useReadingModes>>()
-const lateDj = shallowRef<ReturnType<typeof useDianjing>>()
+const lateDj = shallowRef<ReturnType<typeof usePagewiseCompanion>>()
 const bookTypographyContext = shallowRef<BookTypographyContext>({ ...UNKNOWN_TYPOGRAPHY_CONTEXT })
 const typographyDpr = ref(globalThis.devicePixelRatio || 1)
 const typographyTextScale = ref(measureTextScale(document) ?? 1)
@@ -419,6 +423,8 @@ const sourceNavigating = computed(() => { void inspectionTick.value; return read
 function sourceContext(): InspectionContext {
   const sourcePanel = panel.value
   const sourceScroll = panelEl.value?.querySelector('.panel-body')?.scrollTop ?? 0
+  // Inspection snapshots outlive the card's request owner; never restore its busy state.
+  dj.cancelTranslation()
   const card = dj.card.value
   const outline = dj.outlineOpen.value
   const skim = dj.skimOpen.value
@@ -472,7 +478,7 @@ function continueFromInspection() {
   if (readerSession.promote()) { sourceError.value = ''; pingReading() }
 }
 
-function inspectDianjingCard() {
+function inspectPagewiseCompanionCard() {
   const card = dj.card.value
   if (!card) return
   try { void jumpSource(view.getCFI(card.target.section, card.target.range)) }
@@ -490,7 +496,7 @@ const readerLayout = computed(() => effectiveReaderLayout({
   portrait: portraitView.value,
 }))
 const effectiveFlow = computed(() => readerLayout.value.flow)
-// 阅读模式与点睛在下方声明, 二者初始化时会互相 / 回头读取这里的值;
+// 阅读模式与伴读在下方声明, 二者初始化时会互相 / 回头读取这里的值;
 // 先用响应式占位, 声明完再填入, 避免初始化顺序问题 (TDZ), 填入后依赖它们的 computed 自动重算
 // 墨水屏等阅读模式会改写正文配色 (纯黑白)
 const themeColors = computed(() => resolveReaderColors(effectiveReader.value.theme, appDark.value, lateModes.value?.readerStyle.value))
@@ -754,6 +760,9 @@ function onRelocate(e: CustomEvent) {
   chapterLabel.value = tocItem?.label?.trim() ?? ''
   currentTocHref.value = tocItem?.href
   currentCfi.value = cfi ?? ''
+  if (primary) {
+    onyxNativeAccelerator.stageReadingCheckpoint(bookId, currentCfi.value, fraction.value, 0)
+  }
   if (tocAuto.value) syncSmartTocPosition()
   updatePages(e.detail)
   updateMarginals()
@@ -1125,9 +1134,18 @@ function handleNativeReaderBack(): boolean {
     .finally(() => { nativeBackPending = false })
   return true
 }
-onMounted(() => { nativeBackHost.__pagewiseReaderBack = handleNativeReaderBack })
+let unbindHardwareKeys: (() => void) | null = null
+onMounted(() => {
+  nativeBackHost.__pagewiseReaderBack = handleNativeReaderBack
+  unbindHardwareKeys = onyxNativeAccelerator.bindHardwarePageTurn(dir => {
+    if (anyOverlayOpen() || scribbleEnabled.value) return
+    turnPage(dir === 'next' ? 'right' : 'left')
+  })
+})
 onBeforeUnmount(() => {
   nativeBackAlive = false
+  unbindHardwareKeys?.()
+  unbindHardwareKeys = null
   if (nativeBackHost.__pagewiseReaderBack === handleNativeReaderBack) delete nativeBackHost.__pagewiseReaderBack
 })
 
@@ -1782,7 +1800,7 @@ function followText(range: Range, force = false) {
 }
 
 /**
- * 跳到书里的一段文字 (搜索结果、划线、点睛要句、听书断点): 滚动模式下目标首行落在焦点线, 近处平滑滚过去。
+ * 跳到书里的一段文字 (搜索结果、划线、伴读要句、听书断点): 滚动模式下目标首行落在焦点线, 近处平滑滚过去。
  * 书签 / 续读 / 「回到第 N 页」记的是当时屏幕顶上那一行, 照旧顶端对齐还原屏幕 — 若也挪到焦点线,
  * 每打开一次记下的位置就往前退一截。章节 / 目录跳转也照旧, 章首在顶上。
  */
@@ -2627,7 +2645,7 @@ function onContentClick(clientX: number, doc: Document, target?: Element | null,
   const sel = doc.getSelection()
   if (sel && !sel.isCollapsed) return
   if (blocksReaderTurn({ panel: anyOverlayOpen(), selection: !!selection.value, navigating: readerSession.navigating, interactive: isReaderInteractive(target) })) return
-  // 点睛: 点到概念 / 注释时弹出解释卡, 不翻页
+  // 伴读: 点到概念 / 注释时弹出解释卡, 不翻页
   if (dj.onContentTap(doc, clientX, clientY)) return
   // 打字机运行时轻点切换暂停或菜单, 不翻页
   const tap = modes.onContentTap()
@@ -3134,9 +3152,14 @@ const modes = useReadingModes({
   onReminder: () => stopAutoRead(),
 })
 lateModes.value = modes
+watch(sheetOpen, open => {
+  if (!open && modes.einkActive.value) {
+    onyxEpd.repaintAfterOverlayClose('regal')
+  }
+})
 
-// ---- 点睛阅读 (docs/dianjing-reading.md) ----
-const dj = useDianjing({
+// ---- 伴读 (docs/dianjing-reading.md) ----
+const dj = usePagewiseCompanion({
   getView: () => view,
   presentationSuppressed: () => publicationBaseline.value,
   goToText: async cfi => {
@@ -3151,7 +3174,7 @@ const dj = useDianjing({
     // EPUB 只有一个 dc:subject 时 foliate 给的是单个值而不是数组
     subjects: ([] as any[]).concat(view?.book?.metadata?.subject ?? []).map((x: any) => (typeof x === 'string' ? x : x?.name ?? '')),
   },
-  getThemeName: () => djThemeName(resolveReaderTheme(effectiveReader.value.theme, appDark.value), !!lateModes.value?.einkActive.value),
+  getThemeName: () => companionThemeName(resolveReaderTheme(effectiveReader.value.theme, appDark.value), !!lateModes.value?.einkActive.value),
   isEink: () => !!lateModes.value?.einkActive.value,
   // 「我也觉得」: 收为自己的划线 (与划词划线同一份存储, 会随同步)
   adoptHighlight: async ({ index, range, text, withNote }) => {
@@ -3174,7 +3197,7 @@ const dj = useDianjing({
     void sendAi(prompt, context)
   },
   beforeOverlay: closeOverlays,
-  // 点睛阅读基础版 = 按词着色 (绘制在阅读模式里)
+  // 伴读基础版 = 按词着色 (绘制在阅读模式里)
   basic: {
     isOn: () => settings.readingMode.wordGuide.enabled,
     set: on => modes.setWordGuide(on),
@@ -3186,7 +3209,7 @@ const dj = useDianjing({
 })
 lateDj.value = dj
 
-// 「重点词」(点睛阅读): 书的分节 (后台全书统计)、体裁 (小说不剧透)、智能版的 AI 词
+// 「重点词」(伴读): 书的分节 (后台全书统计)、体裁 (小说不剧透)、智能版的 AI 词
 modes.setKeyWordSource({
   bookId,
   fiction: () => dj.fiction.value,
@@ -3589,6 +3612,15 @@ onBeforeRouteLeave(async () => {
             <button
               role="menuitem"
               class="reader-more-item"
+              :class="{ 'auto-on': scribbleEnabled }"
+              @click="scribbleEnabled = !scribbleEnabled; readerMoreOpen = false"
+            >
+              <AppIcon name="notes" :size="28" :emphasis="scribbleEnabled" aria-hidden="true" />
+              <span>{{ t('reader.scribble') }}</span>
+            </button>
+            <button
+              role="menuitem"
+              class="reader-more-item"
               :class="{ 'auto-on': isFullscreen }"
               @click="toggleFullscreen(); readerMoreOpen = false"
             >
@@ -3728,7 +3760,7 @@ onBeforeRouteLeave(async () => {
       @close="modes.closePanel()"
     >
       <template #top>
-        <DianjingToggle :dj="dj" @open-settings="router.push('/settings')" @open-outline="dj.openOutline()" @open-skim="dj.openSkim()" />
+        <PagewiseCompanionToggle :dj="dj" @open-settings="router.push('/settings')" @open-outline="dj.openOutline()" @open-skim="dj.openSkim()" />
       </template>
     </ReadingModePanel>
     <ReadingModeMini
@@ -3743,14 +3775,20 @@ onBeforeRouteLeave(async () => {
       @auto-stop="stopAutoRead"
     />
     <ReadingModeLayer :modes="modes" :bars-visible="barsVisible" :suggest-eink="modes.einkSuggested.value" />
+    <OnyxInkLayer
+      :book-id="bookId"
+      :page-key="`epub-${pageInfo?.current ?? 1}`"
+      v-model:enabled="scribbleEnabled"
+      :modal-open="sheetOpen || jumpOpen || readerMoreOpen || modes.panelOpen.value"
+    />
 
-    <!-- 点睛阅读: 首次同意 / 解释卡 / 章首要义 / 脉络 / 速读 / 状态 -->
-    <DianjingConsent v-if="dj.consentOpen.value" :dj="dj" />
-    <DianjingCard v-if="dj.card.value" :dj="dj" @inspect="inspectDianjingCard" />
-    <DianjingChapterCard v-if="dj.chapterCard.value" :dj="dj" />
-    <DianjingOutline v-if="dj.outlineOpen.value" :dj="dj" />
-    <DianjingSkim v-if="dj.skimOpen.value" :dj="dj" />
-    <DianjingStatus :dj="dj" @open-settings="router.push('/settings')" />
+    <!-- 伴读: 首次同意 / 解释卡 / 章首要义 / 脉络 / 速读 / 状态 -->
+    <PagewiseCompanionConsent v-if="dj.consentOpen.value" :dj="dj" />
+    <PagewiseCompanionCard v-if="dj.card.value" :dj="dj" @inspect="inspectPagewiseCompanionCard" />
+    <PagewiseCompanionChapterCard v-if="dj.chapterCard.value" :dj="dj" />
+    <PagewiseCompanionOutline v-if="dj.outlineOpen.value" :dj="dj" />
+    <PagewiseCompanionSkim v-if="dj.skimOpen.value" :dj="dj" />
+    <PagewiseCompanionStatus :dj="dj" @open-settings="router.push('/settings')" />
 
     <div v-if="inspecting || sourceError" class="inspection-bar" role="status" @click.stop @pointerdown.stop>
       <span>{{ sourceError || t('reader.inspectionTemporary') }}</span>
@@ -3776,7 +3814,7 @@ onBeforeRouteLeave(async () => {
       ><span v-if="modes.einkActive.value">{{ t(annotationLabelKey(name as string, true)) }}</span></button>
       <button class="btn btn-sm" @click="addHighlight('yellow', true)"><svg viewBox="0 0 24 24" width="14" height="14" aria-hidden="true"><path fill="currentColor" d="M5 4h14a2 2 0 0 1 2 2v9a2 2 0 0 1-2 2H10l-4.3 3.4A1 1 0 0 1 4 19.6V6a2 2 0 0 1 1-2zm1 2v11.5L9.3 15H19V6H6zm2 2.5h8a1 1 0 1 1 0 2H8a1 1 0 1 1 0-2zm0 3h5a1 1 0 1 1 0 2H8a1 1 0 1 1 0-2z"/></svg>{{ t('reader.writeNote') }}</button>
       <button class="btn btn-sm" @click="aiExplainSelection"><svg viewBox="0 0 24 24" width="14" height="14" aria-hidden="true"><path fill="currentColor" d="M10 3a1 1 0 0 1 .95.68l1.3 3.9a3 3 0 0 0 1.9 1.9l3.9 1.3a1 1 0 0 1 0 1.9l-3.9 1.3a3 3 0 0 0-1.9 1.9l-1.3 3.9a1 1 0 0 1-1.9 0l-1.3-3.9a3 3 0 0 0-1.9-1.9l-3.9-1.3a1 1 0 0 1 0-1.9l3.9-1.3a3 3 0 0 0 1.9-1.9l1.3-3.9A1 1 0 0 1 10 3zm8-1a1 1 0 0 1 .95.68l.4 1.2.97.32a1 1 0 0 1 0 1.9l-.97.32-.4 1.2a1 1 0 0 1-1.9 0l-.4-1.2-.97-.32a1 1 0 0 1 0-1.9l.97-.32.4-1.2A1 1 0 0 1 18 2z"/></svg>{{ t('ai.explain') }}</button>
-      <button v-if="dj.selectionKey.value" class="btn btn-sm" @click="dj.openKeyCard(); selection = null">{{ t('dianjing.why') }}</button>
+      <button v-if="dj.selectionKey.value" class="btn btn-sm" @click="dj.openKeyCard(); selection = null">{{ t('companion.why') }}</button>
       <button v-if="!fixedLayout" class="btn btn-sm" @click="listenFromSelection"><svg viewBox="0 0 24 24" width="14" height="14" aria-hidden="true"><path fill="currentColor" d="M12 3a7 7 0 0 0-7 7v1.1A3.5 3.5 0 0 0 3 14.5v2A3.5 3.5 0 0 0 6.5 20H8a1 1 0 0 0 1-1v-7a1 1 0 0 0-1-1h-.9A5 5 0 0 1 12 5a5 5 0 0 1 4.9 6H16a1 1 0 0 0-1 1v7a1 1 0 0 0 1 1h1.5a3.5 3.5 0 0 0 3.5-3.5v-2a3.5 3.5 0 0 0-2-3.16V10a7 7 0 0 0-7-7z"/></svg>{{ t('tts.listenFromSelection') }}</button>
       <button class="icon-btn" :title="t('common.cancel')" :aria-label="t('common.cancel')" @click="clearSelection"><svg viewBox="0 0 24 24" width="16" height="16" aria-hidden="true"><path fill="currentColor" d="M6.3 6.3a1 1 0 0 1 1.4 0L12 10.58l4.3-4.3a1 1 0 1 1 1.4 1.42L13.42 12l4.3 4.3a1 1 0 0 1-1.42 1.4L12 13.42l-4.3 4.3a1 1 0 0 1-1.4-1.42L10.58 12l-4.3-4.3a1 1 0 0 1 0-1.4z"/></svg></button>
     </div>

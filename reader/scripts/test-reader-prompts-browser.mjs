@@ -69,8 +69,8 @@ async function send(question) {
 async function engineScenario(kind, summaryKind = 'sum') {
   return page.evaluate(async ({ kind, summaryKind }) => {
     const check = (yes, message) => { if (!yes) throw Error('PRODUCTION: ' + message) }
-    const { DianjingEngine } = await import('/src/services/dianjing/engine.ts')
-    const { createMemoryCache } = await import('/src/services/dianjing/cache.ts')
+    const { PagewiseCompanion } = await import('/src/services/PagewiseCompanion/engine.ts')
+    const { createMemoryCache } = await import('/src/services/PagewiseCompanion/cache.ts')
     const cache = createMemoryCache(), id = crypto.randomUUID(), captures = []
     const doc = new DOMParser().parseFromString('<html lang="en"><body>' + Array.from({ length: 4 }, (_, i) => `<p>SYNTHETIC_PARAGRAPH_${i}. Evidence belongs only to this paragraph and no unseen chapter.</p>`).join('') + '</body></html>', 'text/html')
     const host = { bookId: id, book: () => ({ title: 'TITLE_IGNORE_POLICY', author: 'AUTHOR_ATTACK', language: 'en' }), uiLang: () => 'en', chapterTitle: () => 'CHAPTER_ATTACK', sectionCount: () => 1, sectionLinear: () => true, sectionDoc: async () => null,
@@ -101,7 +101,7 @@ async function engineScenario(kind, summaryKind = 'sum') {
       const end = kind === 'eof' ? '' : kind === 'length' ? 'data: {"choices":[{"finish_reason":"length"}]}\n\ndata: [DONE]\n\n' : 'data: [DONE]\n\n'
       return new Response(window.__qa.frame(text) + end, { headers: { 'content-type': 'text/event-stream' } })
     }
-    const engine = new DianjingEngine(host, cache)
+    const engine = new PagewiseCompanion(host, cache)
     try {
       engine.attach(0, doc); engine.start()
       const deadline = Date.now() + 5000
@@ -150,9 +150,9 @@ try {
   })
   await run('summary-budget-cache-version', async () => page.evaluate(async () => {
     const check = (v, m) => { if (!v) throw Error('PRODUCTION: ' + m) }
-    const { buildSummarySource, PROMPT_VERSION } = await import('/src/services/dianjing/prompt.ts')
-    const { createMemoryCache, sectionKey } = await import('/src/services/dianjing/cache.ts')
-    const { DianjingEngine } = await import('/src/services/dianjing/engine.ts')
+    const { buildSummarySource, PROMPT_VERSION } = await import('/src/services/PagewiseCompanion/prompt.ts')
+    const { createMemoryCache, sectionKey } = await import('/src/services/PagewiseCompanion/cache.ts')
+    const { PagewiseCompanion } = await import('/src/services/PagewiseCompanion/engine.ts')
     const gists = Array.from({ length: 100 }, (_, i) => 'GIST_' + i + '_' + 'G'.repeat(60)), keys = Array.from({ length: 100 }, (_, i) => 'KEY_' + i + '_' + 'K'.repeat(250))
     const source = buildSummarySource(gists, keys), data = JSON.parse(source.text)
     check(source.text.length <= 3000 && source.text.includes('GIST_99_') && source.text.includes('KEY_99_'), 'summary budget or late samples missing')
@@ -162,7 +162,7 @@ try {
       await cache.put('chunks', { key: `${id}:${version}`, bookId: id, promptVersion: version, items: [] })
       await cache.put('sections', { key: sectionKey(id, 0, version), bookId: id, section: 0, text: version })
     }
-    const engine = new DianjingEngine({ bookId: id, book: () => ({}), fictionOverride: () => null,
+    const engine = new PagewiseCompanion({ bookId: id, book: () => ({}), fictionOverride: () => null,
       uiLang: () => 'en', chapterTitle: () => '', sectionCount: () => 0, sectionLinear: () => false,
       sectionDoc: async () => null, channel: () => null, density: () => 'normal',
       kinds: () => ({ key: true, term: true, note: true }), colors: () => ({}),
@@ -263,7 +263,7 @@ try {
     const expanded = await page.evaluate(() => {
       const v = document.querySelector('.reader').__vueParentComponent.setupState, dj = v.dj
       const section = dj.engine.sections.values().next().value
-      if (!section) throw Error('FIXTURE: mounted Dianjing missing section')
+      if (!section) throw Error('FIXTURE: mounted PagewiseCompanion missing section')
       const block = section.model.sectionBlocks().find(b => b.sentences.some(s => s.includes('SOURCE_IGNORE_POLICY')))?.block
       if (block === undefined) throw Error('FIXTURE: source paragraph missing')
       const sentence = section.model.sentenceTexts(block).findIndex(s => s.includes('SOURCE_IGNORE_POLICY'))
@@ -282,8 +282,16 @@ try {
     return { selectionCharacters: selection.length, paragraphCharacters: expanded.length, actualMountedComposable: true }
   })
   await run('translation-card', async () => {
-    await page.evaluate(() => {
+    await page.evaluate(async bookId => {
       const v = document.querySelector('.reader').__vueParentComponent.setupState, dj = v.dj, s = dj.engine.sections.values().next().value
+      const settings = (await import('/src/stores/settings.ts')).useSettings()
+      // Opt in only this synthetic book; isolate background I/O, not the translation guard.
+      window.__qa.backgroundChannel = dj.engine.host.channel
+      dj.engine.host.channel = () => null
+      settings.dianjing.level = 'smart'
+      settings.dianjing.perBook[bookId] = true
+      await Promise.resolve()
+      if (!dj.active.value) throw Error('FIXTURE: synthetic Companion consent must be active')
       v.panel = 'none'
       const block = s.model.sectionBlocks().find(b => b.sentences.some(text => text.includes('SOURCE_IGNORE_POLICY')))?.block
       if (block === undefined) throw Error('FIXTURE: translation source paragraph missing')
@@ -291,7 +299,7 @@ try {
       const start = s.model.sentenceTexts(block)[sentence].indexOf('SOURCE_IGNORE_POLICY')
       dj.card.value = { target: { kind: 'term', section: s.index, item: { t: 'term', id: 'qa-tr', block, sentence, start, end: start + 20, q: 'SOURCE_IGNORE_POLICY', def: 'DEFINITION_ATTACK', r: 2 }, range: s.model.sentenceRange(block, sentence), text: 'SOURCE_IGNORE_POLICY' }, rect: { left: 100, right: 200, top: 100, bottom: 120 } }
       window.__qa.plans.push({ text: '{"t":"tr","s":"1.1","text":"PARTIAL_TRANSLATION"}\n', end: 'eof' })
-    })
+    }, bookId)
     const button = page.locator('.dj-card').getByRole('button', { name: 'Translate', exact: true })
     await button.click()
     await page.waitForFunction(() => document.querySelector('.reader').__vueParentComponent.setupState.dj.card.value?.translateError)
@@ -313,7 +321,15 @@ try {
       return { text: dj.card.value.target.text, translation: dj.card.value.translation }
     })
     assert.deepEqual(stale, { text: 'NEW_TARGET', translation: 'NEW_TARGET_TRANSLATION' })
-    await page.evaluate(() => document.querySelector('.reader').__vueParentComponent.setupState.dj.closeCard())
+    await page.evaluate(async bookId => {
+      const dj = document.querySelector('.reader').__vueParentComponent.setupState.dj
+      dj.closeCard()
+      const settings = (await import('/src/stores/settings.ts')).useSettings()
+      settings.dianjing.perBook[bookId] = false
+      await Promise.resolve()
+      dj.engine.host.channel = window.__qa.backgroundChannel
+      delete window.__qa.backgroundChannel
+    }, bookId)
     return { partialRetained: true, incompleteText: failure, retryEnabled: true, successfulRetryClearsError: true, stale }
   })
   }

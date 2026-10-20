@@ -25,7 +25,7 @@ test('anonymous telemetry collectors and startup/book-open reporting are removed
   for (const name of ['usageStats.ts', 'usageStatsCore.ts', 'usageCounters.ts']) {
     await assert.rejects(access(new URL(`../src/services/${name}`, import.meta.url)), { code: 'ENOENT' })
   }
-  for (const path of ['../src/App.vue', '../src/views/ReaderView.vue', '../src/views/PdfReaderView.vue', '../src/services/dianjing/engine.ts']) {
+  for (const path of ['../src/App.vue', '../src/views/ReaderView.vue', '../src/views/PdfReaderView.vue', '../src/services/PagewiseCompanion/engine.ts']) {
     assert.doesNotMatch(await source(path), /pingUsage|usageStats|usageCounters|noteDjReading|noteKeyWordChunk/)
   }
   const settings = await source('../src/views/SettingsView.vue')

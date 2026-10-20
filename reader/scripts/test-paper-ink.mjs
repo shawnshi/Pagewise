@@ -6,6 +6,9 @@ import ts from 'typescript'
 import { parse } from '@vue/compiler-sfc'
 import { annotationLabelKey, annotationLineStyle, annotationSwatchStyle, EINK_THEMES, HIGHLIGHT_COLORS, getReaderCSS } from '../src/services/readerTheme.ts'
 import { dimBackground, inNightWindow, nightScheduleAction } from '../src/services/readingModes/eyeCare.ts'
+import { onyxEpd } from '../src/services/onyxEpd.ts'
+import { onyxFrontLight } from '../src/services/onyxFrontLight.ts'
+import { onyxScribble, normalizePointsToRect, strokeToSvgPath, eraseIntersectingStrokes } from '../src/services/onyxScribble.ts'
 import zh from '../src/i18n/zh.ts'
 import en from '../src/i18n/en.ts'
 
@@ -173,3 +176,97 @@ test('actual scheduled night logic never overrides a manual e-ink choice', () =>
     assert.equal(calls.length, enabled ? 0 : 1)
   }
 })
+test('Onyx EpdController service drives GC page-turn threshold and DU/A2 fast scroll waveform transitions', () => {
+  onyxEpd.resetForTest()
+  const calls = []
+  const host = {
+    LightReadInsets: {
+      configureEpdGcInterval: pages => { calls.push(['interval', pages]); return JSON.stringify({ gcIntervalPages: pages }) },
+      notifyEpdPageTurn: () => { calls.push(['turn']); return '{}' },
+      setEpdFastMode: (enabled, scene, mode) => { calls.push(['fast', enabled, scene, mode]); return '{}' },
+      repaintEpd: mode => { calls.push(['repaint', mode]); return '{}' },
+    },
+  }
+  onyxEpd.configureGcInterval(3, host)
+  assert.equal(onyxEpd.notifyPageTurn(host).mode, 'regal')
+  assert.equal(onyxEpd.notifyPageTurn(host).mode, 'regal')
+  const third = onyxEpd.notifyPageTurn(host)
+  assert.equal(third.mode, 'gc')
+  assert.equal(third.pageTurnCount, 0)
+
+  onyxEpd.enterFastMode('scroll', 'du', host)
+  assert.equal(onyxEpd.getStatus().fastMode, true)
+  assert.equal(onyxEpd.getStatus().mode, 'du')
+  onyxEpd.exitFastModeNow(host)
+  assert.equal(onyxEpd.getStatus().fastMode, false)
+  assert.equal(onyxEpd.getStatus().mode, 'regal')
+  assert.ok(calls.some(c => c[0] === 'fast' && c[1] === true && c[3] === 'du'))
+  assert.ok(calls.some(c => c[0] === 'fast' && c[1] === false))
+})
+test('Onyx FrontLightController service controls CTM cold/warm brightness and scene presets', () => {
+  onyxFrontLight.resetForTest()
+  const state = { supported: true, ctmSupported: true, enabled: true, cold: 40, warm: 30 }
+  const host = {
+    LightReadInsets: {
+      getFrontLightState: () => JSON.stringify(state),
+      setFrontLightEnabled: on => { state.enabled = on; return JSON.stringify(state) },
+      setColdLight: v => { state.cold = v; state.enabled = true; return JSON.stringify(state) },
+      setWarmLight: v => { state.warm = v; state.enabled = true; return JSON.stringify(state) },
+    },
+  }
+  assert.deepEqual(onyxFrontLight.refresh(host), state)
+  assert.equal(onyxFrontLight.setCold(75, host).cold, 75)
+  assert.equal(onyxFrontLight.setWarm(60, host).warm, 60)
+  const night = onyxFrontLight.applyPreset('night', host)
+  assert.equal(night.cold, 0)
+  assert.equal(night.warm, 28)
+  assert.equal(onyxFrontLight.setEnabled(false, host).enabled, false)
+})
+test('Onyx Scribble service normalizes Wacom EMR points, suspends on modal open, and erases intersecting strokes', () => {
+  onyxScribble.resetForTest()
+  const calls = []
+  const host = {
+    LightReadInsets: {
+      configureScribble: (...args) => { calls.push(['config', ...args]); return '{}' },
+      setScribbleModalSuspended: suspended => { calls.push(['modal', suspended]); return '{}' },
+    },
+  }
+  const received = []
+  const unsub = onyxScribble.subscribe(ev => received.push(ev), host)
+  const limitRect = { left: 100, top: 50, right: 500, bottom: 850 }
+  const excludeRects = [{ left: 380, top: 55, right: 495, bottom: 95 }]
+  onyxScribble.configure({ enabled: true, tool: 'fountain', strokeWidth: 4, limitRect, excludeRects }, host)
+  assert.equal(calls.length, 1)
+  assert.equal(calls[0][1], true)
+  assert.equal(calls[0][2], 1)
+
+  onyxScribble.setModalSuspended(true, host)
+  assert.deepEqual(calls.at(-1), ['modal', true])
+
+  host.__pagewiseOnyxScribbleEvent(JSON.stringify({
+    kind: 'stroke',
+    style: 1,
+    width: 4,
+    points: [
+      { x: 100, y: 50, p: 0.4 },
+      { x: 300, y: 450, p: 0.8 },
+    ],
+  }))
+  assert.equal(received.length, 1)
+  const norm = normalizePointsToRect(received[0].points, limitRect)
+  assert.deepEqual(norm, [
+    { x: 0, y: 0, p: 0.4 },
+    { x: 0.5, y: 0.5, p: 0.8 },
+  ])
+  const stroke = { id: 's1', tool: 'fountain', width: 4, points: norm, createdAt: 1 }
+  assert.match(strokeToSvgPath(stroke, 1000, 1000), /^M 0\.0 0\.0 L 500\.0 500\.0$/)
+
+  const miss = eraseIntersectingStrokes([stroke], [{ x: 0.9, y: 0.9, p: 0.5 }])
+  assert.equal(miss.removedIds.length, 0)
+  const hit = eraseIntersectingStrokes([stroke], [{ x: 0.505, y: 0.495, p: 0.5 }])
+  assert.deepEqual(hit.removedIds, ['s1'])
+  assert.equal(hit.remaining.length, 0)
+  unsub()
+})
+
+

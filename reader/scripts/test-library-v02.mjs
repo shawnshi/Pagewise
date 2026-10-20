@@ -158,11 +158,13 @@ test('transactional filter draft lifecycle in query workflow', () => {
 test('visible sort names mapping covers all valid sort values', () => {
   const expectedLabels = {
     recent: '最近阅读',
-    added: '最近添加',
+    added: '最近加入',
+    published: '出版时间',
     title: '书名',
     author: '作者',
     progress: '阅读进度',
   }
+  assert.deepEqual(Object.keys(SORT_LABELS).sort(), Object.keys(expectedLabels).sort())
   for (const [key, label] of Object.entries(expectedLabels)) {
     assert.equal(SORT_LABELS[key], label)
   }

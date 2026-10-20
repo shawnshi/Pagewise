@@ -81,7 +81,7 @@ onMounted(async () => {
   }
 })
 
-const chapters = computed(() => files.map(f => ({ file: f, title: titles.value[f] ?? f.replace(/\.md$/, '') })))
+const chapters = computed(() => files.map(f => ({ file: f, title: titles.value[f] ?? f.replace(/\.md$/, '').replace('点睛阅读', '伴读') })))
 
 async function openExternal(url: string) {
   const { openUrl } = await import('@tauri-apps/plugin-opener')

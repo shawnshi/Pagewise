@@ -715,19 +715,19 @@ test('自动速度: 旧秒数落到最近档位, 快慢一点每次 5 档且到�
   assert.equal(stepAutoSpeed(300, -1), 300)
 })
 
-// ---- 按词着色 = 点睛阅读基础版 (开关与版本见 services/dianjing/level.ts, 面板见 DianjingToggle.vue) ----
+// ---- 按词着色 = 伴读基础版 (开关与版本见 services/PagewiseCompanion/level.ts, 面板见 PagewiseCompanionToggle.vue) ----
 import zhDict from '../src/i18n/zh.ts'
 import enDict from '../src/i18n/en.ts'
 
-test('点睛阅读两个版本的文案: 中英都有; 界面里不再出现旧名、实验分组和「读不快」之类的说明', () => {
-  for (const key of ['dianjing.title', 'dianjing.subtitle', 'dianjing.levelBasic', 'dianjing.levelSmart', 'dianjing.basicDesc',
-    'dianjing.basicNote', 'dianjing.smartDesc', 'dianjing.useBasic', 'dianjing.basicUnsupported', 'readingMode.guideStrength', 'readingMode.guideColor']) {
+test('伴读两个版本的文案: 中英都有; 界面里不再出现旧名、实验分组和「读不快」之类的说明', () => {
+  for (const key of ['companion.title', 'companion.subtitle', 'companion.levelBasic', 'companion.levelSmart', 'companion.basicDesc',
+    'companion.basicNote', 'companion.smartDesc', 'companion.useBasic', 'companion.basicUnsupported', 'readingMode.guideStrength', 'readingMode.guideColor']) {
     assert.ok(zhDict[key], `zh missing ${key}`)
     assert.ok(enDict[key], `en missing ${key}`)
   }
-  assert.equal(zhDict['dianjing.subtitle'], '让重点自己浮出来')
-  assert.equal(zhDict['dianjing.levelBasic'], '基础')
-  assert.equal(zhDict['dianjing.levelSmart'], '智能')
+  assert.equal(zhDict['companion.subtitle'], '让重点自己浮出来')
+  assert.equal(zhDict['companion.levelBasic'], '基础')
+  assert.equal(zhDict['companion.levelSmart'], '智能')
   for (const key of ['readingMode.groupLab', 'readingMode.lab', 'readingMode.modeWordGuide', 'readingMode.wordGuideHint', 'readingMode.wordGuideBlocked']) {
     assert.ok(!(key in zhDict) && !(key in enDict), `${key} 应已删除`)
   }

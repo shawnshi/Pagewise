@@ -33,6 +33,8 @@
  *  - View.expand() ignores documents that are already gone.
  * Vite resolves `foliate-js/view.js`'s `./paginator.js` to this file (vite.config.ts).
  */
+import { bookContentRoot } from '../../services/bookContentCfi.ts'
+
 const requestIdle = globalThis.requestIdleCallback
     ? (cb, opts) => globalThis.requestIdleCallback(cb, opts)
     : cb => setTimeout(() => cb({ didTimeout: true, timeRemaining: () => 0 }), 32)
@@ -189,13 +191,18 @@ const getBoundingClientRect = target => {
     return new DOMRect(left, top, right - left, bottom - top)
 }
 
-const getVisibleRange = (doc, start, end, mapRect) => {
+const getVisibleRange = (doc, start, end, mapRect, root = doc.body) => {
+    if (!root) return null
+    const svg = root !== doc.body
     // first get all visible nodes
     const acceptNode = node => {
         const name = node.localName?.toLowerCase()
         // ignore all scripts, styles, and their children
         if (name === 'script' || name === 'style') return FILTER_REJECT
         if (node.nodeType === 1) {
+            // PW-A01: SVG root/wrapper extents are not legacy content positions.
+            // Only real visible text can supply an automatic SVG reading range.
+            if (svg) return FILTER_SKIP
             const { left, right } = mapRect(node.getBoundingClientRect())
             // no need to check child nodes if it's completely out of view
             if (right < start || left > end) return FILTER_REJECT
@@ -211,17 +218,21 @@ const getVisibleRange = (doc, start, end, mapRect) => {
             // create range to get rect
             const range = doc.createRange()
             range.selectNodeContents(node)
-            const { left, right } = mapRect(range.getBoundingClientRect())
+            const rect = range.getBoundingClientRect()
+            if (svg && (!rect.width || !rect.height)) return FILTER_SKIP
+            const { left, right } = mapRect(rect)
             // it's visible if any part of it is in view
             if (right >= start && left <= end) return FILTER_ACCEPT
         }
         return FILTER_SKIP
     }
-    const walker = doc.createTreeWalker(doc.body, filter, { acceptNode })
+    const walker = doc.createTreeWalker(root, filter, { acceptNode })
     const nodes = []
     for (let node = walker.nextNode(); node; node = walker.nextNode())
         nodes.push(node)
 
+    // A blank SVG viewport must not manufacture a nearby saved location.
+    if (svg && !nodes.length) return null
     // we're only interested in the first and last visible nodes
     const from = nodes[0] ?? doc.body
     const to = nodes[nodes.length - 1] ?? from
@@ -568,6 +579,7 @@ export class Paginator extends HTMLElement {
     #touchState
     #touchScrolled
     #lastVisibleRange
+    #book
     // ---- LightRead: continuous (multi-slot) scrolling state ----
     #mode = 'single' // 'single' = upstream behaviour, 'cont' = stacked slots
     #contBlocked = false // a vertical-writing section was found: stay single
@@ -825,6 +837,7 @@ export class Paginator extends HTMLElement {
         this.#navigationEpoch++
         this.#locked = false
         this.bookDir = book.dir
+        this.#book = book
         this.sections = book.sections
         this.#contBlocked = false
         this.#failed = new Set()
@@ -860,8 +873,10 @@ export class Paginator extends HTMLElement {
     }
     #replaceBackground(background, columnCount) {
         const doc = this.#view?.document
-        if (!doc) return
-        const htmlStyle = doc.defaultView.getComputedStyle(doc.documentElement)
+        const root = doc?.documentElement, win = doc?.defaultView
+        // ResizeObserver can run while the iframe's document is being emptied.
+        if (!root || !win) return
+        const htmlStyle = win.getComputedStyle(root)
         const themeBgColor = htmlStyle.getPropertyValue('--theme-bg-color')
         if (background && themeBgColor) {
             const parsedBackground = background.split(/\s(?=(?:url|rgb|hsl|#[0-9a-fA-F]{3,6}))/)
@@ -1269,16 +1284,19 @@ export class Paginator extends HTMLElement {
         await this.#scrollToPage(newPage + 1, reason)
     }
     #getVisibleRange() {
-        if (this.scrolled) return getVisibleRange(this.#view.document,
-            this.start + this.#margin, this.end - this.#margin, this.#getRectMapper())
+        const doc = this.#view.document
+        const root = bookContentRoot(this.#book, this.#index, doc)
+        if (this.scrolled) return getVisibleRange(doc,
+            this.start + this.#margin, this.end - this.#margin, this.#getRectMapper(), root)
         const size = this.#rtl ? -this.size : this.size
-        return getVisibleRange(this.#view.document,
-            this.start - size, this.end - size, this.#getRectMapper())
+        return getVisibleRange(doc,
+            this.start - size, this.end - size, this.#getRectMapper(), root)
     }
     #afterScroll(reason) {
         if (!this.#view?.document?.body) return
         const range = this.#getVisibleRange()
         this.#lastVisibleRange = range
+        if (!range) return
         // don't set new anchor if relocation was to scroll to anchor
         if (reason !== 'selection' && reason !== 'navigation' && reason !== 'anchor') {
             this.#anchor = range
@@ -1516,6 +1534,7 @@ export class Paginator extends HTMLElement {
             this.sections[this.#index]?.unload?.()
         }
         this.#mediaQuery.removeEventListener('change', this.#mediaQueryListener)
+        this.#book = undefined
     }
 
     // =====================================================================
@@ -1798,8 +1817,9 @@ export class Paginator extends HTMLElement {
         const st = this.#container.scrollTop
         const start = st - this.#slotTop(slot, st)
         const margin = this.#margin
+        const root = bookContentRoot(this.#book, slot.index, slot.view.document)
         return getVisibleRange(slot.view.document, start + margin, start + this.size - margin,
-            ({ top, bottom }) => ({ left: top + margin, right: bottom + margin }))
+            ({ top, bottom }) => ({ left: top + margin, right: bottom + margin }), root)
     }
     #contRelocate(reason) {
         clearTimeout(this.#relocTimer)
@@ -1808,6 +1828,7 @@ export class Paginator extends HTMLElement {
         if (this.#mode !== 'cont' || !slot?.ready || !slot.view.document?.body) return
         const range = this.#contVisibleRange(slot)
         this.#lastVisibleRange = range
+        if (!range) return
         const viewSize = this.viewSize
         const fraction = viewSize > 0 ? Math.max(0, Math.min(1, this.start / viewSize)) : 0
         this.dispatchEvent(new CustomEvent('relocate', {

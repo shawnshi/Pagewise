@@ -31,6 +31,7 @@ export interface FolderLibraryDependencies {
 const MAX_FILES = MONITORED_FOLDER_LIMITS.files
 const MAX_FILE_BYTES = MONITORED_FOLDER_LIMITS.readBytes
 const FOREGROUND_INTERVAL = 60_000
+const UNKNOWN_METADATA_RECHECK = 5 * 60_000
 const errorMessage = (error: unknown) => error instanceof Error ? error.message : String(error)
 const errorCode = (error: unknown) => error && typeof error === 'object' && 'code' in error ? String(error.code) : ''
 
@@ -40,6 +41,8 @@ export function createFolderLibrary(deps: FolderLibraryDependencies) {
   })
   let epoch = 0
   let pending = false
+  let pendingForce = false
+  const rechecks = new Map<string, { signature: string; at: number }>()
   let running: Promise<void> | undefined
   let subscribers = 0
   let unsubscribe: (() => void) | undefined
@@ -47,7 +50,7 @@ export function createFolderLibrary(deps: FolderLibraryDependencies) {
   let lastForegroundScan = 0
   let readingActive = false
 
-  async function scan() {
+  async function scan(force: boolean) {
     const token = epoch
     const current = () => token === epoch
     let changed = false
@@ -76,7 +79,9 @@ export function createFolderLibrary(deps: FolderLibraryDependencies) {
         if (active?.id === folder!.id && active.permission === folder!.permission) return true
         // Configuration notifications are best-effort; never infer that silence means unchanged.
         epoch++
+        rechecks.clear()
         pending = true
+        pendingForce = true
         return false
       }
       const update = async (book: BookMeta, patch: Partial<BookMeta>) => {
@@ -128,8 +133,16 @@ export function createFolderLibrary(deps: FolderLibraryDependencies) {
         }
         const sourceRef = { folderId: folder.id, documentId: file.documentId,
           relativePath: file.relativePath, version: JSON.stringify([file.size, file.modifiedAt]) }
-        const mustParse = !book || linked.some(item => item.sourceRef?.version !== sourceRef.version)
-          || file.size === null || file.modifiedAt === null
+        const cacheKey = JSON.stringify([folder.id, file.documentId])
+        const signature = JSON.stringify([sourceRef.version, file.name, file.relativePath])
+        const remembered = rechecks.get(cacheKey)
+        const unknownMetadata = file.size === null || file.modifiedAt === null
+        const elapsed = remembered ? Date.now() - remembered.at : Infinity
+        // Providers without version hints still get periodic content checks, but not on every poll.
+        const unknownDue = unknownMetadata && (force || remembered?.signature !== signature
+          || elapsed < 0 || elapsed >= UNKNOWN_METADATA_RECHECK)
+        const mustParse = !book || linked.some(item => item.sourceRef?.version !== sourceRef.version
+          || item.fileAvailability !== 'available') || unknownDue
         let parsed: Awaited<ReturnType<typeof prepareBookImport>> | undefined
         if (mustParse) {
           // Do not mark unseen sources missing when a foreground reader defers the pass.
@@ -165,6 +178,14 @@ export function createFolderLibrary(deps: FolderLibraryDependencies) {
           books.push({ ...parsed.meta, id, hasCover: !!parsed.cover, sourceRef, fileAvailability: 'available' })
           changed = true
         }
+        if (parsed && current() && unknownMetadata) {
+          rechecks.delete(cacheKey)
+          if (rechecks.size >= MAX_FILES) {
+            const oldest = rechecks.keys().next().value
+            if (oldest !== undefined) rechecks.delete(oldest)
+          }
+          rechecks.set(cacheKey, { signature, at: Date.now() })
+        } else if (!unknownMetadata) rechecks.delete(cacheKey)
       }
       // Partial/truncated/error results cannot prove that an unseen document disappeared.
       if (listing.complete && !errors.length) {
@@ -185,19 +206,27 @@ export function createFolderLibrary(deps: FolderLibraryDependencies) {
     }
   }
 
-  function rescan(): Promise<void> {
+  function requestScan(force: boolean): Promise<void> {
     pending = true
+    pendingForce ||= force
     if (readingActive) return running ?? Promise.resolve()
     if (!running) {
       running = (async () => {
         try {
           // Hints request one follow-up, not cancellation of already confirmed writes.
-          while (pending && !readingActive) { pending = false; await scan() }
+          while (pending && !readingActive) {
+            const force = pendingForce
+            pending = false
+            pendingForce = false
+            await scan(force)
+          }
         } finally { running = undefined }
       })()
     }
     return running
   }
+
+  function rescan(): Promise<void> { return requestScan(true) }
 
   /** Integration owner sets this for reader routes; a deferred pass resumes on exit. */
   function setReadingActive(active: boolean) {
@@ -211,6 +240,7 @@ export function createFolderLibrary(deps: FolderLibraryDependencies) {
       const selected = await deps.selectMonitoredFolder()
       if (!selected) return
       epoch++
+      rechecks.clear()
       await rescan()
     } catch (error) {
       status.value = { ...status.value, state: 'error', error: errorMessage(error) }
@@ -221,7 +251,7 @@ export function createFolderLibrary(deps: FolderLibraryDependencies) {
     if (typeof document !== 'undefined' && document.visibilityState === 'hidden') return
     if (Date.now() - lastForegroundScan < 15_000) return
     lastForegroundScan = Date.now()
-    void rescan()
+    void requestScan(false)
   }
 
   function start() {
@@ -247,6 +277,8 @@ export function createFolderLibrary(deps: FolderLibraryDependencies) {
       if (typeof window !== 'undefined') window.removeEventListener('focus', foreground)
       epoch++
       pending = false
+      pendingForce = false
+      rechecks.clear()
       if (status.value.state === 'scanning') status.value = { ...status.value, state: 'idle' }
     }
   }

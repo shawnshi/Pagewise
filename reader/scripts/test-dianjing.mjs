@@ -1,4 +1,4 @@
-// 点睛阅读的纯函数契约: 提示词 / NDJSON 流式解析 / 编号映射 / 术语锚定 / 密度过滤 / 缓存键 / 体裁识别 / 额度换算 / relay 与客户端提示词同源
+// 伴读的纯函数契约: 提示词 / NDJSON 流式解析 / 编号映射 / 术语锚定 / 密度过滤 / 缓存键 / 体裁识别 / 额度换算 / relay 与客户端提示词同源
 // node --experimental-strip-types --test scripts/test-dianjing.mjs
 import assert from 'node:assert/strict'
 import { readFileSync } from 'node:fs'
@@ -19,14 +19,14 @@ import {
   PROMPT_VERSION,
   sanitizeRequest,
   validateRequest,
-} from '../src/services/dianjing/prompt.ts'
-import { chunkSection, hashText, numberBlocks, requestOrder, resolveSentence, chunkIndexForBlock } from '../src/services/dianjing/chunker.ts'
-import { chunkPlainText, findTermSpan, keyWordsUsable, NdjsonParser, resolveItem, selectKeys, selectTerms, SseDeltaParser, wantsKeyWords } from '../src/services/dianjing/protocol.ts'
-import { decideFiction, fictionFromMeta, fictionFromText } from '../src/services/dianjing/fiction.ts'
-import { bookRange, cacheKey, createMemoryCache, feedbackKey, sectionKey } from '../src/services/dianjing/cache.ts'
-import { dianjingCSS, djColors, djThemeName, DJ_PRIORITY } from '../src/services/dianjing/theme.ts'
+} from '../src/services/PagewiseCompanion/prompt.ts'
+import { chunkSection, hashText, numberBlocks, requestOrder, resolveSentence, chunkIndexForBlock } from '../src/services/PagewiseCompanion/chunker.ts'
+import { chunkPlainText, findTermSpan, keyWordsUsable, NdjsonParser, resolveItem, selectKeys, selectTerms, SseDeltaParser, wantsKeyWords } from '../src/services/PagewiseCompanion/protocol.ts'
+import { decideFiction, fictionFromMeta, fictionFromText } from '../src/services/PagewiseCompanion/fiction.ts'
+import { bookRange, cacheKey, createMemoryCache, feedbackKey, sectionKey } from '../src/services/PagewiseCompanion/cache.ts'
+import { companionCSS, djColors, companionThemeName, DJ_PRIORITY } from '../src/services/PagewiseCompanion/theme.ts'
 import { splitSentences } from '../src/services/readAloud.ts'
-import { applyDjAction, dianjingOn, effectiveLevels, migrateLevel, normalizeLevel, smartOnFor } from '../src/services/dianjing/level.ts'
+import { applyDjAction, dianjingOn, effectiveLevels, migrateLevel, normalizeLevel, smartOnFor } from '../src/services/PagewiseCompanion/level.ts'
 import { CHAT_MODEL, LEGACY_MODELS, quotaDay, rateLimited, sseToNdjson } from '../relay/src/lib.js'
 
 const sentences = (text, lang = 'zh') => splitSentences(text, lang).map(s => text.slice(s.start, s.end))
@@ -101,7 +101,7 @@ test('relay 请求校验: 只接受固定 schema, 白名单字段, 长度上限'
 
 test('relay 与客户端提示词同源: relay 直接 import prompt.ts, 不自带提示词', () => {
   const src = readFileSync(new URL('../relay/src/index.js', import.meta.url), 'utf8')
-  assert.match(src, /from '\.\.\/\.\.\/src\/services\/dianjing\/prompt\.ts'/)
+  assert.match(src, /from '\.\.\/\.\.\/src\/services\/PagewiseCompanion\/prompt\.ts'/)
   assert.match(src, /buildChatBody\(req, /)
   assert.doesNotMatch(src, /你是严谨的阅读导读者|NDJSON：每行/)
   // Worker 入口只能有 default 导出 (具名导出会被当成 handler)
@@ -322,16 +322,16 @@ test('relay 工具: 计数日按北京时间, 内存限流窗口', () => {
 
 test('主题取值: 四种正文主题 + 墨水屏; 样式只用颜色与 text-decoration', () => {
   for (const name of ['light', 'sepia', 'green', 'dark']) {
-    const css = dianjingCSS(name)
+    const css = companionCSS(name)
     assert.match(css, /::highlight\(lr-dj-key\)/)
     assert.match(css, new RegExp(djColors(name).key))
     assert.doesNotMatch(css, /font-weight|font-style/)
   }
   assert.equal(djColors('unknown').key, djColors('light').key)
-  assert.equal(djThemeName('dark', true), 'eink-dark')
-  assert.equal(djThemeName('sepia', true), 'eink')
-  assert.match(dianjingCSS('eink'), /dotted #000000/)
-  assert.doesNotMatch(dianjingCSS('eink'), /background-color: rgba/)
+  assert.equal(companionThemeName('dark', true), 'eink-dark')
+  assert.equal(companionThemeName('sepia', true), 'eink')
+  assert.match(companionCSS('eink'), /dotted #000000/)
+  assert.doesNotMatch(companionCSS('eink'), /background-color: rgba/)
   // 优先级低于打字机隐藏层 (100) 与墨迹 (50)
   assert.ok(Math.max(...Object.values(DJ_PRIORITY)) < 20)
 })
@@ -353,7 +353,7 @@ test('版本: 未知值归为基础版; 同一时间至多一个版本生效', (
   assert.equal(smartOnFor({ consentAll: false, enabled: true, perBook: {} }, 'b'), false)
 })
 
-test('迁移 (v14): 在用按词着色 → 开着 + 基础版; 点睛对所有书开着 → 智能版; 两者都开 → 智能版; 新用户 → 关 + 基础版', () => {
+test('迁移 (v14): 在用按词着色 → 开着 + 基础版; 伴读对所有书开着 → 智能版; 两者都开 → 智能版; 新用户 → 关 + 基础版', () => {
   assert.deepEqual(migrateLevel({}), { level: 'basic', wordGuideEnabled: false })
   assert.deepEqual(migrateLevel({ readingMode: { wordGuide: { enabled: true } } }), { level: 'basic', wordGuideEnabled: true })
   assert.deepEqual(migrateLevel({ dianjing: { consentAll: true, enabled: true, perBook: {} } }), { level: 'smart', wordGuideEnabled: false })
@@ -361,7 +361,7 @@ test('迁移 (v14): 在用按词着色 → 开着 + 基础版; 点睛对所有�
     migrateLevel({ dianjing: { consentAll: true, enabled: true }, readingMode: { wordGuide: { enabled: true } } }),
     { level: 'smart', wordGuideEnabled: false },
   )
-  // 只给个别书开过点睛: 智能版 (那几本书照旧); 同时开着按词着色也是智能版 (两者都用 → 智能)
+  // 只给个别书开过伴读: 智能版 (那几本书照旧); 同时开着按词着色也是智能版 (两者都用 → 智能)
   assert.deepEqual(migrateLevel({ dianjing: { perBook: { a: true } } }), { level: 'smart', wordGuideEnabled: false })
   assert.deepEqual(migrateLevel({ dianjing: { perBook: { a: true } }, readingMode: { wordGuide: { enabled: true } } }), { level: 'smart', wordGuideEnabled: false })
   // 同意过但都关了: 仍是新用户的默认

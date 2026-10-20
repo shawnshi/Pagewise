@@ -383,7 +383,7 @@ test('native primitive-only, launch-scoped atomic bounds and fixed labels; no pe
   assert.match(native, /override fun onDestroy\(\)\s*\{\s*synchronized\(performanceRecords\) \{ performanceProbe = false \}/)
   assert.match(native, /private val performanceRecords = AtomicInteger\(0\)/)
   assert.match(native, /@JavascriptInterface\s+fun performanceProbeEnabled\(\): Boolean = performanceProbe/)
-  assert.match(native, /fun recordPerformance\(actionCode: Int, engineCode: Int, elapsedMs: Double, completed: Boolean\): Boolean =\s+synchronized\(performanceRecords\)/)
+  assert.match(native, /fun recordPerformance\(\s*actionCode: Int,\s*engineCode: Int,\s*elapsedMs: Double,\s*completed: Boolean,?\s*\): Boolean =\s+synchronized\(performanceRecords\)/)
   const reporter = native.split('fun recordPerformance(')[1].split('@JavascriptInterface')[0]
   assert.match(reporter, /!performanceProbe \|\| performanceRecords\.get\(\) >= 512/)
   assert.match(reporter, /!elapsedMs\.isFinite\(\) \|\| elapsedMs < 0\.0 \|\| elapsedMs > 60000\.0/)
@@ -391,7 +391,7 @@ test('native primitive-only, launch-scoped atomic bounds and fixed labels; no pe
   for (const [code, label] of [[1, 'open'], [2, 'turn']]) assert.ok(reporter.includes(`${code} -> if (engineCode == 1 || engineCode == 2) "${label}" else return@synchronized false`))
   assert.match(reporter, /else -> return@synchronized false/)
   assert.match(reporter, /performanceRecords\.incrementAndGet\(\)/)
-  assert.match(reporter, /Log\.i\("PagewisePerf", String\.format\(Locale\.US,/)
+  assert.match(reporter, /Log\.i\(\s*"PagewisePerf",\s*String\.format\(\s*Locale\.US,/)
   assert.ok(reporter.includes('PWPERF action=%s engine=%s completed=%d ms=%.3f'))
   assert.doesNotMatch(native, /setWebContentsDebuggingEnabled|SharedPreferences|putExtra|FileOutputStream/)
   assert.doesNotMatch(service, /textContent|innerHTML|outerHTML|fetch\(|localStorage|sessionStorage|console\.|getImageData/)

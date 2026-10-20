@@ -4,7 +4,8 @@
  * 当前导出是符合 OKF v0.1 的开放知识包；导入仍兼容早期 JSON v1/v2 备份。
  * 开放 Profile 见 docs/library-okf-profile.md。
  */
-import { unzipSync, strToU8, strFromU8, Zip, ZipPassThrough } from 'fflate'
+import { strToU8, strFromU8, Zip, ZipPassThrough } from 'fflate'
+import { readBoundedArchive, checkArchiveAbort, ARCHIVE_LIMITS, StoredArchiveBudget } from './boundedArchive'
 import { parseDocument, stringify } from 'yaml'
 import {
   getStorage,
@@ -171,6 +172,7 @@ function readOkfDocument(
   path: string,
   frontmatterOptional = false,
 ): { frontmatter: Record<string, unknown>; body: string } {
+  if (bytes.length > ARCHIVE_LIMITS.metadataBytes) archiveError(`${path} exceeds the 4 MiB metadata limit`)
   const text = strFromU8(bytes).replace(/\r\n/g, '\n')
   if (!text.startsWith('---\n')) {
     if (frontmatterOptional) return { frontmatter: {}, body: text }
@@ -478,8 +480,39 @@ function parseOkfBundle(entries: Record<string, Uint8Array>): RestorableManifest
     .filter(([path]) => path.endsWith('.md'))
     .filter(([path]) => !['index.md', 'log.md'].includes(path.split('/').pop() ?? ''))
 
-  for (const [conceptPath, bytes] of conceptEntries) {
-    const { frontmatter } = readOkfDocument(bytes, conceptPath)
+  // Markdown payloads may themselves contain arbitrary/invalid YAML. Defer each
+  // candidate's parse failure until bounded concept documents establish asset roles;
+  // every unreferenced metadata candidate still fails on its original parse error.
+  const documents = conceptEntries.map(([conceptPath, bytes]) => {
+    try { return { conceptPath, document: readOkfDocument(bytes, conceptPath) } }
+    catch (error) { return { conceptPath, error } }
+  })
+  const referencedAssets = new Set<string>()
+  const referenceErrors = new Map<string, unknown>()
+  // The producer's concept documents precede its assets/ payloads for role discovery,
+  // irrespective of ZIP entry order or YAML-like text inside a Markdown book.
+  const discoveryOrder = [...documents].sort((a, b) => Number(a.conceptPath.startsWith('assets/')) - Number(b.conceptPath.startsWith('assets/')))
+  for (const { conceptPath, document } of discoveryOrder) {
+    if (!document || referencedAssets.has(conceptPath)) continue
+    const { frontmatter } = document
+    const file = optionalRecord(frontmatter.file)
+    const resource = optionalString(frontmatter.resource)
+    const type = optionalString(frontmatter.type)?.toLowerCase() ?? ''
+    const looksLikeBook = frontmatter.entity === 'book' || Boolean(file)
+      || ['book', 'publication', 'paper', 'article'].some(name => type.includes(name))
+    if (!looksLikeBook || (!file && !resource)) continue
+    try {
+      referencedAssets.add(parseOkfAsset(file, conceptPath, `${conceptPath}.file`, resource).path)
+      if (frontmatter.cover != null) referencedAssets.add(parseOkfAsset(frontmatter.cover, conceptPath, `${conceptPath}.cover`).path)
+    } catch (error) { referenceErrors.set(conceptPath, error) }
+  }
+
+  for (const candidate of documents) {
+    const { conceptPath } = candidate
+    if (referencedAssets.has(conceptPath)) continue
+    if (!candidate.document) throw candidate.error
+    if (referenceErrors.has(conceptPath)) throw referenceErrors.get(conceptPath)
+    const { frontmatter } = candidate.document
     const type = optionalString(frontmatter.type)
     if (!type) archiveError(`${conceptPath} 缺少 OKF 必需字段 type`)
     const entity = optionalString(frontmatter.entity)?.toLowerCase()
@@ -624,8 +657,15 @@ export async function exportBackupToSink(write: ArchiveChunkSink, onProgress?: (
   let pendingBytes = 0
   let finalChunkSeen = false
   let zipFailure: Error | null = null
+  let emittedBytes = 0
+  const budget = new StoredArchiveBudget()
   const zip = new Zip((error, chunk, final) => {
     if (error) { zipFailure = error; return }
+    emittedBytes += chunk.byteLength
+    if (emittedBytes > ARCHIVE_LIMITS.archiveBytes) {
+      zipFailure = new Error('Archive output exceeds restore capacity. Split the library into smaller archives.')
+      return
+    }
     pending.push(chunk)
     pendingBytes += chunk.byteLength
     if (final) finalChunkSeen = true
@@ -644,12 +684,14 @@ export async function exportBackupToSink(write: ArchiveChunkSink, onProgress?: (
     await write(merged)
   }
   // store 模式: 书籍文件通常已压缩; 超过 4 MB 的输出立即交给 sink, 避免整包驻留。
-  const addEntry = async (path: string, data: Uint8Array) => {
+  const addEntry = async (path: string, data: Uint8Array, role: 'metadata' | 'asset' = 'metadata') => {
+    budget.add(path, data.length, role)
     const entry = new ZipPassThrough(path)
     zip.add(entry)
     entry.push(data, true)
     if (pendingBytes >= 4 * 1024 * 1024) await flush()
   }
+  try {
   const compatibilityManifest: CompatibilityManifest = {
     format: LEGACY_JSON_FORMAT,
     version: books.some(book => book.classification !== undefined) ? 3 : LEGACY_JSON_VERSION,
@@ -665,7 +707,7 @@ export async function exportBackupToSink(write: ArchiveChunkSink, onProgress?: (
     const contentPath = `assets/books/${book.id}/content${contentSuffix(book.format)}`
     const file = await storage.getBookFile(book.id)
     const fileBytes = new Uint8Array(await file.arrayBuffer())
-    await addEntry(contentPath, fileBytes)
+    await addEntry(contentPath, fileBytes, 'asset')
     const content = await describeAsset(contentPath, MEDIA_TYPES[book.format], fileBytes)
 
     let cover: AssetDescriptor | undefined
@@ -679,7 +721,7 @@ export async function exportBackupToSink(write: ArchiveChunkSink, onProgress?: (
         if (!coverBlob.size) throw new Error('Cover file is empty')
         const coverPath = `assets/books/${book.id}/cover.jpg`
         const coverBytes = new Uint8Array(await coverBlob.arrayBuffer())
-        await addEntry(coverPath, coverBytes)
+        await addEntry(coverPath, coverBytes, 'asset')
         cover = await describeAsset(coverPath, coverBlob.type || 'image/jpeg', coverBytes)
       } finally {
         URL.revokeObjectURL(coverUrl)
@@ -826,8 +868,8 @@ export async function exportBackupToSink(write: ArchiveChunkSink, onProgress?: (
       await addEntry(READING_LOG_PATH, strToU8(JSON.stringify({ format: READING_LOG_FORMAT, version: 1, rows })))
     }
   } catch (err) {
-    // 阅读记录是附加数据, 读不出不影响藏书包
-    console.warn('[backup] reading log export failed', err)
+    zip.terminate()
+    throw new Error(`Reading log export failed; archive is incomplete: ${err instanceof Error ? err.message : String(err)}`, { cause: err })
   }
   try {
     const lists = await storage.listBooklists()
@@ -846,12 +888,18 @@ export async function exportBackupToSink(write: ArchiveChunkSink, onProgress?: (
       await addEntry(BOOKLISTS_PATH, strToU8(JSON.stringify({ format: BOOKLISTS_FORMAT, version: 1, lists: exported })))
     }
   } catch (err) {
-    console.warn('[backup] booklists export failed', err)
+    zip.terminate()
+    throw new Error(`Booklists export failed; archive is incomplete: ${err instanceof Error ? err.message : String(err)}`, { cause: err })
   }
   zip.end()
-  await flush()
   if (zipFailure) throw zipFailure
   if (!finalChunkSeen) throw new Error('Archive compression did not finish')
+  if (emittedBytes !== budget.zipBytes) throw new Error('ZIP layout differs from the restore capacity calculation; export was not completed')
+  await flush()
+  } finally {
+    zip.terminate()
+    pending.length = 0
+  }
 }
 
 /** Browser/desktop compatibility: collect streamed chunks into a Blob. */
@@ -862,17 +910,43 @@ export async function exportBackup(onProgress?: (msg: string) => void): Promise<
   return new Blob(chunks as unknown as BlobPart[], { type: 'application/zip' })
 }
 
+export interface RestoreProgress {
+  books: number
+  annotations: number
+  sources: number
+  booklists: number
+  booklistItems: number
+  wanted: number
+  readingLog: number
+}
+
+/** Confirmed operations only; the failed storage call may itself have partially committed. */
+export class ArchiveRestoreError extends Error {
+  readonly progress: RestoreProgress
+  readonly operation: string
+  constructor(progress: RestoreProgress, operation: string, cause: unknown) {
+    super(`Partial restore: ${JSON.stringify(progress)}; failed at ${operation}. The failed operation may have written data; no rollback was performed. ${cause instanceof Error ? cause.message : String(cause)}`, { cause })
+    this.name = 'ArchiveRestoreError'
+    this.progress = progress
+    this.operation = operation
+  }
+}
+
 export async function importBackup(
   file: File,
   onProgress?: (msg: string) => void,
-): Promise<{ books: number; annotations: number; sources: number }> {
-  const storage = await getStorage()
-  const entries = unzipSync(new Uint8Array(await file.arrayBuffer()))
-  const manifest = entries['index.md']
-    ? parseOkfBundle(entries)
-    : entries['manifest.json']
-      ? parseManifest(entries['manifest.json'])
-      : archiveError('缺少 OKF index.md 或旧版 manifest.json')
+  signal?: AbortSignal,
+): Promise<RestoreProgress> {
+  let manifest: RestorableManifest | undefined
+  const entries = await readBoundedArchive(file, signal, metadata => {
+    manifest = metadata['index.md']
+      ? parseOkfBundle(metadata)
+      : metadata['manifest.json']
+        ? parseManifest(metadata['manifest.json'])
+        : archiveError('缺少 OKF index.md 或旧版 manifest.json')
+    return new Set(manifest.books.flatMap(book => [book.content.path, ...(book.cover ? [book.cover.path] : [])]))
+  })
+  if (!manifest) archiveError('缺少可恢复的藏书清单')
 
   // 在写入任何数据前验证所有载荷，防止损坏的包只恢复一半。
   onProgress?.('校验藏书包…')
@@ -885,23 +959,51 @@ export async function importBackup(
     payloads.push({ content, cover })
   }
 
+  const logRows = entries[READING_LOG_PATH] ? parseReadingLog(entries[READING_LOG_PATH]) : undefined
+  const booklists = entries[BOOKLISTS_PATH] ? parseBooklists(entries[BOOKLISTS_PATH]) : undefined
+  const archiveIds = new Set<string>()
+  for (const book of manifest.books) {
+    if (archiveIds.has(book.meta.id)) archiveError(`duplicate book id: ${book.meta.id}`)
+    archiveIds.add(book.meta.id)
+  }
+  const storage = await getStorage()
   const existing = await storage.listBooks()
-  const existingByKey = new Map(existing.map(book => [
-    `${book.title}::${book.fileName}`,
-    book.id,
-  ]))
+  const existingByKey = new Map<string, string[]>()
+  for (const book of existing) {
+    const key = JSON.stringify([book.title, book.fileName, book.format])
+    const ids = existingByKey.get(key) ?? []
+    ids.push(book.id)
+    existingByKey.set(key, ids)
+  }
   const idMap = new Map<string, string>()
-  let bookCount = 0
-
+  const progress: RestoreProgress = { books: 0, annotations: 0, sources: 0, booklists: 0, booklistItems: 0, wanted: 0, readingLog: 0 }
+  let operation = 'book content comparison'
+  try {
   for (const [index, book] of manifest.books.entries()) {
     onProgress?.(`恢复 ${book.meta.title} (${index + 1}/${manifest.books.length})`)
-    const duplicateId = existingByKey.get(`${book.meta.title}::${book.meta.fileName}`)
+    checkArchiveAbort(signal)
+    operation = `compare content ${index + 1}`
+    const payload = payloads[index]
+    const key = JSON.stringify([book.meta.title, book.meta.fileName, book.meta.format])
+    let duplicateId: string | undefined
+    for (const candidate of existingByKey.get(key) ?? []) {
+      const blob = await storage.getBookFile(candidate)
+      if (!blob) throw new Error(`Cannot verify existing content: ${candidate}`)
+      if (blob.size > ARCHIVE_LIMITS.entryBytes) throw new Error('Existing book exceeds 64 MiB comparison budget; restore a smaller archive separately')
+      if (blob.size !== payload.content.length) continue
+      // Compare bounded slices, not names, cached hashes, or metadata supplied by the archive.
+      let equal = true
+      for (let offset = 0; offset < blob.size; offset += 65536) {
+        checkArchiveAbort(signal)
+        const bytes = new Uint8Array(await blob.slice(offset, offset + 65536).arrayBuffer())
+        if (bytes.some((byte, i) => byte !== payload.content[offset + i])) { equal = false; break }
+      }
+      if (equal) { duplicateId = candidate; break }
+    }
     if (duplicateId) {
       idMap.set(book.meta.id, duplicateId)
       continue
     }
-
-    const payload = payloads[index]
     const blob = new Blob([new Uint8Array(payload.content)], {
       type: book.content.mediaType || MEDIA_TYPES[book.meta.format],
     })
@@ -911,20 +1013,24 @@ export async function importBackup(
       })
       : undefined
     const { id: _oldId, hasCover: _hasCover, ...meta } = book.meta
+    checkArchiveAbort(signal)
+    operation = `add book ${index + 1}`
     const newId = await storage.addBook(meta, blob, cover)
+    progress.books++
     idMap.set(book.meta.id, newId)
-    existingByKey.set(`${book.meta.title}::${book.meta.fileName}`, newId)
-    bookCount++
+    const ids = existingByKey.get(key) ?? []
+    ids.push(newId)
+    existingByKey.set(key, ids)
   }
 
-  // 已存在的书也可补齐缺失标注；用内容指纹保证重复导入幂等。
+  // Only byte-verified matches may receive annotations from another archive book.
   const annotationKeys = new Map<string, Set<string>>()
-  let annotationCount = 0
   for (const annotation of manifest.annotations) {
     const newBookId = idMap.get(annotation.bookId)
     if (!newBookId) continue
     let known = annotationKeys.get(newBookId)
     if (!known) {
+      operation = 'list existing annotations'
       known = new Set((await storage.listAnnotations(newBookId)).map(existingAnnotation =>
         annotationKey(existingAnnotation)))
       annotationKeys.set(newBookId, known)
@@ -932,53 +1038,80 @@ export async function importBackup(
     const { id: _id, bookId: _bookId, ...rest } = annotation
     const key = annotationKey(rest)
     if (known.has(key)) continue
+    checkArchiveAbort(signal)
+    operation = 'add annotation'
     await storage.addAnnotation({ ...rest, bookId: newBookId })
+    progress.annotations++
     known.add(key)
-    annotationCount++
   }
 
+  operation = 'list existing catalog sources'
   const existingSources = new Set((await storage.listSources()).map(source => source.url))
-  let sourceCount = 0
   for (const source of manifest.sources) {
     if (source.builtin || existingSources.has(source.url)) continue
     const { id: _id, ...rest } = source
+    checkArchiveAbort(signal)
+    operation = 'add catalog source'
     await storage.addSource({ ...rest, kind: rest.kind ?? 'opds' })
+    progress.sources++
     existingSources.add(source.url)
-    sourceCount++
   }
 
-  const listBytes = entries[BOOKLISTS_PATH]
-  if (listBytes) {
-    try {
-      await importBooklists(listBytes, idMap)
-    } catch (err) {
-      console.warn('[backup] booklists import failed', err)
-    }
+  if (booklists) {
+    operation = 'restore booklists'
+    await importBooklists(booklists, idMap, progress, signal)
   }
-
-  const logBytes = entries[READING_LOG_PATH]
-  if (logBytes) {
-    try {
-      await importReadingLog(logBytes, idMap)
-    } catch (err) {
-      console.warn('[backup] reading log import failed', err)
-    }
+  if (logRows) {
+    checkArchiveAbort(signal)
+    operation = 'restore reading log'
+    progress.readingLog = await importReadingLog(logRows, idMap)
   }
-
-  return { books: bookCount, annotations: annotationCount, sources: sourceCount }
+  return progress
+  } catch (cause) {
+    throw new ArchiveRestoreError({ ...progress }, operation, cause)
+  }
 }
 
 /**
  * 导入阅读记录: 本机记录 (`id:` 行) 的 bookId 换成恢复后的新 id, 再按 key 取较大值合并,
  * 重复导入幂等. 书不在包里 (导出前已删) 的行原样保留, 只显示书名快照.
  */
-async function importReadingLog(bytes: Uint8Array, idMap: Map<string, string>): Promise<number> {
-  const parsed: unknown = JSON.parse(strFromU8(bytes))
-  const rawRows = isRecord(parsed) && Array.isArray(parsed.rows) ? parsed.rows : []
-  const byKey = new Map<string, ReadingLogRow>()
-  for (const raw of rawRows) {
+function parseOptionalJson(bytes: Uint8Array, path: string): Record<string, unknown> {
+  let parsed: unknown
+  try { parsed = JSON.parse(strFromU8(bytes)) }
+  catch { archiveError(`${path} is not valid JSON`) }
+  if (!isRecord(parsed)) archiveError(`${path} must be an object`)
+  return parsed
+}
+
+function parseReadingLog(bytes: Uint8Array): ReadingLogRow[] {
+  const parsed = parseOptionalJson(bytes, READING_LOG_PATH)
+  if (!isRecord(parsed) || parsed.format !== READING_LOG_FORMAT || parsed.version !== 1 || !Array.isArray(parsed.rows)) {
+    archiveError('reading-log.json format/version/rows invalid')
+  }
+  const keys = new Set<string>()
+  return parsed.rows.map((raw, index) => {
     const row = normalizeRow(raw)
-    if (!row) continue
+    if (!row || !isRecord(raw) || typeof raw.seconds !== 'number' || !Number.isFinite(raw.seconds)
+      || (raw.updatedAt !== undefined && (typeof raw.updatedAt !== 'number' || !Number.isFinite(raw.updatedAt)))
+      || (raw.title !== undefined && typeof raw.title !== 'string')
+      || (raw.kind !== undefined && raw.kind !== 'book' && raw.kind !== 'paper')
+      || (raw.device !== undefined && raw.device !== row.device)
+      || (raw.day !== undefined && raw.day !== row.day)
+      || (raw.bookId !== undefined && raw.bookId !== row.bookId)
+      || (raw.hash !== undefined && raw.hash !== row.hash)
+      || !Number.isFinite(Date.parse(`${row.day}T00:00:00Z`))
+      || new Date(`${row.day}T00:00:00Z`).toISOString().slice(0, 10) !== row.day
+      || keys.has(row.key)) archiveError(`reading-log.json row ${index} invalid or duplicate`)
+    keys.add(row.key)
+    return row
+  })
+}
+
+async function importReadingLog(rows: ReadingLogRow[], idMap: Map<string, string>): Promise<number> {
+  const byKey = new Map<string, ReadingLogRow>()
+  for (const original of rows) {
+    const row = { ...original }
     const newId = row.bookId ? idMap.get(row.bookId) : undefined
     if (newId) {
       row.bookId = newId
@@ -995,14 +1128,23 @@ async function importReadingLog(bytes: Uint8Array, idMap: Map<string, string>): 
  * 导入书单: 同 id 的书单已存在则并入, 否则同名书单并入, 否则按原 id 新建; 条目的书 id 换成恢复后的新 id
  * (包里没有的书跳过); 待找条目按 id 去重, 重复导入幂等.
  */
-async function importBooklists(bytes: Uint8Array, idMap: Map<string, string>): Promise<number> {
-  const parsed: unknown = JSON.parse(strFromU8(bytes))
-  if (!isRecord(parsed) || parsed.format !== BOOKLISTS_FORMAT || !Array.isArray(parsed.lists)) return 0
+function parseBooklists(bytes: Uint8Array): Record<string, unknown>[] {
+  const parsed = parseOptionalJson(bytes, BOOKLISTS_PATH)
+  if (!isRecord(parsed) || parsed.format !== BOOKLISTS_FORMAT || parsed.version !== 1 || !Array.isArray(parsed.lists)) archiveError('booklists.json format/version/lists invalid')
+  return parsed.lists.map((raw, index) => {
+    if (!isRecord(raw) || !optionalString(raw.name)?.trim()
+      || !Array.isArray(raw.items) || !raw.items.every(item => isRecord(item) && optionalString(item.bookId))
+      || !Array.isArray(raw.wanted) || !raw.wanted.every(item => isRecord(item) && optionalString(item.title)?.trim())) archiveError(`booklists.json list ${index} invalid`)
+    return raw
+  })
+}
+
+async function importBooklists(lists: Record<string, unknown>[], idMap: Map<string, string>, progress: RestoreProgress, signal?: AbortSignal): Promise<void> {
   const storage = await getStorage()
   const existing = await storage.listBooklists()
   const wantedIds = new Set((await storage.listBooklistWanted()).map(entry => entry.id))
-  let count = 0
-  for (const raw of parsed.lists) {
+  for (const raw of lists) {
+    checkArchiveAbort(signal)
     if (!isRecord(raw)) continue
     const name = optionalString(raw.name)?.trim()
     const sourceId = optionalString(raw.id)
@@ -1016,12 +1158,16 @@ async function importBooklists(bytes: Uint8Array, idMap: Map<string, string>): P
         createdAt: optionalNumber(raw.createdAt),
       })
       existing.push({ id: listId, name, createdAt: optionalNumber(raw.createdAt) ?? Date.now(), updatedAt: Date.now() })
-      count++
+      progress.booklists++
     }
     const items = Array.isArray(raw.items) ? raw.items.filter(isRecord) : []
     for (const item of items) {
       const bookId = idMap.get(String(item.bookId ?? ''))
-      if (bookId) await storage.addBooksToBooklist(listId, [bookId], { addedAt: optionalNumber(item.addedAt) })
+      if (bookId) {
+        checkArchiveAbort(signal)
+        await storage.addBooksToBooklist(listId, [bookId], { addedAt: optionalNumber(item.addedAt) })
+        progress.booklistItems++
+      }
     }
     const wanted: BooklistWantedRec[] = []
     for (const entry of Array.isArray(raw.wanted) ? raw.wanted.filter(isRecord) : []) {
@@ -1045,7 +1191,8 @@ async function importBooklists(bytes: Uint8Array, idMap: Map<string, string>): P
       }
       wanted.push(rec)
     }
+    checkArchiveAbort(signal)
     await storage.putBooklistWanted(wanted)
+    progress.wanted += wanted.length
   }
-  return count
 }

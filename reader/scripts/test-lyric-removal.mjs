@@ -5,7 +5,7 @@ import { test } from 'node:test'
 import vm from 'node:vm'
 import { normalizeRetiredLyricSettings } from '../src/services/readingModes/retiredSettings.ts'
 import { engagePreset, releasePreset } from '../src/services/readingModes/presets.ts'
-import * as levels from '../src/services/dianjing/level.ts'
+import * as levels from '../src/services/PagewiseCompanion/level.ts'
 import { DIM_MAX } from '../src/services/readingModes/eyeCare.ts'
 
 const require = createRequire(import.meta.url)
@@ -109,7 +109,7 @@ test('actual settings load applies migration before merging defaults using synth
     pinia: { defineStore: (_id, options) => options },
     vue: { watch: () => { throw new Error('Persistence must not run') } },
     '../storage/types.ts': { isTauri: () => false },
-    '../services/dianjing/level.ts': levels,
+    '../services/PagewiseCompanion/level.ts': levels,
     '../services/readingModes/eyeCare.ts': { DIM_MAX },
     '../services/readingModes/retiredSettings.ts': { normalizeRetiredLyricSettings },
     '../services/aiProviders.ts': await import('../src/services/aiProviders.ts'),

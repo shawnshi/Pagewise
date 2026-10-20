@@ -6,6 +6,8 @@
  * 独立于 foliate 内置 search (其不支持正则与多关键词)。
  */
 
+import { onyxNativeAccelerator } from './onyxNativeAccelerator.ts'
+
 export interface SearchOptions {
   regex: boolean
   caseSensitive: boolean
@@ -187,6 +189,7 @@ export async function* searchBook(
   query: string,
   opts: SearchOptions,
   limit = 500,
+  bookRelPath?: string,
 ): AsyncGenerator<SearchEvent> {
   const book = view.book
   const sections = book?.sections ?? []
@@ -194,10 +197,33 @@ export async function* searchBook(
   const chapters = sectionChapterMap(book)
   let total = 0
 
+  let candidateHrefs: Set<string> | null = null
+  const relPath = bookRelPath || (typeof book?.nativeRelPath === 'string' ? book.nativeRelPath : '')
+  if (relPath && !opts.regex && !others.length && onyxNativeAccelerator.hasNativeEpubSearch()) {
+    const token = query.trim()
+    if (token) {
+      const cap = Math.max(2000, limit * 4)
+      const nativePrefilter = onyxNativeAccelerator.searchNativeEpubText(relPath, token, cap)
+      if (nativePrefilter) {
+        const totalNativeHits = nativePrefilter.reduce((acc, item) => acc + item.count, 0)
+        if (totalNativeHits < cap) {
+          candidateHrefs = new Set(nativePrefilter.map(item => item.href))
+        }
+      }
+    }
+  }
+
   for (let index = 0; index < sections.length; index++) {
     const hits: SearchHit[] = []
     try {
       if (!sections[index]?.createDocument) continue
+      if (candidateHrefs) {
+        const secId = typeof sections[index]?.id === 'string' ? sections[index].id : ''
+        if (secId && !Array.from(candidateHrefs).some(href => secId.endsWith(href) || href.endsWith(secId))) {
+          yield { progress: (index + 1) / sections.length, hits: [] }
+          continue
+        }
+      }
       const doc: Document = await sections[index].createDocument()
       const section = extractSection(doc)
       if (section.text) {

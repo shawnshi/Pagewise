@@ -78,13 +78,17 @@ export function prepareAndroidProject(base = root, { replace = renameSync, resto
   const kotlin = template.toString('utf8')
   if (!/^package io\.pagewise\.reader\s*\r?\n/.test(kotlin) || !/class MainActivity\s*:\s*TauriActivity\(\)/.test(kotlin) || /LightReadUpdater|UpdaterBridge|REQUEST_INSTALL_PACKAGES/.test(kotlin)) throw new Error('Invalid MainActivity template')
   const nativeFolderTemplates = readdirSync(join(base, 'src-tauri/android')).filter(name => name !== 'MainActivity.kt' && name.endsWith('.kt')).map(name => {
-    if (!['MonitoredFolderPlugin.kt', 'ExportPlugin.kt', 'SystemTtsPlugin.kt', 'NativeSpeechService.kt'].includes(name)) throw new Error(`Unsupported Android template: ${name}`)
+    if (!['MonitoredFolderPlugin.kt', 'ExportPlugin.kt', 'SystemTtsPlugin.kt', 'NativeSpeechService.kt', 'ReaderWindowState.kt', 'OnyxSdkBridge.kt'].includes(name)) throw new Error(`Unsupported Android template: ${name}`)
     const data = regularFile(join(base, 'src-tauri/android', name))
     const source = data.toString('utf8')
     if (name === 'MonitoredFolderPlugin.kt') {
       if (!/^package io\.pagewise\.reader\s*\r?\n/.test(source) || !/@TauriPlugin\b/.test(source) || !/class MonitoredFolderPlugin\b/.test(source)) throw new Error('Invalid monitored-folder template')
     } else if (name === 'ExportPlugin.kt') {
       if (!/^package io\.pagewise\.reader\s*\r?\n/.test(source) || !/@TauriPlugin\b/.test(source) || !/class ExportPlugin\b/.test(source)) throw new Error('Invalid export template')
+    } else if (name === 'ReaderWindowState.kt') {
+      if (!/^package io\.pagewise\.reader\s*\r?\n/.test(source) || !/class ReaderWindowState\b/.test(source)) throw new Error('Invalid reader window template')
+    } else if (name === 'OnyxSdkBridge.kt') {
+      if (!/^package io\.pagewise\.reader\s*\r?\n/.test(source) || !/class OnyxSdkBridge\b/.test(source)) throw new Error('Invalid Onyx SDK bridge template')
     } else if (name === 'NativeSpeechService.kt') {
       if (!/^package io\.pagewise\.reader\s*\r?\n/.test(source) || !/class SystemTtsService\b/.test(source)) throw new Error('Invalid speech service template')
     } else if (!/^package io\.pagewise\.reader\s*\r?\n/.test(source) || !/@TauriPlugin\b/.test(source) || !/class SystemTtsPlugin\b/.test(source)) {
@@ -92,6 +96,7 @@ export function prepareAndroidProject(base = root, { replace = renameSync, resto
     }
     return { path: join(dirname(activity), name), data }
   })
+  if (/ReaderWindowState\s*\(/.test(kotlin) && !nativeFolderTemplates.some(template => template.path.endsWith('ReaderWindowState.kt'))) throw new Error('Missing reader window template')
   const currentStrings = regularFile(strings).toString('utf8')
   const currentManifest = regularFile(manifest).toString('utf8')
   validateXml(currentStrings, 'resources')

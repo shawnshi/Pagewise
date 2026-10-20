@@ -18,7 +18,7 @@ export interface LibraryQueryClassification {
 }
 
 export type LibraryQueryBook = Readonly<Pick<BookMeta,
-  'id' | 'title' | 'author' | 'format' | 'language' | 'addedAt' | 'lastReadAt' | 'progress' | 'fileAvailability'
+  'id' | 'title' | 'author' | 'format' | 'language' | 'addedAt' | 'lastReadAt' | 'progress' | 'fileAvailability' | 'publicationDate'
 >> & {
   readonly tags: readonly string[]
   readonly pinnedAt?: number
@@ -42,7 +42,7 @@ export interface LibraryQueryOptions {
   formats?: readonly string[]
   languages?: readonly string[]
   statuses?: readonly ReadingStatus[]
-  sortBy?: 'lastRead' | 'addedAt' | 'title' | 'author' | 'progress'
+  sortBy?: 'lastRead' | 'addedAt' | 'publicationDate' | 'title' | 'author' | 'progress'
   direction?: 'asc' | 'desc'
   /** Library policy: newest pins precede every unpinned book, in either direction. */
   pinnedFirst?: boolean
@@ -65,12 +65,47 @@ const positiveInteger = (value: number | undefined, fallback: number) =>
   value !== undefined && Number.isFinite(value) ? Math.max(1, Math.min(Number.MAX_SAFE_INTEGER, Math.trunc(value))) : fallback
 
 const zhCollator = new Intl.Collator('zh')
+export const UNCLASSIFIED_CATEGORY = '__unclassified__'
+
+function publicationOrder(raw: string | undefined): number | undefined {
+  if (typeof raw !== 'string') return undefined
+  const value = raw.trim()
+  const match = /^(\d{4})(?:-(\d{2})(?:-(\d{2}))?)?(T.*)?$/.exec(value)
+  if (!match) return undefined
+  const year = Number(match[1]), month = match[2] ? Number(match[2]) : 0, day = match[3] ? Number(match[3]) : 0
+  if (!year || (match[2] && (month < 1 || month > 12))) return undefined
+  const leap = year % 4 === 0 && (year % 100 !== 0 || year % 400 === 0)
+  const days = [31, leap ? 29 : 28, 31, 30, 31, 30, 31, 31, 30, 31, 30, 31]
+  if (match[3] && (day < 1 || day > days[month - 1]!)) return undefined
+  if (match[4]) {
+    if (!match[3] || !/^T\d{2}:\d{2}(?::\d{2}(?:\.\d+)?)?(?:Z|[+-]\d{2}:\d{2})?$/.test(match[4])) return undefined
+    // Offset-free metadata must not reorder when the device timezone changes.
+    const timestamp = Date.parse(/(?:Z|[+-]\d{2}:\d{2})$/.test(value) ? value : value + 'Z')
+    if (!Number.isFinite(timestamp)) return undefined
+    const date = new Date(timestamp)
+    const fraction = (date.getUTCHours() * 3600000 + date.getUTCMinutes() * 60000 + date.getUTCSeconds() * 1000 + date.getUTCMilliseconds()) / 86400000
+    return date.getUTCFullYear() * 10000 + (date.getUTCMonth() + 1) * 100 + date.getUTCDate() + fraction
+  }
+  // Missing month/day stay unknown, rather than inventing January or day one.
+  return year * 10000 + month * 100 + day
+}
+
+export function countLibraryCategories(books: readonly LibraryQueryBook[]): Map<string, number> {
+  const counts = new Map<string, number>()
+  for (const book of books) {
+    const category = getCachedBookNorm(book).normalizedCategory || UNCLASSIFIED_CATEGORY
+    counts.set(category, (counts.get(category) ?? 0) + 1)
+  }
+  return counts
+}
 
 export interface CachedBookNorm {
   titleRaw: string
   normalizedTitle: string
   authorRaw: string
   normalizedAuthor: string
+  publicationDateRaw?: string
+  publicationOrder?: number
   rawTags: readonly string[]
   normalizedTags: readonly string[]
   searchTokens: readonly string[]
@@ -124,6 +159,8 @@ export function getCachedBookNorm(book: LibraryQueryBook): CachedBookNorm {
       normalizedTitle,
       authorRaw: book.author,
       normalizedAuthor,
+      publicationDateRaw: book.publicationDate,
+      publicationOrder: publicationOrder(book.publicationDate),
       rawTags,
       normalizedTags,
       searchTokens: [normalizedTitle, normalizedAuthor, ...normalizedTags],
@@ -163,6 +200,11 @@ export function getCachedBookNorm(book: LibraryQueryBook): CachedBookNorm {
     cached.authorRaw = book.author
     cached.normalizedAuthor = normalize(book.author || '')
     searchTokensDirty = true
+  }
+
+  if (cached.publicationDateRaw !== book.publicationDate) {
+    cached.publicationDateRaw = book.publicationDate
+    cached.publicationOrder = publicationOrder(book.publicationDate)
   }
 
   if (!areTagsEqual(cached.rawTags, book.tags)) {
@@ -236,7 +278,7 @@ export interface PreparedLibraryQuery {
   readonly workCountry: string
   readonly workPeriod: string
   readonly availability?: AvailabilityFilter
-  readonly sortBy: 'lastRead' | 'addedAt' | 'title' | 'author' | 'progress'
+  readonly sortBy: NonNullable<LibraryQueryOptions['sortBy']>
   readonly direction: 'asc' | 'desc'
   readonly sign: 1 | -1
   readonly pinnedFirst: boolean
@@ -303,11 +345,15 @@ export function compareLibraryBooks<T extends LibraryQueryBook>(
     const normA = getCachedBookNorm(a)[sortBy === 'title' ? 'normalizedTitle' : 'normalizedAuthor']
     const normB = getCachedBookNorm(b)[sortBy === 'title' ? 'normalizedTitle' : 'normalizedAuthor']
     order = zhCollator.compare(normA, normB)
+  } else if (sortBy === 'publicationDate' || sortBy === 'lastRead') {
+    const valueA = sortBy === 'publicationDate' ? getCachedBookNorm(a).publicationOrder : finite(a.lastReadAt) > 0 ? a.lastReadAt : undefined
+    const valueB = sortBy === 'publicationDate' ? getCachedBookNorm(b).publicationOrder : finite(b.lastReadAt) > 0 ? b.lastReadAt : undefined
+    if (valueA === undefined || valueB === undefined) {
+      return valueA === valueB ? compare(a.id, b.id) : valueA === undefined ? 1 : -1
+    }
+    order = valueA - valueB
   } else {
-    const key = sortBy === 'lastRead' ? 'lastReadAt' : sortBy
-    order = sortBy === 'lastRead'
-      ? finite(a.lastReadAt ?? a.addedAt) - finite(b.lastReadAt ?? b.addedAt)
-      : finite(a[key]) - finite(b[key])
+    order = finite(a[sortBy]) - finite(b[sortBy])
   }
   return sign * order || compare(a.id, b.id)
 }
@@ -374,7 +420,7 @@ export function filterLibraryBooks<T extends LibraryQueryBook>(
       }
     }
 
-    if (options.category && norm.normalizedCategory !== category) continue
+    if (options.category && (category === UNCLASSIFIED_CATEGORY ? !!norm.normalizedCategory : norm.normalizedCategory !== category)) continue
 
     if (prep.classificationStatus && prep.classificationStatus !== 'all') {
       const hasClassification = Boolean(book.classification)

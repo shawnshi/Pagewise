@@ -3,13 +3,13 @@ import assert from 'node:assert/strict'
 import { readFileSync } from 'node:fs'
 import vm from 'node:vm'
 import ts from 'typescript'
-import { chunkSection, resolveSentence } from '../src/services/dianjing/chunker.ts'
-import * as prompt from '../src/services/dianjing/prompt.ts'
-import * as protocol from '../src/services/dianjing/protocol.ts'
+import { chunkSection, resolveSentence } from '../src/services/PagewiseCompanion/chunker.ts'
+import * as prompt from '../src/services/PagewiseCompanion/prompt.ts'
+import * as protocol from '../src/services/PagewiseCompanion/protocol.ts'
 import worker from '../relay/src/index.js'
 
 function client(fetchRemote) {
-  const code = ts.transpileModule(readFileSync(new URL('../src/services/dianjing/client.ts', import.meta.url), 'utf8'), {
+  const code = ts.transpileModule(readFileSync(new URL('../src/services/PagewiseCompanion/client.ts', import.meta.url), 'utf8'), {
     compilerOptions: { module: ts.ModuleKind.CommonJS, target: ts.ScriptTarget.ES2022 },
   }).outputText
   const exports = {}
@@ -60,7 +60,7 @@ test('RA-SOURCE-01: long-paragraph numbering is budgeted and an unfit sentence f
   assert.throws(() => prompt.planMarkInput('[1.1] ' + 'X'.repeat(4000)), /long|3000|limit/i)
   for (const kind of ['own', 'builtin']) {
     const calls = [], runtime = client(async (...args) => { calls.push(args); throw Error('Network forbidden') })
-    await assert.rejects(runtime.streamDianjing({ ...req('mark'), text: '[1.1] ' + 'X'.repeat(4000) },
+    await assert.rejects(runtime.streamPagewiseCompanion({ ...req('mark'), text: '[1.1] ' + 'X'.repeat(4000) },
       { kind, baseUrl: 'https://synthetic.invalid/v1', model: 'synthetic' }, () => {}), /long|3000|limit/i)
     assert.equal(calls.length, 0)
   }
@@ -75,7 +75,7 @@ test('RA-RELAY-01: old metadata or mismatched response revision never accepts ol
       return new Response(mode === 'summary' ? '{"t":"sum","text":"Old summary"}\n' : rows,
         { headers: { 'content-type': 'application/x-ndjson', ...(variant === 'wrong-header' ? { 'x-dj-prompt-version': 'dj2' } : {}) } })
     })
-    await assert.rejects(runtime.streamDianjing(req(mode), { kind: 'builtin', baseUrl: 'https://synthetic.invalid/v1' }, raw => accepted.push(raw)), e => e.code === 'version')
+    await assert.rejects(runtime.streamPagewiseCompanion(req(mode), { kind: 'builtin', baseUrl: 'https://synthetic.invalid/v1' }, raw => accepted.push(raw)), e => e.code === 'version')
     assert.equal(accepted.length, 0)
     if (variant === 'old-metadata') assert.deepEqual(calls.map(c => c.method), ['GET'], 'No billed/document POST to an unverified relay')
   }
@@ -91,7 +91,7 @@ test('RA-RELAY-01: actual worker advertises its effective version and attested c
     if (url.endsWith('/models')) return new Response(JSON.stringify({ dianjingPromptVersion: prompt.PROMPT_VERSION }), { headers: { 'content-type': 'application/json' } })
     return new Response(rows, { headers: { 'content-type': 'application/x-ndjson', 'x-dj-prompt-version': prompt.PROMPT_VERSION, 'x-dj-model': 'synthetic' } })
   })
-  const result = await runtime.streamDianjing(req('mark'), { kind: 'builtin', baseUrl: 'https://synthetic.invalid/v1' }, raw => accepted.push(raw))
+  const result = await runtime.streamPagewiseCompanion(req('mark'), { kind: 'builtin', baseUrl: 'https://synthetic.invalid/v1' }, raw => accepted.push(raw))
   assert.equal(result.good, 2); assert.equal(result.bad, 0); assert.equal(accepted.length, 2)
   assert.deepEqual(calls, ['GET', 'POST'])
 })

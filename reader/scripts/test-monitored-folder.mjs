@@ -241,6 +241,45 @@ test('real Tauri adapter uses only narrow commands, decodes bytes and cleans nat
   }
 })
 
+test('real SAF path adapter reads through plugin-fs and always cleans up without hiding failures', async () => {
+  const previous = globalThis.window
+  const path = 'cache/pagewise-read/synthetic-1.bin'
+  let mode = 'ok'
+  const calls = []
+  globalThis.window = { __TAURI_INTERNALS__: { async invoke(command, args) {
+    calls.push({ command, args })
+    if (command === 'read_monitored_file') return { path: mode === 'bad-path' ? 'cache/../private.bin' : path }
+    if (command === 'plugin:fs|read_file') {
+      if (mode === 'read-failure' || mode === 'read-and-cleanup-failure') throw { code: 'permission_denied' }
+      return mode === 'oversize' ? new ArrayBuffer(64 * 1024 * 1024 + 1) : new Uint8Array([80, 75, 3, 4]).buffer
+    }
+    if (command === 'plugin:fs|remove') {
+      if (mode === 'cleanup-failure' || mode === 'read-and-cleanup-failure') throw { code: 'io_error' }
+      return
+    }
+    throw new Error('unexpected native command ' + command)
+  } } }
+  try {
+    const { BaseDirectory } = await import('@tauri-apps/plugin-fs')
+    for (mode of ['ok', 'read-failure', 'oversize', 'cleanup-failure', 'read-and-cleanup-failure', 'bad-path']) {
+      calls.length = 0
+      if (mode === 'read-failure' || mode === 'read-and-cleanup-failure') {
+        await assert.rejects(readMonitoredFile(folder.id, book.documentId), { code: 'permission_denied' })
+      } else if (mode === 'oversize' || mode === 'bad-path') {
+        await assert.rejects(readMonitoredFile(folder.id, book.documentId), { code: 'io_error' })
+      } else {
+        assert.deepEqual(await readMonitoredFile(folder.id, book.documentId), new Uint8Array([80, 75, 3, 4]))
+      }
+      assert.deepEqual(calls.map(c => c.command), mode === 'bad-path'
+        ? ['read_monitored_file'] : ['read_monitored_file', 'plugin:fs|read_file', 'plugin:fs|remove'])
+      for (const call of calls.slice(1)) assert.deepEqual(call.args, { path, options: { baseDir: BaseDirectory.AppData } })
+    }
+  } finally {
+    if (previous === undefined) delete globalThis.window
+    else globalThis.window = previous
+  }
+})
+
 test('browser preview reports capability absence, not fake Android persistence', async () => {
   assert.equal(monitoredFolderCapabilities().supported, false)
   assert.equal(monitoredFolderCapabilities().persistence, 'none')

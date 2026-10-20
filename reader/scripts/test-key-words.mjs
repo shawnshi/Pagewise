@@ -1,4 +1,4 @@
-// 点睛阅读「重点词」离线引擎 (src/services/readingModes/keyWords.ts) 与按书选词 (keyWordsBook.ts)。
+// 伴读「重点词」离线引擎 (src/services/readingModes/keyWords.ts) 与按书选词 (keyWordsBook.ts)。
 // 运行: npm run test:key-words
 import { test } from 'node:test'
 import assert from 'node:assert/strict'

@@ -6,7 +6,7 @@ import type { TypographyApplyPayload } from '../services/readerTypography.ts'
 import { DIM_MAX } from '../services/readingModes/eyeCare.ts'
 import { isTauri } from '../storage/types.ts'
 import { normalizeRetiredLyricSettings } from '../services/readingModes/retiredSettings.ts'
-import { BASIC_MARK_DEFAULT, migrateLevel, normalizeLevel, savedBasicMark, type BasicMark, type DjLevel } from '../services/dianjing/level.ts'
+import { BASIC_MARK_DEFAULT, migrateLevel, normalizeLevel, savedBasicMark, type BasicMark, type DjLevel } from '../services/PagewiseCompanion/level.ts'
 
 export type TypographyDisplayMode = 'optimized' | 'publisher' | 'repair'
 export type TypographyScope = 'book' | 'language'
@@ -344,7 +344,7 @@ export interface PresetRecordPrefs {
 /** 阅读模式 (docs/research/reading-modes-landscape.md §5) */
 export interface ReadingModePrefs {
   typewriter: TypewriterPrefs
-  /** 点睛阅读基础版 (按词分色; 默认关): 西文词首强调 / 中文分词交替着色。enabled 只在 dianjing.level 为 basic 时生效 */
+  /** 伴读基础版 (按词分色; 默认关): 西文词首强调 / 中文分词交替着色。enabled 只在 dianjing.level 为 basic 时生效 */
   wordGuide: {
     enabled: boolean
     style: 'auto' | 'alternate' | 'fixation'
@@ -361,8 +361,8 @@ export interface ReadingModePrefs {
   }
   /** 大字: 预设开关; custom 为在大字模式里手动调过的值 (下次开启沿用) */
   largeText: { enabled: boolean; size: 'large' | 'xlarge'; custom: Record<string, unknown> }
-  /** 墨水屏: 纯黑白高对比、字重 +100、无动画; suggestDismissed 为「识别到墨水屏设备」提示已处理 */
-  eink: { enabled: boolean; suggestDismissed: boolean }
+  /** 墨水屏: 纯黑白高对比、字重 +100、无动画、GC 全刷消残影页数间隔 (0 为仅系统控制); suggestDismissed 为「识别到墨水屏设备」提示已处理 */
+  eink: { enabled: boolean; suggestDismissed: boolean; gcIntervalPages: number }
   /** 沉浸: 隐藏页眉页脚文字 / 工具栏只在轻点时出现; hideFooter 连页码也隐藏 */
   immersive: { enabled: boolean; hideFooter: boolean }
   /** 护眼: 暖色主题 + 应用内调暗 (0–60%) + 休息提醒 (分钟) */
@@ -382,11 +382,11 @@ export interface CustomFontRec {
 }
 
 /**
- * 点睛阅读 (docs/dianjing-reading.md §4.1, services/dianjing/level.ts): 两个版本——
+ * 伴读 (docs/dianjing-reading.md §4.1, services/PagewiseCompanion/level.ts): 两个版本——
  * 基础版 (按词分色, 不联网; 开关即 readingMode.wordGuide.enabled) 与智能版 (AI, 下面这些字段; 首次开启需同意)。
  */
-export interface DianjingPrefs {
-  /** 选的版本 (默认基础版); 「点睛阅读开着」= 这个版本开着 */
+export interface PagewiseCompanionPrefs {
+  /** 选的版本 (默认基础版); 「伴读开着」= 这个版本开着 */
   level: DjLevel
   /** 智能版: 「所有书开启」后的全局开关 (perBook 未设置的书跟随它) */
   enabled: boolean
@@ -447,8 +447,8 @@ interface SettingsState {
   aiProfiles: Record<string, AiProviderProfile>
   /** 阅读记录: 每日阅读目标 (分钟), 0 表示不设目标 */
   dailyGoalMinutes: number
-  /** 点睛阅读 */
-  dianjing: DianjingPrefs
+  /** 伴读 */
+  dianjing: PagewiseCompanionPrefs
   /** 阅读模式 (打字机等) */
   readingMode: ReadingModePrefs
   /** 语言默认排版配置 (例如 'zh', 'en') */
@@ -527,7 +527,7 @@ const defaults: SettingsState = {
     },
     wordGuide: { enabled: false, style: 'auto', strength: 'normal', intensity: 0.7, color: 'rose', mark: BASIC_MARK_DEFAULT },
     largeText: { enabled: false, size: 'large', custom: {} },
-    eink: { enabled: false, suggestDismissed: false },
+    eink: { enabled: false, suggestDismissed: false, gcIntervalPages: 10 },
     immersive: { enabled: false, hideFooter: false },
     eyeCare: { theme: 'sepia', dim: 0, reminder: true, intervalMin: 20 },
     night: { schedule: false, from: '22:00', to: '07:00' },
@@ -637,7 +637,7 @@ function load(): SettingsState {
     if ((saved.version ?? 1) < 13 && (saved.readingMode?.wordGuide?.color ?? 'teal') === 'teal') {
       merged.readingMode.wordGuide.color = 'rose'
     }
-    // v14: 按词着色并入点睛阅读成为基础版, 原点睛阅读为智能版; 按旧存档里在用的功能选版本 (services/dianjing/level.ts)
+    // v14: 按词着色并入伴读成为基础版, 原伴读为智能版; 按旧存档里在用的功能选版本 (services/PagewiseCompanion/level.ts)
     if ((saved.version ?? 1) < 14 && saved.dianjing?.level == null) {
       const m = migrateLevel(saved)
       merged.dianjing.level = m.level

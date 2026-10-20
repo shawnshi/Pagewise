@@ -101,10 +101,10 @@ test('library pinned priority applies before pagination and never reverses with 
   for (const direction of ['asc', 'desc']) {
     assert.deepEqual(ids(queryLibraryBooks(books, { pinnedFirst: true, direction, pageSize: 2 })), ['c', 'b'])
   }
-  assert.deepEqual(ids(queryLibraryBooks(books, { pinnedFirst: true, page: 2, pageSize: 2 })), ['a', 'd'])
+  assert.deepEqual(ids(queryLibraryBooks(books, { pinnedFirst: true, page: 2, pageSize: 2 })), ['d', 'a'])
   assert.deepEqual(ids(queryLibraryBooks(books, { pinnedFirst: true, search: 'missing' })), [])
-  assert.deepEqual(ids(queryLibraryBooks(books, { pinnedFirst: true, formats: ['epub'], pageSize: 24 })), ['c', 'b', 'a', 'd'])
-  assert.deepEqual(ids(queryLibraryBooks(books, { pageSize: 24 })), ['a', 'd', 'b', 'c'])
+  assert.deepEqual(ids(queryLibraryBooks(books, { pinnedFirst: true, formats: ['epub'], pageSize: 24 })), ['c', 'b', 'd', 'a'])
+  assert.deepEqual(ids(queryLibraryBooks(books, { pageSize: 24 })), ['d', 'a', 'b', 'c'])
 })
 
 test('pagination correction, empty results, no invented completion state', () => {

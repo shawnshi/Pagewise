@@ -195,9 +195,9 @@ test('actual navigation rejects unknown sources, missing fragments and renderer 
   await assert.rejects(navigate('unknown-source'), /Source unavailable/)
 })
 
-test('Dianjing source jumps require a real range/CFI and host inspection, never a direct section fallback', async () => {
-  const source = readFileSync(new URL('../src/composables/useDianjing.ts', import.meta.url), 'utf8')
-  const tree = ts.createSourceFile('useDianjing.ts', source, ts.ScriptTarget.Latest, true)
+test('PagewiseCompanion source jumps require a real range/CFI and host inspection, never a direct section fallback', async () => {
+  const source = readFileSync(new URL('../src/composables/usePagewiseCompanion.ts', import.meta.url), 'utf8')
+  const tree = ts.createSourceFile('usePagewiseCompanion.ts', source, ts.ScriptTarget.Latest, true)
   let fn
   function visit(node) {
     if (ts.isFunctionDeclaration(node) && node.name?.text === 'goTo') fn = node
@@ -240,7 +240,7 @@ test('Dianjing source jumps require a real range/CFI and host inspection, never 
 })
 
 test('changed Vue SFC scripts and templates compile entirely in memory, without build/cache writes', () => {
-  for (const file of ['../src/views/ReaderView.vue', '../src/components/DianjingCard.vue']) {
+  for (const file of ['../src/views/ReaderView.vue', '../src/components/PagewiseCompanionCard.vue']) {
     const { descriptor, errors } = parse(readFileSync(new URL(file, import.meta.url), 'utf8'), { filename: file })
     assert.deepEqual(errors, [])
     const script = compileScript(descriptor, { id: 'reader-unit-verification' })

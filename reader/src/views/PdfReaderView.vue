@@ -63,6 +63,9 @@ import {
   type PdfReaderShortcutCommandId,
 } from '../services/keyboardShortcuts'
 import TocList, { type TocItem } from '../components/TocList.vue'
+import OnyxInkLayer from '../components/OnyxInkLayer.vue'
+import { onyxEpd } from '../services/onyxEpd'
+import { onyxNativeAccelerator } from '../services/onyxNativeAccelerator'
 import { t } from '../i18n'
 
 const route = useRoute()
@@ -73,6 +76,7 @@ const bookId = String(route.params.id)
 
 const meta = ref<BookMeta>()
 const loading = ref(true)
+const scribbleEnabled = ref(false)
 const error = ref('')
 const reportReaderFailure = inject(readerActivityKey, () => () => {})()
 watch(error, value => { if (value) reportReaderFailure() })
@@ -1931,6 +1935,7 @@ function touchDistance(touches: TouchList): number {
 
 function onPdfTouchStart(e: TouchEvent) {
   if (e.touches.length >= 2) {
+    onyxEpd.enterFastMode('pdf-zoom', 'du')
     touchGesture = {
       x: 0,
       y: 0,
@@ -1975,6 +1980,9 @@ function onPdfTouchMove(e: TouchEvent) {
 function onPdfTouchEnd(e: TouchEvent) {
   const gesture = touchGesture
   if (!gesture) return
+  if (gesture.pinching) {
+    onyxEpd.scheduleExitFastMode(180)
+  }
   if (e.touches.length) {
     if (gesture.pinching && e.touches.length === 1) touchGesture = null
     return
@@ -3092,8 +3100,17 @@ function handleNativeReaderBack(): boolean {
   }).finally(() => { nativeBackPending = false })
   return true
 }
-onMounted(() => { nativeBackHost.__pagewiseReaderBack = handleNativeReaderBack })
+let unbindPdfHardwareKeys: (() => void) | null = null
+onMounted(() => {
+  nativeBackHost.__pagewiseReaderBack = handleNativeReaderBack
+  unbindPdfHardwareKeys = onyxNativeAccelerator.bindHardwarePageTurn(dir => {
+    if (scribbleEnabled.value || moreMenu.value || zoomMenu.value) return
+    runPdfShortcutCommand(dir === 'next' ? 'nextPage' : 'previousPage')
+  })
+})
 onBeforeUnmount(() => {
+  unbindPdfHardwareKeys?.()
+  unbindPdfHardwareKeys = null
   if (nativeBackHost.__pagewiseReaderBack === handleNativeReaderBack) delete nativeBackHost.__pagewiseReaderBack
 })
 
@@ -3532,6 +3549,16 @@ onBeforeUnmount(() => {
 
         <span class="toolbar-spacer" />
         <div class="toolbar-group toolbar-end">
+          <button
+            class="icon-btn"
+            :class="{ 'icon-active': scribbleEnabled }"
+            :title="t('reader.scribble')"
+            :aria-label="t('reader.scribble')"
+            :aria-pressed="scribbleEnabled"
+            @click="scribbleEnabled = !scribbleEnabled"
+          >
+            <AppIcon name="notes" /><span>{{ t('reader.scribble') }}</span>
+          </button>
           <button class="icon-btn no-phone" :title="`${t('reader.print')} (${primaryShortcutLabel} P)`" @click="printDocument">
             <AppIcon name="print" /><span>{{ t('reader.print') }}</span>
           </button>
@@ -3855,6 +3882,12 @@ onBeforeUnmount(() => {
                 />
               </div>
               <div class="p-links" />
+              <OnyxInkLayer
+                :book-id="bookId"
+                :page-key="`pdf-page-${n}`"
+                v-model:enabled="scribbleEnabled"
+                :modal-open="moreMenu || zoomMenu || autoPanel"
+              />
             </div>
           </div>
         </div>
@@ -3905,6 +3938,12 @@ onBeforeUnmount(() => {
                 />
               </div>
               <div class="p-links" />
+              <OnyxInkLayer
+                :book-id="bookId"
+                :page-key="`pdf-page-${n}`"
+                v-model:enabled="scribbleEnabled"
+                :modal-open="moreMenu || zoomMenu || autoPanel"
+              />
             </div>
           </div>
         </div>

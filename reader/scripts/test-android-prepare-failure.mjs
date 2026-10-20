@@ -20,7 +20,7 @@ const xml = `<manifest xmlns:android="http://schemas.android.com/apk/res/android
 function fixture() {
   const base = mkdtempSync(join(tmpdir(), 'pagewise-android-prepare-'))
   const put = (path, value) => { mkdirSync(dirname(join(base, path)), { recursive: true }); writeFileSync(join(base, path), value) }
-  for (const path of ['package.json', 'src-tauri/tauri.conf.json', template]) put(path, readFileSync(join(root, path)))
+  for (const path of ['package.json', 'src-tauri/tauri.conf.json', template, 'src-tauri/android/ReaderWindowState.kt']) put(path, readFileSync(join(root, path)))
   put(buildBridge, legacyBridge)
   cpSync(join(root, 'src-tauri/icons/android'), join(base, 'src-tauri/icons/android'), { recursive: true })
   put(activity, 'old activity\r\n')
@@ -44,6 +44,7 @@ for (const [name, path, value] of [
   ['duplicate strings', strings, '<resources><string name="app_name">a</string><string name="app_name">b</string><string name="main_activity_title">c</string></resources>'],
   ['mismatched template package', template, 'package wrong.identity\nclass MainActivity : TauriActivity() {}'],
   ['truncated template', template, 'package io.pagewise.reader\n'],
+  ['invalid reader window template', 'src-tauri/android/ReaderWindowState.kt', 'package wrong.identity\nclass ReaderWindowState'],
   ['missing FileProvider', manifest, '<manifest><application /></manifest>'],
   ['malformed manifest', manifest, xml.replace('</application>', '')],
   ['unsupported native build bridge', buildBridge, 'val args = listOf("run", "unknown");'],
@@ -61,6 +62,16 @@ for (const [name, path, value] of [
     } finally { cleanup() }
   })
 }
+
+test('missing reader window dependency is rejected before changing generated files', () => {
+  const { base, cleanup } = fixture()
+  try {
+    rmSync(join(base, 'src-tauri/android/ReaderWindowState.kt'))
+    const before = snapshot(join(base, generated))
+    assert.throws(() => prepareAndroidProject(base), /Missing reader window template/)
+    assert.deepEqual(snapshot(join(base, generated)), before)
+  } finally { cleanup() }
+})
 
 test('staged commit failure restores all existing bytes and removes newly created files', () => {
   const { base, cleanup } = fixture()

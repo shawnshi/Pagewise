@@ -10,7 +10,7 @@
  *  - 舒适区: 25%–65%。跟随目标的首行在区内且整句可见 → 不滚动。
  *  - 焦点线: 38%。出了舒适区 (或在屏外) → 首行平滑地落到焦点线。
  *  - 长句 (比舒适区还高): 句首对齐舒适区上沿 (25%), 尽量多露出整句。
- *  - 一次性跳转 (搜索结果 / 划线 / 点睛 / 回到朗读位置): 目标首行直接落在焦点线。
+ *  - 一次性跳转 (搜索结果 / 划线 / 伴读 / 回到朗读位置): 目标首行直接落在焦点线。
  *  - 动画: 系统要求减少动态效果时瞬移; 距离超过 1.5 屏也瞬移 (长距离滑过无关文字只会晃眼)。
  *
  * 纯函数, 坐标一律是「相对滚动视口顶边的 px」, 与 renderer.rangeBox() 的返回一致。
@@ -98,7 +98,7 @@ export function followTarget(box: Box, area: Area): number | null {
   return isComfortable(box, area) ? null : focusTarget(box, area)
 }
 
-/** 一次性跳转 (搜索结果 / 划线 / 点睛 / 回到朗读位置): 目标首行落在焦点线 */
+/** 一次性跳转 (搜索结果 / 划线 / 伴读 / 回到朗读位置): 目标首行落在焦点线 */
 export function jumpLine(area: Area): number {
   return focusBand(area).line
 }

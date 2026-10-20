@@ -3,7 +3,7 @@ import { computed, nextTick, onBeforeUnmount, onMounted, ref, watch } from 'vue'
 import { onBeforeRouteLeave, useRouter } from 'vue-router'
 import { useLibrary } from '../stores/library'
 import { FORMAT_LABELS } from '../services/format'
-import { queryLibraryBooks, type LibraryQueryOptions } from '../services/libraryQuery'
+import { countLibraryCategories, UNCLASSIFIED_CATEGORY, queryLibraryBooks, type LibraryQueryOptions } from '../services/libraryQuery'
 import { toast } from '../services/toast'
 import { formatReadingTime } from '../composables/useReadingTimer'
 import { readerPath } from '../services/readerRoute'
@@ -15,9 +15,9 @@ import type { BookMeta } from '../storage'
 import { t } from '../i18n'
 import { useSettings } from '../stores/settings'
 import { useFolderLibrary } from '../services/folderLibrary'
-import { BOOK_CATEGORIES, normalizeTagName } from '../services/bookClassification'
+import { BOOK_CATEGORIES } from '../services/bookClassification'
 import { bookFileProblem, type AvailabilityFilter } from '../services/bookAvailability'
-import { mergeLibraryTags, removeLibraryTag, clearBookClassifications } from '../services/bookTagActions'
+import { clearBookClassifications } from '../services/bookTagActions'
 import { getStorage } from '../storage'
 import { useNativeBack } from '../composables/useNativeBack'
 import {
@@ -65,7 +65,7 @@ async function onRescan() {
 }
 
 const keyword = ref('')
-const sortBy = ref<LibrarySortBy>('recent')
+const sortBy = ref<LibrarySortBy>('added')
 const statusFilter = ref<ReadingStatus | ''>('')
 const availabilityFilter = ref<AvailabilityFilter>('')
 const unavailableCount = computed(() => allBooks.value.filter(book => bookFileProblem(book)).length)
@@ -100,6 +100,7 @@ const orderedBookIds = ref<string[]>([])
 const lastViewedBookId = ref<string>()
 const filterDraft = ref<AdvancedFilterDraft | null>(null)
 const filterPanel = ref<HTMLElement>()
+const categoryNav = ref<HTMLElement>()
 const unavailableReturn = ref<LibrarySessionState>()
 const pageJump = ref<number | undefined>()
 const filterTagQuery = ref('')
@@ -150,7 +151,7 @@ function saveCurrentSession() {
 
 function restoreSession(session: LibrarySessionState) {
   keyword.value = session.keyword ?? ''
-  sortBy.value = session.sortBy ?? 'recent'
+  sortBy.value = session.sortBy ?? 'added'
   tagFilter.value = session.tagFilter ?? []
   tagMode.value = session.tagMode ?? 'and'
   formatFilter.value = session.formatFilter ?? ''
@@ -180,7 +181,7 @@ onMounted(async () => {
     const session = loadLibrarySession()
     await library.refresh()
     if (session) restoreSession(session)
-    if (session?.returnedFromReader) {
+    if (session?.returnedFromReader || sortBy.value === 'published') {
       orderedBookIds.value = []
       rememberResultOrder()
       const index = orderedBookIds.value.indexOf(lastViewedBookId.value ?? '')
@@ -219,7 +220,6 @@ function onGlobalKeydown(e: KeyboardEvent) {
 /** 逐层关闭书库弹层/管理态; 返回 false 表示没有需要关闭的层。 */
 function dismissLibraryLayer(): boolean {
   if (filterDraft.value) { closeAdvancedFilter(); return true }
-  if (showTagManage.value) { showTagManage.value = false; return true }
   if (showTagModal.value) { showTagModal.value = false; return true }
   if (manageMode.value) { toggleManage(); return true }
   return false
@@ -237,6 +237,40 @@ const totalReadingTime = computed(() => {
 })
 
 const categoryLabels = new Set(BOOK_CATEGORIES.map(c => c.label))
+const categoryCounts = computed(() => countLibraryCategories(allBooks.value))
+const availableCategories = computed(() => {
+  const counts = categoryCounts.value
+  const knownIds = new Set(BOOK_CATEGORIES.map(category => category.id))
+  const known = BOOK_CATEGORIES.filter(category => counts.has(category.id))
+    .map(category => ({ ...category, count: counts.get(category.id)! }))
+  const other = [...counts].filter(([id]) => id !== UNCLASSIFIED_CATEGORY && !knownIds.has(id))
+    .sort(([a], [b]) => a.localeCompare(b, 'zh'))
+    .map(([id, count]) => ({ id, label: id, count }))
+  const unclassified = counts.get(UNCLASSIFIED_CATEGORY)
+  return [...known, ...other, ...(unclassified ? [{ id: UNCLASSIFIED_CATEGORY, label: t('classification.categoryEmpty'), count: unclassified }] : [])]
+})
+const categoryTabs = computed(() => [
+  { id: '', label: t('library.categoryAll'), count: allBooks.value.length },
+  ...availableCategories.value,
+])
+const categoryLabel = (id: string) => categoryTabs.value.find(category => category.id === id)?.label ?? id
+
+function selectCategory(id: string) {
+  if (categoryFilter.value === id) return
+  batchFilterCommit(() => { categoryFilter.value = id })
+  if (filterDraft.value) filterDraft.value.category = id
+}
+
+watch([availableCategories, restoringSession], () => {
+  if (!library.loaded || restoringSession.value) return
+  const available = new Set(availableCategories.value.map(category => category.id))
+  if (categoryFilter.value && !available.has(categoryFilter.value)) categoryFilter.value = ''
+  if (filterDraft.value?.category && !available.has(filterDraft.value.category)) filterDraft.value.category = ''
+})
+watch([categoryFilter, availableCategories], async () => {
+  await nextTick()
+  categoryNav.value?.querySelector<HTMLElement>('[aria-pressed="true"]')?.scrollIntoView({ block: 'nearest', inline: 'nearest', behavior: 'auto' })
+}, { flush: 'post' })
 
 const allTags = computed(() => {
   const tags = new Set<string>()
@@ -263,7 +297,7 @@ const queryOptions = computed<LibraryQueryOptions>(() => ({
   languages: languageFilter.value ? [languageFilter.value] : [],
   statuses: statusFilter.value ? [statusFilter.value] : undefined,
   availability: availabilityFilter.value,
-  sortBy: sortBy.value === 'recent' ? 'lastRead' : sortBy.value === 'added' ? 'addedAt' : sortBy.value,
+  sortBy: sortBy.value === 'recent' ? 'lastRead' : sortBy.value === 'added' ? 'addedAt' : sortBy.value === 'published' ? 'publicationDate' : sortBy.value,
   pinnedFirst: true,
   page: page.value,
   pageSize: pageSize.value,
@@ -328,6 +362,10 @@ watch(() => library.books.map(book => book.id), ids => {
   const matching = queryLibraryBooks(allBooks.value, {
     ...queryOptions.value, page: 1, pageSize: Number.MAX_SAFE_INTEGER,
   }).items.map(book => book.id)
+  if (sortBy.value === 'published') {
+    orderedBookIds.value = matching
+    return
+  }
   const matches = new Set(matching)
   const remembered = new Set(orderedBookIds.value)
   orderedBookIds.value = [
@@ -438,7 +476,7 @@ function resetFilterDraft() {
       ancientText: '',
       workCountry: '',
       workPeriod: '',
-      sortBy: 'recent',
+      sortBy: 'added',
     })
   }
 }
@@ -673,85 +711,6 @@ async function removeBook(book: BookMeta) {
   }
 }
 
-// 标签管理
-const showTagManage = ref(false)
-const tagManageEditing = ref<string | null>(null)
-const tagManageRename = ref('')
-const tagManageRole = ref<'topic' | 'feature' | 'legacy'>('topic')
-
-function openTagManage() {
-  tagManageEditing.value = null
-  tagManageRename.value = ''
-  tagManageRole.value = 'topic'
-  showTagManage.value = true
-}
-
-function roleTags(book: BookMeta) {
-  const tags = tagManageRole.value === 'legacy'
-    ? (book.classification?.legacyTags ?? book.tags).map(value => ({ value, locked: false }))
-    : tagManageRole.value === 'topic'
-      ? book.classification?.topics ?? []
-      : book.classification?.feature ? [book.classification.feature] : []
-  return tags.map(tag => ({ ...tag, value: normalizeTagName(tag.value) }))
-}
-const managedTags = computed(() => [...new Set(library.books.flatMap(book => roleTags(book).map(tag => tag.value)))].sort())
-function tagCount(tag: string) {
-  return library.books.filter(book => roleTags(book).some(item => item.value === tag)).length
-}
-
-async function renameTag(oldTag: string) {
-  const newTag = normalizeTagName(tagManageRename.value)
-  if (!newTag || newTag === oldTag) {
-    tagManageEditing.value = null
-    return
-  }
-  const affectedBooks = library.books.filter(book => roleTags(book).some(tag => tag.value === oldTag))
-  const lockedCount = affectedBooks.filter(book => roleTags(book).some(tag => tag.value === oldTag && tag.locked)).length
-
-  const msg = t('classification.mergePreview', {
-    from: oldTag,
-    to: newTag,
-    affected: affectedBooks.length,
-    locked: lockedCount,
-  })
-  if (!confirm(msg)) return
-
-  try {
-    const storage = await getStorage()
-    await mergeLibraryTags(storage, tagManageRole.value, oldTag, newTag)
-    await library.refresh()
-    tagFilter.value = tagFilter.value.map(t => (t === oldTag ? newTag : t))
-    tagManageEditing.value = null
-    toast(t('library.tagRenamed', { old: oldTag, new: newTag }), 'success')
-  } catch (err: any) {
-    toast(err?.message || '合并标签失败', 'error')
-  }
-}
-
-async function deleteTag(tag: string) {
-  const affectedBooks = library.books.filter(book => roleTags(book).some(item => item.value === tag))
-  const lockedCount = affectedBooks.filter(book => roleTags(book).some(item => item.value === tag && item.locked)).length
-  const role = tagManageRole.value
-
-  const msg = t('classification.deleteGlobalConfirm', {
-    tag,
-    role,
-    affected: affectedBooks.length,
-    locked: lockedCount,
-  })
-  if (!confirm(msg)) return
-
-  try {
-    const storage = await getStorage()
-    await removeLibraryTag(storage, role, tag)
-    await library.refresh()
-    tagFilter.value = tagFilter.value.filter(t => t !== tag)
-    toast(t('library.tagDeleted', { tag }), 'success')
-  } catch (err: any) {
-    toast(err?.message || '删除标签失败', 'error')
-  }
-}
-
 async function clearSelectedTags() {
   if (!confirm('清空所选书籍的分类标签（含锁定标签）？历史标签保留，书籍源文件不变。')) return
   try {
@@ -814,10 +773,12 @@ async function clearSelectedTags() {
         </button>
       </div>
       <select v-model="sortBy" class="input sort" :aria-label="t('common.sortBy')">
-        <option value="recent">{{ t('library.sortRecent') }}</option>
         <option value="added">{{ t('library.sortAdded') }}</option>
+        <option value="recent">{{ t('library.sortRecent') }}</option>
+        <option value="published">{{ t('library.sortPublished') }}</option>
         <option value="title">{{ t('library.sortTitle') }}</option>
         <option value="author">{{ t('library.sortAuthor') }}</option>
+        <option value="progress">{{ t('library.sortProgress') }}</option>
       </select>
       <button v-if="allBooks.length" class="btn" :class="{ 'btn-primary': manageMode }" :aria-pressed="manageMode" @click="toggleManage">
         {{ manageMode ? t('common.done') : t('library.manage') }}
@@ -836,6 +797,15 @@ async function clearSelectedTags() {
       <RouterLink v-if="hasFolderIssue" class="btn" to="/settings?section=folder">{{ t('library.folderSettings') }}</RouterLink>
     </section>
 
+    <nav v-if="allBooks.length" ref="categoryNav" class="category-tabs" :aria-label="t('library.categoryNavigation')">
+      <button v-for="category in categoryTabs" :key="category.id" type="button"
+        class="btn category-tab" :class="{ 'category-active': categoryFilter === category.id }"
+        :data-category="category.id" :aria-pressed="categoryFilter === category.id"
+        @click="selectCategory(category.id)">
+        <span>{{ category.label }}</span><span class="category-count">{{ category.count }}</span>
+      </button>
+    </nav>
+
     <section v-if="lastReadingBook && !manageMode" class="resume-card" :aria-label="t('catalog.continueReading')">
       <strong>{{ lastReadingBook.title }}</strong>
       <span>{{ Math.round((lastReadingBook.progress ?? 0) * 100) }}%</span>
@@ -846,12 +816,11 @@ async function clearSelectedTags() {
       <div class="filter-toolbar">
         <button type="button" class="btn open-filter" :aria-expanded="!!filterDraft" aria-controls="library-filters" @click="openAdvancedFilter">{{ t('library.filters') }}{{ hasActiveChips ? ' · ' + query.total : '' }}</button>
         <button v-if="unavailableReturn" type="button" class="btn" @click="restoreUnavailableFilters">{{ t('library.restoreFilters') }}</button>
-        <button type="button" class="btn tag-manage" @click="openTagManage">{{ t('library.manageTags') }}</button>
       </div>
       <div v-if="filterDraft" id="library-filters" ref="filterPanel" class="filter-panel">
         <fieldset>
           <legend>{{ t('library.primaryCategory') }}</legend>
-          <select v-model="filterDraft.category" class="input" :aria-label="t('classification.category')"><option value="">{{ t('library.allCategories') }}</option><option v-for="cat in BOOK_CATEGORIES" :key="cat.id" :value="cat.id">{{ cat.label }}</option></select>
+          <select v-model="filterDraft.category" class="input" :aria-label="t('classification.category')"><option value="">{{ t('library.allCategories') }}</option><option v-for="cat in availableCategories" :key="cat.id" :value="cat.id">{{ cat.label }}</option></select>
         </fieldset>
         <fieldset class="topic-group">
           <legend>{{ t('library.topicTags') }}</legend>
@@ -910,7 +879,7 @@ async function clearSelectedTags() {
         <button type="button" class="chip-remove" :aria-label="t('uiV02.copy.清除状态筛选')" @click="statusFilter = ''">×</button>
       </span>
       <span v-if="categoryFilter" class="chip">
-        {{ t('classification.category') }}: {{ BOOK_CATEGORIES.find(c => c.id === categoryFilter)?.label || categoryFilter }}
+        {{ t('classification.category') }}: {{ categoryLabel(categoryFilter) }}
         <button type="button" class="chip-remove" aria-label="清除类别筛选" @click="categoryFilter = ''">×</button>
       </span>
       <span v-if="classificationStatusFilter" class="chip">
@@ -1057,42 +1026,7 @@ async function clearSelectedTags() {
       </div>
     </div>
 
-    <!-- 标签管理弹窗 -->
-    <div v-if="showTagManage" class="modal-mask" @click.self="showTagManage = false">
-      <div class="modal tag-manage-modal" role="dialog" aria-modal="true" aria-labelledby="tag-manage-title">
-        <h3 id="tag-manage-title">{{ t('library.manageTags') }}</h3>
-        <select v-model="tagManageRole" class="input input-sm tag-role-select" :aria-label="t('classification.mergeRole')" @change="tagManageEditing = null">
-          <option value="topic">{{ t('classification.topics') }}</option>
-          <option value="feature">{{ t('classification.feature') }}</option>
-          <option value="legacy">{{ t('classification.legacyTags') }}</option>
-        </select>
-        <ul v-if="managedTags.length" class="tag-manage-list">
-          <li v-for="tag in managedTags" :key="tag" class="tag-manage-item">
-            <template v-if="tagManageEditing === tag">
-              <input
-                v-model="tagManageRename"
-                class="input input-sm tag-rename-input"
-                autofocus
-                :aria-label="t('library.renameTag')"
-                @keyup.enter="renameTag(tag)"
-                @keyup.esc="tagManageEditing = null"
-              />
-              <button class="btn btn-sm btn-primary" @click="renameTag(tag)">{{ t('common.save') }}</button>
-              <button class="btn btn-sm" @click="tagManageEditing = null">{{ t('common.cancel') }}</button>
-            </template>
-            <template v-else>
-              <span class="tag-manage-name">{{ tag }}</span>
-              <span class="tag-manage-count">({{ tagCount(tag) }})</span>
-              <button class="btn btn-sm" @click="tagManageEditing = tag; tagManageRename = tag">{{ t('library.renameTag') }}</button>
-              <button class="btn btn-sm btn-danger" @click="deleteTag(tag)">{{ t('common.delete') }}</button>
-            </template>
-          </li>
-        </ul>
-        <div class="form-actions">
-          <button class="btn btn-sm btn-primary" @click="showTagManage = false">{{ t('common.done') }}</button>
-        </div>
-      </div>
-    </div>
+
   </div>
 </template>
 
@@ -1165,7 +1099,38 @@ async function clearSelectedTags() {
   padding: 2px;
 }
 .sort {
-  width: 120px;
+  width: 148px;
+  min-height: 48px;
+}
+.category-tabs {
+  display: flex;
+  gap: 8px;
+  min-width: 0;
+  max-width: 100%;
+  overflow-x: auto;
+  overscroll-behavior-x: contain;
+  padding: 4px;
+  margin-bottom: 12px;
+  scrollbar-width: thin;
+}
+.category-tab {
+  flex: 0 0 auto;
+  white-space: nowrap;
+  transition: none;
+}
+.category-tab.category-active {
+  color: var(--card);
+  background: var(--text);
+  border-color: var(--text);
+  font-weight: 700;
+}
+.category-tab:focus-visible {
+  outline: 2px solid var(--text);
+  outline-offset: 2px;
+}
+.category-count {
+  font-size: 12px;
+  font-variant-numeric: tabular-nums;
 }
 .btn {
   min-height: 48px;
@@ -1314,31 +1279,6 @@ async function clearSelectedTags() {
   gap: 8px;
   margin-top: 18px;
 }
-.tag-manage-list {
-  list-style: none;
-  padding: 0;
-  margin: 12px 0;
-  max-height: 280px;
-  overflow-y: auto;
-  display: flex;
-  flex-direction: column;
-  gap: 6px;
-}
-.tag-manage-item {
-  display: flex;
-  align-items: center;
-  gap: 8px;
-  padding: 4px 0;
-}
-.tag-manage-name {
-  flex: 1;
-  font-size: 14px;
-}
-.tag-manage-count {
-  font-size: 12px;
-  color: var(--text-3);
-}
-
 @media (max-width: 720px) {
   .library {
     padding: 14px 12px calc(48px + var(--lr-safe-bottom));

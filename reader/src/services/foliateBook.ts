@@ -1,4 +1,6 @@
 import { detectFormat, isFoliateNative } from './format.ts'
+import { secureBookContent } from './bookContentSecurity.ts'
+import { installBookContentCfi } from './bookContentCfi.ts'
 
 type BookOpener<T> = (file: File) => Promise<T>
 
@@ -23,6 +25,9 @@ export async function openBookWithFileFallback<T>(file: File, openBook: BookOpen
 export async function makeFoliateBook(file: File) {
   const format = detectFormat(file.name)
   if (!format || !isFoliateNative(format)) throw new Error('Unsupported book format')
-  const { makeBook } = await import('foliate-js/view.js')
-  return openBookWithFileFallback(file, makeBook)
+  const foliate = await import('foliate-js/view.js')
+  const { makeBook } = foliate
+  if (!('View' in foliate)) throw new Error('Unsupported Foliate View module')
+  installBookContentCfi(foliate.View)
+  return secureBookContent(await openBookWithFileFallback(file, makeBook))
 }

@@ -17,7 +17,7 @@ function fixture() {
   mkdirSync(temp, { recursive: true })
   const base = mkdtempSync(join(temp, 'monitored-folder-prepare-'))
   const put = (path, value) => { mkdirSync(dirname(join(base, path)), { recursive: true }); writeFileSync(join(base, path), value) }
-  for (const path of ['package.json', 'src-tauri/tauri.conf.json', 'src-tauri/android/MainActivity.kt', 'src-tauri/android/MonitoredFolderPlugin.kt']) put(path, read(path))
+  for (const path of ['package.json', 'src-tauri/tauri.conf.json', 'src-tauri/android/MainActivity.kt', 'src-tauri/android/MonitoredFolderPlugin.kt', 'src-tauri/android/ReaderWindowState.kt']) put(path, read(path))
   cpSync(join(root, 'src-tauri/icons/android'), join(base, 'src-tauri/icons/android'), { recursive: true })
   put(`${generated}/buildSrc/src/main/java/io/pagewise/reader/kotlin/BuildTask.kt`, 'val executable = """npm""";\nval args = listOf("run", "--", "tauri", "android", "android-studio-script");\n')
   put(strings, '<resources><string name="app_name">old</string><string name="main_activity_title">old</string></resources>')

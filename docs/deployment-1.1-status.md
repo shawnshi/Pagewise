@@ -44,6 +44,6 @@ APK SHA-256：
 
 PDF 部分主线程初始化/文本/交互开销、打开成本回退、SAF 与听书长时间运行，以及实体墨水屏的翻页延迟、清晰度和残影仍未闭合。宿主测试、API ready、Activity 启动时间和应用截图均不能代替这些验收。
 
-本记录的 APK 形成于随后这轮 README 整理之前。本次整理更新仓库 README，不与 `reader/docs/manual/` 中的应用内离线手册混同；本次 GitHub 源码同步不重新打包或发布 APK。
+本记录的 APK 形成于随后这轮 README 整理之前。`reader/README.md` 也是内置手册的构建输入，后续文档改动会在下次构建进入应用；本次 GitHub 源码同步不重新打包或发布 APK。
 
 本机完整日志和回执保留在忽略的 `.cache/performance-20261019/device/`；APK 保留在忽略的 `artifacts/`。不把这些本机文件或私有签名材料推送至源码仓库。正式包更新后不保证能降级：必要恢复应使用同证书、递增 versionCode 的旧代码恢复包，不以卸载或清数据回退。

@@ -4,7 +4,7 @@ import LevelSlider from './LevelSlider.vue'
 /**
  * 「阅读模式」面板 (docs/reader-panels.md §3.2): 书页怎么动、怎么带你读。桌面为顶栏下的浮层卡片, 手机为底部抽屉
  * (遮罩由 ReaderView 的 sheet-scrim 提供)。自上而下:
- *   #top 插槽 (点睛阅读: 总开关 + 基础 / 智能, 见 DianjingToggle) → 运行进度 → 场景 (夜读 / 护眼 / 墨水屏 / 大字 / 沉浸)
+ *   #top 插槽 (伴读: 总开关 + 基础 / 智能, 见 PagewiseCompanionToggle) → 运行进度 → 场景 (夜读 / 护眼 / 墨水屏 / 大字 / 沉浸)
  *   → 带读 [自动翻页 | 打字机 | 听书] (同一时间只运行一个)。
  * 场景是开关卡片: 一键套用一组「排版」里的值 (记快照, 关闭写回), 自己不保存也不提供这些值的控件;
  * 点卡片角上的 ⓘ 展开「会调整什么」、场景自己的选项 (定时、休息提醒、大 / 特大…) 和「在排版里微调」。
@@ -18,6 +18,7 @@ import { TYPING_SOUND_PRESETS } from '../services/readingModes/soundPresets'
 import { previewTypingSound } from '../services/readingModes/sound'
 import type { ReadingModeProgress } from '../services/readingModes/progress'
 import { largeTextValues } from '../services/readingModes/presets'
+import { EPD_GC_INTERVAL_OPTIONS } from '../services/onyxEpd'
 import type { TypographySection } from './TypographyPanel.vue'
 
 const props = defineProps<{
@@ -203,7 +204,7 @@ function onSpeedInput(e: Event) {
 
     <p v-if="presentationSuppressed" class="rm-publication-note" role="status">{{ t('reader.publicationPaused') }}</p>
 
-    <!-- 主会话放点睛阅读开关 -->
+    <!-- 主会话放伴读开关 -->
     <slot name="top" />
 
     <!-- 打字机运行中: 读到哪、还要多久 -->
@@ -311,6 +312,30 @@ function onSpeedInput(e: Event) {
               @click="settings.readingMode.eyeCare.intervalMin = n"
             >
               {{ t('readingMode.minutes', { n }) }}
+            </button>
+          </div>
+        </template>
+
+        <!-- 墨水屏: EpdController 全刷消残影间隔 + 立即全刷 -->
+        <template v-else-if="detail === 'eink'">
+          <div class="rm-row">
+            <span class="rm-label">{{ t('readingMode.einkGcInterval') }}</span>
+            <div class="segmented rm-self-start">
+              <button
+                v-for="pages in EPD_GC_INTERVAL_OPTIONS"
+                :key="pages"
+                type="button"
+                :class="{ active: modes.einkGcInterval.value === pages }"
+                :aria-pressed="modes.einkGcInterval.value === pages"
+                @click="modes.setEinkGcInterval(pages)"
+              >
+                {{ pages === 0 ? t('readingMode.einkGcSystem') : t('readingMode.einkGcPages', { n: pages }) }}
+              </button>
+            </div>
+          </div>
+          <div class="rm-row">
+            <button type="button" class="rm-tune" @click="modes.repaintEinkNow('gc')">
+              {{ t('readingMode.einkRepaintNow') }}
             </button>
           </div>
         </template>
@@ -983,7 +1008,7 @@ function onSpeedInput(e: Event) {
   }
 }
 
-/* 点睛开关 (插槽) 自带下边线, 与下方分组的上边线重复: 只留一条 */
+/* 伴读开关 (插槽) 自带下边线, 与下方分组的上边线重复: 只留一条 */
 .rm-panel :slotted(.dj-toggle) {
   border-bottom: none;
 }

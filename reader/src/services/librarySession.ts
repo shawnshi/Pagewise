@@ -3,7 +3,7 @@ import { normalizeReadingStatus } from './readingStatus.ts'
 import { normalizeAvailability, type AvailabilityFilter } from './bookAvailability.ts'
 import { queryLibraryBooks, filterLibraryBooks, compareLibraryBooks, compare, type LibraryQueryBook, type LibraryQueryOptions, type LibraryQueryResult } from './libraryQuery.ts'
 
-export type LibrarySortBy = 'recent' | 'added' | 'title' | 'author' | 'progress'
+export type LibrarySortBy = 'recent' | 'added' | 'published' | 'title' | 'author' | 'progress'
 
 export interface LibrarySessionState {
   availabilityFilter: AvailabilityFilter
@@ -49,7 +49,7 @@ export interface AdvancedFilterDraft {
 
 export const DEFAULT_LIBRARY_SESSION: Readonly<LibrarySessionState> = Object.freeze({
   keyword: '',
-  sortBy: 'recent',
+  sortBy: 'added',
   tagFilter: [],
   tagMode: 'and',
   formatFilter: '',
@@ -70,11 +70,12 @@ export const DEFAULT_LIBRARY_SESSION: Readonly<LibrarySessionState> = Object.fre
   lastViewedBookId: undefined,
 })
 
-export const VALID_SORTS: readonly LibrarySortBy[] = ['recent', 'added', 'title', 'author', 'progress'] as const
+export const VALID_SORTS: readonly LibrarySortBy[] = ['added', 'recent', 'published', 'title', 'author', 'progress'] as const
 
 export const SORT_LABELS: Record<LibrarySortBy, string> = {
   recent: '最近阅读',
-  added: '最近添加',
+  added: '最近加入',
+  published: '出版时间',
   title: '书名',
   author: '作者',
   progress: '阅读进度',
@@ -94,7 +95,7 @@ export function sanitizeSessionState(raw: unknown, allowReturn = true): LibraryS
 
   const sortBy: LibrarySortBy = (typeof obj.sortBy === 'string' && (VALID_SORTS as readonly string[]).includes(obj.sortBy))
     ? (obj.sortBy as LibrarySortBy)
-    : 'recent'
+    : 'added'
 
   const tagFilter = Array.isArray(obj.tagFilter)
     ? obj.tagFilter.filter((item): item is string => typeof item === 'string' && item.trim().length > 0)

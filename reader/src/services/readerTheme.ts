@@ -1,7 +1,7 @@
 import type { ReaderPrefs, ResolvedTypography } from '../stores/settings'
 import type { BookTypographyContext } from './readerTypographyContext.ts'
 import { WORD_GUIDE_DEFAULT, guideAccent, guideTailAlpha } from './readingModes/wordGuideIntensity.ts'
-import { dianjingCSS, djThemeName } from './dianjing/theme.ts'
+import { companionCSS, companionThemeName } from './PagewiseCompanion/theme.ts'
 import { getDisplayModeCSS, type TypographySettings } from './readerTypography.ts'
 
 export interface ReaderThemeColors {
@@ -120,7 +120,7 @@ export function getReaderCSS(
     ::highlight(lr-annotation) { background-color: ${theme === 'dark' ? '#333333' : '#e0e0e0'}; color: ${colors.fg}; }
     ::selection { background-color: ${theme === 'dark' ? '#333333' : '#e0e0e0'}; color: ${colors.fg}; }
     ` : ''}
-    ${dianjingCSS(djThemeName(theme, !!style?.eink))}
+    ${companionCSS(companionThemeName(theme, !!style?.eink))}
   `
 }
 
@@ -252,7 +252,7 @@ function wordGuideCSS(colors: ReaderThemeColors, theme: string, intensity = WORD
   const altLight = alt
   const altNormal = alt
   const tail = withAlpha(colors.fg, guideTailAlpha(intensity))
-  // 重点词 (点睛阅读): 全书第一次出现强 (着色更足 + 浅底), 之后弱 (只着色); 都随明显程度变化, 只改颜色不重排
+  // 重点词 (伴读): 全书第一次出现强 (着色更足 + 浅底), 之后弱 (只着色); 都随明显程度变化, 只改颜色不重排
   const t = Math.min(1, Math.max(0, intensity))
   const accent = guideAccent(color, theme)
   const kwStrong = mixHex(colors.fg, accent, Math.min(1, t + 0.2))
