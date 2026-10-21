@@ -10,7 +10,7 @@ const preset = computed(() => supported.value ? providerById(settings.aiProvider
 const options = computed(() => aiModelOptions(settings.aiProvider, settings.aiModel))
 function modelLabel(id: string, label: string): string {
   if (!preset.value?.models.some(model => model.id === id)) return t('settings.aiSavedModel', { model: label })
-  return id === preset.value.defaultModel && preset.value.id !== 'trial'
+  return id === preset.value.defaultModel
     ? `${label} · ${t('settings.aiModelDefault')}` : label
 }
 </script>
@@ -22,7 +22,7 @@ function modelLabel(id: string, label: string): string {
       <option v-if="!supported" :value="settings.aiModel">{{ t('settings.aiChooseSupported') }}</option>
       <option v-for="model in options" :key="model.id" :value="model.id">{{ modelLabel(model.id, model.label) }}</option>
     </select>
-    <span v-if="preset?.id !== 'trial' && supported" class="model-catalog-note">
+    <span v-if="supported" class="model-catalog-note">
       {{ t('settings.aiModelCatalog', { date: AI_MODEL_CATALOG_VERIFIED_AT }) }}
     </span>
   </div>

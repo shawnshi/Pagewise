@@ -2,6 +2,7 @@ import { readonly, shallowRef } from 'vue'
 import { getStorage, type BookMeta, type LibraryStorage } from '../storage'
 import { detectFormat } from './format'
 import { prepareBookImport } from './importer'
+import { supportsNativeBookImport, indexNativeFolder, inspectNativeBook } from './nativeBookImport.ts'
 import {
   getMonitoredFolder, selectMonitoredFolder, listMonitoredFiles,
   readMonitoredFile, subscribeMonitoredFolderChanges, MONITORED_FOLDER_LIMITS,
@@ -26,6 +27,8 @@ export interface FolderLibraryDependencies {
   subscribeMonitoredFolderChanges(listener: () => void): () => void
   getStorage(): Promise<LibraryStorage>
   prepareBookImport: typeof prepareBookImport
+  nativeIndex?: typeof indexNativeFolder
+  nativeInspect?: typeof inspectNativeBook
 }
 
 const MAX_FILES = MONITORED_FOLDER_LIMITS.files
@@ -98,6 +101,23 @@ export function createFolderLibrary(deps: FolderLibraryDependencies) {
           }
         }
         publish('permission-denied', 'Folder permission lost')
+      }
+      if (deps.nativeIndex) {
+        if (readingActive) { pending = true; publish('idle'); return }
+        try {
+          const result = await deps.nativeIndex(folder.id, force)
+          books = await storage.listBooks()
+          changed = true
+          if (!await ensureActive()) return
+          const error = result.errors.map(item => `${item.fileName}: ${item.code}`).slice(0, 5).join('; ') || null
+          publish(result.errors.some(item => item.code === 'permission_denied') ? 'permission-denied' : result.complete ? 'idle' : 'partial', error)
+        } catch (error) {
+          // A native failure can follow earlier committed items; always reconcile the actual DB.
+          books = await storage.listBooks()
+          changed = true
+          throw error
+        }
+        return
       }
       if (folder.permission === 'lost') { await deny(); return }
       let listing: Awaited<ReturnType<FolderLibraryDependencies['listMonitoredFiles']>>
@@ -314,10 +334,14 @@ export function createFolderLibrary(deps: FolderLibraryDependencies) {
       if (candidates.folderId !== folderId) throw new Error('Monitored folder changed')
       const file = candidates.files.find(item => item.documentId === documentId)
       if (!file) throw new Error('Candidate file unavailable')
-      const bytes = await deps.readMonitoredFile(folderId, documentId)
-      if (!bytes.byteLength || bytes.byteLength > MAX_FILE_BYTES) throw new Error('Unsupported source size')
-      const parsed = await deps.prepareBookImport(new File([new Uint8Array(bytes)], file.name))
-      if (parsed.meta.format !== book.format) throw new Error('Book format mismatch')
+      if (deps.nativeInspect) {
+        if (await deps.nativeInspect(folderId, documentId, file.name) !== book.format) throw new Error('Book format mismatch')
+      } else {
+        const bytes = await deps.readMonitoredFile(folderId, documentId)
+        if (!bytes.byteLength || bytes.byteLength > MAX_FILE_BYTES) throw new Error('Unsupported source size')
+        const parsed = await deps.prepareBookImport(new File([new Uint8Array(bytes)], file.name))
+        if (parsed.meta.format !== book.format) throw new Error('Book format mismatch')
+      }
       const fresh = await relinkCandidates(bookId)
       const verified = fresh.files.find(item => item.documentId === documentId)
       const current = await storage.getBook(bookId)
@@ -343,6 +367,8 @@ export function createFolderLibrary(deps: FolderLibraryDependencies) {
 let singleton: ReturnType<typeof createFolderLibrary> | undefined
 export function useFolderLibrary() {
   if (!singleton) singleton = createFolderLibrary({ getStorage, prepareBookImport, getMonitoredFolder,
-    selectMonitoredFolder, listMonitoredFiles, readMonitoredFile, subscribeMonitoredFolderChanges })
+    selectMonitoredFolder, listMonitoredFiles, readMonitoredFile, subscribeMonitoredFolderChanges,
+    nativeIndex: supportsNativeBookImport() ? indexNativeFolder : undefined,
+    nativeInspect: supportsNativeBookImport() ? inspectNativeBook : undefined })
   return singleton
 }

@@ -1,11 +1,7 @@
-/**
- * 伴读的网络层: 内置通道 (relay `/v1/dianjing`, 提示词在服务端) 或用户自己的密钥直连
- * (OpenAI 兼容接口, 提示词由同一个 prompt.ts 拼装)。两路都是流式, 逐行回调。
- */
+/** 伴读只使用用户配置的服务；未配置时不联网，也不回退到公共中转。 */
 import { fetchRemote } from '../net'
-import { TRIAL_BASE_URL, trialDeviceId } from '../ai'
 import { compatibleChatBody } from '../aiProviders.ts'
-import { buildChatBody, planMarkInput, MAX_CHUNK_CHARS, COMPANION_MODEL, PROMPT_VERSION, type CompanionRequest } from './prompt.ts'
+import { buildChatBody, planMarkInput, MAX_CHUNK_CHARS, PROMPT_VERSION, type CompanionRequest } from './prompt.ts'
 import { NdjsonParser, SseDeltaParser, type RawItem } from './protocol.ts'
 
 export type CompanionErrorCode = 'quota' | 'budget' | 'offline' | 'auth' | 'http' | 'aborted' | 'config' | 'version'
@@ -21,24 +17,20 @@ export class CompanionError extends Error {
 }
 
 export interface CompanionChannel {
-  kind: 'builtin' | 'own'
-  /** own: 接口地址 (…/v1); builtin: relay 根 (…/v1) */
+  kind: 'own'
+  /** 用户配置的 OpenAI 兼容接口地址。 */
   baseUrl: string
   apiKey?: string
-  /** own: 模型名; builtin 由服务端决定 (响应头 x-dj-model) */
+  /** 用户选择的模型名。 */
   model?: string
 }
 
 export interface CompanionStreamResult {
   /** 实际使用的模型 (进入缓存键) */
   model: string
-  /** 内置通道: 今日剩余字数 */
-  remaining?: number
   good: number
   bad: number
 }
-
-export const COMPANION_ENDPOINT = (base = TRIAL_BASE_URL) => base.replace(/\/+$/, '') + '/dianjing'
 
 const isSiliconFlow = (url: string) => /siliconflow\.(cn|com)/i.test(url)
 
@@ -105,36 +97,7 @@ export async function streamPagewiseCompanion(
     const text = String(req.text ?? '')
     if (text.length > MAX_CHUNK_CHARS) throw new CompanionError('http', `Reading source exceeds the ${MAX_CHUNK_CHARS}-character limit`)
     const body: CompanionRequest = { ...req, text: req.mode === 'mark' ? planMarkInput(text).text : text, promptVersion: PROMPT_VERSION }
-    if (channel.kind === 'builtin') {
-      // Capability discovery carries no document/device data and avoids billed POSTs to an old relay.
-      const metadata = await fetchRemote(channel.baseUrl.trim().replace(/\/+$/, '') + '/models', undefined, {
-        method: 'GET', headers: { accept: 'application/json' }, signal, raw: true,
-      })
-      if (!metadata.ok) throw await readError(metadata)
-      if ((await metadata.json())?.dianjingPromptVersion !== PROMPT_VERSION) throw new CompanionError('version', 'Built-in reading service revision is missing or outdated; update the relay')
-      const res = await fetchRemote(COMPANION_ENDPOINT(channel.baseUrl), undefined, {
-        method: 'POST',
-        headers: {
-          'content-type': 'application/json',
-          accept: 'application/x-ndjson',
-          'x-device-id': trialDeviceId(),
-        },
-        body: JSON.stringify(body),
-        signal,
-        raw: true,
-      })
-      if (!res.ok) throw await readError(res)
-      if (res.headers.get('x-dj-prompt-version') !== PROMPT_VERSION) {
-        try { await res.body?.cancel() } catch { /* Keep the revision failure as the primary error. */ }
-        throw new CompanionError('version', 'Built-in reading response revision is missing or outdated; update the relay')
-      }
-      const model = res.headers.get('x-dj-model') || COMPANION_MODEL
-      const rem = Number(res.headers.get('x-dj-remaining'))
-      await pump(res, s => { for (const it of parser.feed(s)) onItem(it) }, signal)
-      for (const it of parser.flush()) onItem(it)
-      if (parser.bad) throw new CompanionError('http', 'Invalid or incomplete NDJSON output')
-      return { model, remaining: Number.isFinite(rem) ? rem : undefined, good: parser.good, bad: parser.bad }
-    }
+    if (channel.kind !== 'own') throw new CompanionError('config', 'Retired AI channel')
     const base = channel.baseUrl.trim().replace(/\/+$/, '')
     if (!base || !channel.model) throw new CompanionError('config', 'AI not configured')
     const sse = new SseDeltaParser()

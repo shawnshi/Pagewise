@@ -6,7 +6,7 @@ import { createClassification } from '../src/services/bookClassification.ts'
 
 // Replace only settings + transport: exercise unchanged ai.ts, including its real SSE parser.
 const fixture = globalThis.__bookTagFixture = {
-  settings: { aiProvider: 'custom', aiBaseUrl: 'https://fixture.invalid/v1', aiModel: 'fixture', aiApiKey: '' },
+  settings: { aiProvider: 'deepseek', aiBaseUrl: 'https://fixture.invalid/v1', aiModel: 'fixture', aiApiKey: 'fixture-key' },
   requests: [], response: undefined,
 }
 let externalCalls = 0

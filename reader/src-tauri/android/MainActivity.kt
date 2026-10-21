@@ -28,11 +28,25 @@ import java.util.concurrent.atomic.AtomicInteger
 
 class MainActivity : TauriActivity() {
     private var nativeBackView: WebView? = null
+    private var nativeManagementSurface: NativeManagementSurface? = null
+
+    internal fun managementWebView(): WebView? = nativeBackView
+
+    internal fun attachManagementSurface(surface: NativeManagementSurface) {
+        check(nativeManagementSurface == null || nativeManagementSurface === surface)
+        nativeManagementSurface = surface
+    }
+
+    internal fun repaintManagementSurface() {
+        onyxBridge?.scheduleOverlayRepaint(nativeBackView, "GU", 120)
+    }
+
     private var nativeBackDispatching = false
     private val nativeBackCallback: OnBackPressedCallback =
         object : OnBackPressedCallback(true) {
             override fun handleOnBackPressed() {
                 if (nativeBackDispatching) return
+                if (nativeManagementSurface?.handleBack() == true) return
                 val webView = nativeBackView
                 if (webView == null) {
                     fallbackNativeBack()
@@ -98,6 +112,10 @@ class MainActivity : TauriActivity() {
     }
 
     override fun dispatchKeyEvent(event: KeyEvent): Boolean {
+        if (nativeManagementSurface?.handleKey(event) == true) {
+            repaintManagementSurface()
+            return true
+        }
         if (onyxBridge?.handleHardwareKeyEvent(nativeBackView, event) == true) {
             return true
         }
@@ -122,6 +140,8 @@ class MainActivity : TauriActivity() {
     }
 
     override fun onDestroy() {
+        nativeManagementSurface?.close()
+        nativeManagementSurface = null
         synchronized(performanceRecords) { performanceProbe = false }
         readerWindow.destroy()
         onyxBridge?.onLifecycleDestroy(nativeBackView)
@@ -261,6 +281,19 @@ class MainActivity : TauriActivity() {
         }
 
         @JavascriptInterface
+        fun nativeFileJobsVersion(): Int = 1
+
+        @JavascriptInterface
+        fun nativeBookImportVersion(): Int = 1
+
+        // Capability only: no settings, identity or credentials are exposed to frame bridges.
+        @JavascriptInterface
+        fun nativeStorageVersion(): Int = 1
+
+        @JavascriptInterface
+        fun nativePagesVersion(): Int = 1
+
+        @JavascriptInterface
         fun getReaderEnvironment(): String = readerEnvironmentJson
 
         @JavascriptInterface
@@ -300,6 +333,22 @@ class MainActivity : TauriActivity() {
             }
             return bridge.configureGcInterval(readerWindow.epdState.gcIntervalPages)
         }
+
+        @JavascriptInterface
+        fun scheduleEpdFastExit(delayMs: Int) {
+            runOnUiThread { onyxBridge?.scheduleFastExit(nativeBackView, delayMs) }
+        }
+
+        @JavascriptInterface
+        fun scheduleEpdOverlayRepaint(
+            mode: String,
+            delayMs: Int,
+        ) {
+            runOnUiThread { onyxBridge?.scheduleOverlayRepaint(nativeBackView, mode, delayMs) }
+        }
+
+        @JavascriptInterface
+        fun getEpdStatus(): String = onyxBridge?.epdStatus() ?: "{}"
 
         @JavascriptInterface
         fun getFrontLightState(): String = onyxBridge?.getFrontLightStateJson() ?: "{}"
@@ -389,4 +438,10 @@ class MainActivity : TauriActivity() {
             runOnUiThread { applyBarsDark(dark) }
         }
     }
+}
+
+internal interface NativeManagementSurface : java.io.Closeable {
+    fun handleBack(): Boolean
+
+    fun handleKey(event: KeyEvent): Boolean
 }

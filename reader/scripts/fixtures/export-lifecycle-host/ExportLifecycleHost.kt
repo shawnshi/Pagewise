@@ -266,7 +266,13 @@ fun main(args: Array<String>) {
         // Exercise the exact copy routine used by EXDEV staging, without a filesystem-speed race.
         val invoke = Invoke()
         val type = Class.forName("io.pagewise.reader.ExportPlugin\$Operation")
-        val operation = type.getDeclaredConstructor(Invoke::class.java).also { it.isAccessible = true }.newInstance(invoke)
+        val operation =
+            type
+                .getDeclaredConstructor(Invoke::class.java, kotlin.jvm.functions.Function0::class.java)
+                .also {
+                    it.isAccessible =
+                        true
+                }.newInstance(invoke, { Unit })
         type.getDeclaredMethod("start").also { it.isAccessible = true }.invoke(operation)
         val gate = f.gate()
         val bytes = ByteArrayOutputStream()
@@ -432,6 +438,50 @@ fun main(args: Array<String>) {
         f.plugin.begin(after)
         after.expect("unavailable")
         check(!File(f.cache, "import-shutdown.bin").exists())
+    }
+    scenario("reloaded-preparing-cleanup-waits-for-physical-upload-and-seals-late-IPC") { f ->
+        val name = "import-12345678-1234-4234-8234-123456789abc.bin"
+        val path = "cache/" + name
+        val source = f.temp(name, "old")
+        val entered = CountDownLatch(1)
+        val release = f.gate().release
+        HostFileOutputStream.before = { file ->
+            if (file.name == name) {
+                entered.countDown()
+                while (release.count > 0) {
+                    try {
+                        release.await(3, TimeUnit.SECONDS)
+                    } catch (_: InterruptedException) {
+                        // provider ignores interrupt
+                    }
+                }
+            }
+        }
+        try {
+            val append = Invoke("path" to path, "data" to "YQ==")
+            f.plugin.appendImport(append)
+            entered.waitFor()
+            f.plugin.onDestroy(AppCompatActivity())
+            append.expect("outcome_unknown")
+            check(!NativeImportUploads.seal(listOf(path))) { "cleanup released before physical upload finished" }
+            check(source.readText() == "old")
+            release.countDown()
+            f.close()
+            check(NativeImportUploads.seal(listOf(path)))
+            check(source.readText() == "olda" && source.delete())
+            val rebuilt = ExportPlugin(Activity(f.cache, f.data, f.resolver))
+            try {
+                val late = Invoke("path" to path)
+                rebuilt.beginImport(late)
+                late.expect("invalid_reference")
+                check(!source.exists()) { "late IPC recreated a released path" }
+            } finally {
+                rebuilt.onDestroy(AppCompatActivity())
+            }
+        } finally {
+            release.countDown()
+            HostFileOutputStream.before = {}
+        }
     }
     println(
         "$scenarios scenarios, $failures failures; full production plugin on JVM with controlled platform boundaries, not Android/device verification",

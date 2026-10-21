@@ -9,6 +9,8 @@ import android.graphics.Rect
 import android.graphics.pdf.PdfRenderer
 import android.net.Uri
 import android.os.Build
+import android.os.Handler
+import android.os.Looper
 import android.os.ParcelFileDescriptor
 import android.provider.OpenableColumns
 import android.util.Base64
@@ -46,6 +48,10 @@ class OnyxSdkBridge(
     private val deviceEnvClass: Class<*>? = findClass("com.onyx.android.sdk.device.DeviceEnvironment")
     private val touchHelperClass: Class<*>? = findClass("com.onyx.android.sdk.pen.TouchHelper")
     private val rawInputCallbackClass: Class<*>? = findClass("com.onyx.android.sdk.pen.RawInputCallback")
+
+    private val epdHandler = Handler(Looper.getMainLooper())
+    private var pendingFastExit: Runnable? = null
+    private var pendingOverlayRepaint: Runnable? = null
 
     private var touchHelperInstance: Any? = null
     private val externalOpenQueue = ArrayList<JSONObject>()
@@ -133,12 +139,52 @@ class OnyxSdkBridge(
         return buildEpdStatusJson()
     }
 
+    fun epdStatus(): String = buildEpdStatusJson()
+
+    fun scheduleFastExit(
+        webView: WebView?,
+        delayMs: Int,
+    ) {
+        pendingFastExit?.let { epdHandler.removeCallbacks(it) }
+        val task =
+            Runnable {
+                pendingFastExit = null
+                if (windowState.resumed) setFastMode(webView, false, "", "regal")
+            }
+        pendingFastExit = task
+        epdHandler.postDelayed(task, delayMs.coerceIn(16, 2000).toLong())
+    }
+
+    fun scheduleOverlayRepaint(
+        webView: WebView?,
+        mode: String,
+        delayMs: Int,
+    ) {
+        pendingOverlayRepaint?.let { epdHandler.removeCallbacks(it) }
+        val task =
+            Runnable {
+                pendingOverlayRepaint = null
+                if (windowState.resumed) repaintScreen(webView, if (mode == "gc") "gc" else "regal")
+            }
+        pendingOverlayRepaint = task
+        epdHandler.postDelayed(task, delayMs.coerceIn(0, 2000).toLong())
+    }
+
+    private fun cancelPendingEpdWork() {
+        pendingFastExit?.let { epdHandler.removeCallbacks(it) }
+        pendingOverlayRepaint?.let { epdHandler.removeCallbacks(it) }
+        pendingFastExit = null
+        pendingOverlayRepaint = null
+    }
+
     fun setFastMode(
         webView: WebView?,
         enabled: Boolean,
         scene: String,
         modeWire: String?,
     ): String {
+        pendingFastExit?.let { epdHandler.removeCallbacks(it) }
+        pendingFastExit = null
         if (enabled) {
             val fastMode = OnyxWaveformMode.fromWire(modeWire ?: "du")
             val changed = windowState.epdState.enterFastMode(scene.ifBlank { "scroll" }, fastMode)
@@ -444,6 +490,7 @@ class OnyxSdkBridge(
     }
 
     fun onLifecyclePause(webView: WebView?) {
+        cancelPendingEpdWork()
         val exitedFast = windowState.epdState.onLifecyclePause()
         if (exitedFast) {
             invokeStatic(
@@ -460,6 +507,7 @@ class OnyxSdkBridge(
     }
 
     fun onLifecycleDestroy(webView: WebView?) {
+        cancelPendingEpdWork()
         flushCheckpointToDisk()
         setNativeRawDrawingEnabled(false)
         val helper = touchHelperInstance

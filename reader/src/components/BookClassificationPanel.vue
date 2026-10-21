@@ -60,7 +60,6 @@ const generating = ref(false)
 const saving = ref(false)
 const busy = computed(() => generating.value || saving.value)
 const generationError = ref('')
-const showDisclosure = ref(false)
 let currentAbortController: AbortController | null = null
 let disposed = false
 
@@ -72,13 +71,11 @@ function onGenerateClick() {
     return
   }
   if (isComplete.value) return
-  generationError.value = ''
-  showDisclosure.value = true
+  void executeGeneration()
 }
 
 async function executeGeneration() {
   if (busy.value || editingTag.value) return
-  showDisclosure.value = false
   generating.value = true
   generationError.value = ''
   const controller = new AbortController()
@@ -204,7 +201,7 @@ const editingTag = ref<EditingTagState | null>(null)
 const confirmDeleteLocked = ref(false)
 
 function openTagMenu(role: 'category' | 'topic' | 'feature' | 'legacy', index?: number) {
-  if (busy.value || showDisclosure.value) return
+  if (busy.value) return
   if (role === 'category') {
     if (!draft.value.category) return
     editingTag.value = {
@@ -247,7 +244,7 @@ function openTagMenu(role: 'category' | 'topic' | 'feature' | 'legacy', index?: 
 
 const panel = ref<HTMLElement | null>(null)
 let returnFocus: HTMLElement | null = null
-watch(() => Boolean(editingTag.value || showDisclosure.value), async opened => {
+watch(() => Boolean(editingTag.value), async opened => {
   if (opened) {
     returnFocus = document.activeElement instanceof HTMLElement ? document.activeElement : null
     await nextTick()
@@ -260,7 +257,6 @@ function onDialogKey(event: KeyboardEvent) {
   if (event.key === 'Escape') {
     event.preventDefault()
     editingTag.value = null
-    showDisclosure.value = false
   } else if (event.key === 'Tab') {
     const controls = [...dialog.querySelectorAll<HTMLElement>('button:not(:disabled), input:not(:disabled)')]
     const first = controls[0], last = controls.at(-1)
@@ -379,7 +375,7 @@ const ancientTextSelection = computed({
 
 // 保存提交
 async function saveClassification() {
-  if (busy.value || editingTag.value || showDisclosure.value) return
+  if (busy.value || editingTag.value) return
   const bookId = original.value.id
   saving.value = true
   try {
@@ -441,7 +437,7 @@ async function saveClassification() {
             v-else
             type="button"
             class="btn btn-sm btn-primary"
-            :disabled="isComplete || busy || !!editingTag || showDisclosure"
+            :disabled="isComplete || busy || !!editingTag"
             data-testid="btn-generate-classification"
             @click="onGenerateClick"
           >
@@ -452,7 +448,7 @@ async function saveClassification() {
         <button
           type="button"
           class="btn btn-sm btn-save"
-          :disabled="busy || !!editingTag || showDisclosure"
+          :disabled="busy || !!editingTag"
           data-testid="btn-save-classification"
           @click="saveClassification"
         >
@@ -705,28 +701,6 @@ async function saveClassification() {
         </div>
       </details>
     </fieldset>
-
-    <!-- AI 生成须知与数据范围确认弹窗 -->
-    <div v-if="showDisclosure" class="modal-mask" data-testid="ai-disclosure-modal" @click.self="showDisclosure = false">
-      <div class="modal eink-modal" role="dialog" aria-modal="true" aria-labelledby="disclosure-title">
-        <h3 id="disclosure-title">{{ t('classification.disclosureTitle') }}</h3>
-        <p class="disclosure-body">
-          {{ t('classification.disclosureText') }}
-        </p>
-        <ul class="disclosure-list">
-          <li><strong>包含数据：</strong>书名、作者、出版社、出版日期、书籍简介及已有分类标签（不含历史标签）。</li>
-          <li><strong>绝不包含：</strong>书籍正文、目录、笔记标注、阅读进度、用户个人隐私。</li>
-        </ul>
-        <div class="form-actions">
-          <button type="button" class="btn btn-sm" data-testid="btn-disclosure-cancel" @click="showDisclosure = false">
-            {{ t('common.cancel') }}
-          </button>
-          <button type="button" class="btn btn-sm btn-primary" data-testid="btn-disclosure-confirm" @click="executeGeneration">
-            {{ t('classification.disclosureConsent') }}
-          </button>
-        </div>
-      </div>
-    </div>
 
     <!-- 单标签编辑与操作弹窗 -->
     <div v-if="editingTag" class="modal-mask" data-testid="tag-edit-dialog" @click.self="editingTag = null">
@@ -1015,18 +989,6 @@ async function saveClassification() {
   max-width: 480px;
   width: 90%;
   color: var(--text);
-}
-
-.disclosure-body {
-  font-size: 14px;
-  line-height: 1.6;
-  margin: 12px 0;
-}
-
-.disclosure-list {
-  font-size: 13px;
-  line-height: 1.6;
-  margin: 8px 0 16px 20px;
 }
 
 .form-actions {

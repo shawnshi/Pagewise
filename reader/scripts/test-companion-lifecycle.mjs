@@ -7,7 +7,7 @@ import vm from 'node:vm'
 import * as vue from 'vue'
 import ts from 'typescript'
 import * as companionCompatibility from '../src/services/PagewiseCompanion/compatibility.ts'
-import { providerById } from '../src/services/aiProviders.ts'
+import { isSelectableAiProvider } from '../src/services/aiProviders.ts'
 
 const source = process.env.COMPANION_COMPOSABLE_SOURCE
   ? readFileSync(process.env.COMPANION_COMPOSABLE_SOURCE, 'utf8')
@@ -32,14 +32,14 @@ const level = load(readFileSync(new URL('../src/services/PagewiseCompanion/level
 
 function fixture(t, initial = {}) {
   const settings = vue.reactive({
-    language: 'zh', aiProvider: 'trial', aiBaseUrl: '', aiApiKey: '', aiModel: '',
+    language: 'zh', aiProvider: 'deepseek', aiBaseUrl: 'https://synthetic.invalid/v1', aiApiKey: 'synthetic-key', aiModel: 'synthetic',
     pagewiseCompanion: {
-      level: 'smart', enabled: true, consentAll: true, perBook: {}, channel: 'builtin',
+      level: 'smart', enabled: true, consentAll: true, perBook: {}, channel: 'own',
       density: 'normal', kinds: { key: true, term: true, note: true }, fiction: {},
     },
   })
   if (initial.disabled) settings.pagewiseCompanion.enabled = false
-  if (initial.unconfigured) settings.pagewiseCompanion.channel = 'own'
+  if (initial.unconfigured) settings.aiApiKey = ''
   const view = vue.reactive({ isFixedLayout: !!initial.fixed })
   const suppressed = vue.ref(false)
   const calls = []
@@ -62,7 +62,7 @@ function fixture(t, initial = {}) {
     '../stores/settings': { useSettings: () => settings },
     '../i18n': { t: key => key },
     '../services/toast': { toast: () => {} },
-    '../services/ai': { aiConfigured: () => false, providerById, TRIAL_BASE_URL: 'https://synthetic.invalid' },
+    '../services/ai': { aiConfigured: () => isSelectableAiProvider(settings.aiProvider) && !!settings.aiApiKey && !!settings.aiBaseUrl && !!settings.aiModel },
     '../services/PagewiseCompanion/engine': { PagewiseCompanion: Engine },
     '../services/PagewiseCompanion/client': {
       streamPagewiseCompanion(request, channel, onItem, signal) {
@@ -94,7 +94,7 @@ function fixture(t, initial = {}) {
 }
 test('retired saved AI providers do not throw or fall through to the trial companion channel', t => {
   const f = fixture(t)
-  for (const id of ['siliconflow', 'custom', 'unknown']) {
+  for (const id of ['trial', 'siliconflow', 'custom', 'unknown']) {
     f.settings.aiProvider = id
     for (const channel of ['own', 'auto', 'builtin']) {
       f.settings.pagewiseCompanion.channel = channel
@@ -102,6 +102,24 @@ test('retired saved AI providers do not throw or fall through to the trial compa
     }
   }
   assert.equal(f.calls.length, 0)
+})
+
+test('legacy builtin consent cannot silently authorize an own-key service, but can be renewed explicitly', async t => {
+  const f = fixture(t)
+  f.settings.pagewiseCompanion.channel = 'builtin'
+  f.settings.pagewiseCompanion.perBook['another-book'] = true
+  assert.equal(f.dj.engine.host.channel(), null)
+  assert.equal(f.dj.active.value, false)
+  assert.equal(f.calls.length, 0)
+  f.dj.toggle()
+  assert.equal(f.dj.consentOpen.value, true)
+  assert.equal(f.settings.pagewiseCompanion.channel, 'builtin')
+  f.dj.consent('book')
+  assert.equal(f.settings.pagewiseCompanion.channel, 'own')
+  assert.equal(f.settings.pagewiseCompanion.consentAll, false)
+  assert.equal(f.settings.pagewiseCompanion.perBook['synthetic-book'], true)
+  assert.equal(f.settings.pagewiseCompanion.perBook['another-book'], undefined)
+  assert.equal(f.dj.engine.host.channel().baseUrl, 'https://synthetic.invalid/v1')
 })
 
 test('adding or denying a strict per-book authorization updates the mounted reactive active flag', t => {

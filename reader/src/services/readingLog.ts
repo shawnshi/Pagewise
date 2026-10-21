@@ -141,6 +141,15 @@ export function createMemoryReadingLogStore(initial: ReadingLogRow[] = []): Read
 
 /** IndexedDB 实现 (Dexie 按需加载), 库名 `lightread-stats` */
 export function createDexieReadingLogStore(): ReadingLogStore {
+  const host = typeof window === 'undefined' ? undefined : window as Window & { LightReadInsets?: { nativeStorageVersion?: () => number } }
+  if (host?.LightReadInsets?.nativeStorageVersion?.() === 1) {
+    const native = () => import('./nativeState.ts').then(({ getNativeState }) => getNativeState().readingStore())
+    return {
+      all: async () => (await native()).all(),
+      add: async (deltas, now) => (await native()).add(deltas, now),
+      putMax: async rows => (await native()).putMax(rows),
+    }
+  }
   type Db = Dexie & { log: Table<ReadingLogRow, string> }
   let dbPromise: Promise<Db> | null = null
   const db = () => {

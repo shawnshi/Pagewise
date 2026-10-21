@@ -1,0 +1,8 @@
+// Override only build scripts. Android sources/resources stay in their original, read-only Cargo locations.
+['tauri-android', 'tauri-plugin-dialog', 'tauri-plugin-fs', 'tauri-plugin-opener'].each { name ->
+    def module = findProject(':' + name)
+    if (module == null) throw new GradleException('Missing expected native module: ' + name)
+    def adapter = new File(settingsDir, 'native-gradle/' + name + '.gradle.kts')
+    if (!adapter.isFile()) throw new GradleException('Missing project-local Kotlin adapter: ' + name)
+    module.buildFileName = module.projectDir.toPath().relativize(adapter.toPath()).toString()
+}

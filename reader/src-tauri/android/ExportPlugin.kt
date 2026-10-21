@@ -31,6 +31,48 @@ private const val EXPORT_PATH = "^cache/export-[A-Za-z0-9-]{1,64}\\.zip$"
 private const val IMPORT_PATH = "^cache/import-[A-Za-z0-9-]{1,64}\\.bin$"
 private const val IMPORT_TARGET = "^books/[A-Za-z0-9-]{1,64}\\.[A-Za-z0-9]{1,10}$"
 
+internal object NativeImportUploads {
+    private const val MAX_PATHS = 16384
+
+    private data class Lease(
+        var users: Int = 0,
+        var closed: Boolean = false,
+    )
+
+    private val leases = mutableMapOf<String, Lease>()
+
+    @Synchronized fun acquire(path: String): String? {
+        val existing = leases[path]
+        if (existing?.closed == true) return "invalid_reference"
+        if (existing == null && leases.size >= MAX_PATHS) return "resource_limit"
+        val lease = existing ?: Lease().also { leases[path] = it }
+        lease.users++
+        return null
+    }
+
+    @Synchronized fun finish(path: String) {
+        val lease = leases.getValue(path)
+        check(lease.users > 0)
+        lease.users--
+    }
+
+    // Seal before deleting or admitting a reader. Late IPCs cannot resurrect a released token.
+    // Retain bounded tombstones for this process; no old IPC survives process termination.
+    @Synchronized fun seal(paths: List<String>): Boolean {
+        if (paths.any { (leases[it]?.users ?: 0) > 0 }) return false
+        for (path in paths) {
+            val lease = leases[path]
+            if (lease != null) {
+                lease.closed = true
+            } else if (leases.size < MAX_PATHS) {
+                leases[path] = Lease(closed = true)
+            }
+            // At capacity all unknown tokens are rejected by acquire(), including these.
+        }
+        return true
+    }
+}
+
 @TauriPlugin
 class ExportPlugin(
     private val activity: Activity,
@@ -52,8 +94,16 @@ class ExportPlugin(
 
     private class Operation(
         private val invoke: Invoke,
+        private val onPhysicalRelease: () -> Unit = {},
     ) {
         private var state = State.QUEUED
+        private val released =
+            java.util.concurrent.atomic
+                .AtomicBoolean(false)
+
+        fun releasePhysical() {
+            if (released.compareAndSet(false, true)) onPhysicalRelease()
+        }
 
         @Synchronized fun start(): Boolean {
             if (state != State.QUEUED) return false
@@ -91,7 +141,13 @@ class ExportPlugin(
 
         @Synchronized fun cancel(code: String) {
             when (state) {
-                State.QUEUED, State.RUNNING -> {
+                State.QUEUED -> {
+                    state = State.CANCELLED
+                    releasePhysical() // A cancelled queued action can no longer enter its IO body.
+                    invoke.reject(code, code)
+                }
+
+                State.RUNNING -> {
                     state = State.CANCELLED
                     invoke.reject(code, code)
                 }
@@ -157,13 +213,24 @@ class ExportPlugin(
     private fun run(
         invoke: Invoke,
         timeoutMs: Long = 30_000,
+        importPath: String? = null,
         action: (Operation) -> JSObject?,
     ) {
-        val operation = Operation(invoke)
+        if (importPath != null) {
+            if (!Regex(IMPORT_PATH).matches(importPath)) {
+                invoke.reject("invalid_reference", "invalid_reference")
+                return
+            }
+            NativeImportUploads.acquire(importPath)?.let {
+                invoke.reject(it, it)
+                return
+            }
+        }
+        val operation = Operation(invoke) { if (importPath != null) NativeImportUploads.finish(importPath) }
         val timeout = Runnable { operation.cancel("timeout_not_committed") }
         synchronized(operations) {
             if (destroyed) {
-                invoke.reject("unavailable", "unavailable")
+                operation.cancel("unavailable")
                 return
             }
             operations.add(operation)
@@ -176,6 +243,7 @@ class ExportPlugin(
                 } catch (error: Exception) {
                     operation.finish(null, error)
                 } finally {
+                    operation.releasePhysical()
                     handler.removeCallbacks(timeout)
                     synchronized(operations) { operations.remove(operation) }
                 }
@@ -248,7 +316,7 @@ class ExportPlugin(
 
     @Command
     fun beginImport(invoke: Invoke) =
-        run(invoke) { operation ->
+        run(invoke, importPath = invoke.getArgs().optString("path")) { operation ->
             val target = importTemp(invoke.getArgs().getString("path"))
             target.parentFile?.let { parent -> if (!parent.isDirectory && !parent.mkdirs()) throw Failure("io_error") }
             operation.commit { FileOutputStream(target, false).use { } }
@@ -257,7 +325,7 @@ class ExportPlugin(
 
     @Command
     fun appendImport(invoke: Invoke) =
-        run(invoke) { operation ->
+        run(invoke, importPath = invoke.getArgs().optString("path")) { operation ->
             val target = importTemp(invoke.getArgs().getString("path"))
             if (!target.isFile) throw Failure("not_found")
             if (target.length() > MAX_IMPORT_BYTES) throw Failure("resource_limit")
@@ -274,7 +342,7 @@ class ExportPlugin(
 
     @Command
     fun publishImport(invoke: Invoke) =
-        run(invoke, 120_000) { operation ->
+        run(invoke, 120_000, importPath = invoke.getArgs().optString("path")) { operation ->
             val source = importTemp(invoke.getArgs().getString("path"))
             if (!source.isFile) throw Failure("not_found")
             val target = importTarget(invoke.getArgs().getString("target"))
@@ -307,7 +375,7 @@ class ExportPlugin(
 
     @Command
     fun deleteImport(invoke: Invoke) =
-        run(invoke) { operation ->
+        run(invoke, importPath = invoke.getArgs().optString("path")) { operation ->
             val target = importTemp(invoke.getArgs().getString("path"))
             operation.commit { if (target.exists() && !target.delete()) throw Failure("io_error") }
             JSObject()

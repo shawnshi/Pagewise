@@ -19,15 +19,7 @@ export interface AiProviderProfile {
   model: string
 }
 
-/** 内置试用通道的密钥仅保留在服务端。 */
-export const TRIAL_BASE_URL = 'https://lightread-ai.jiangshu.ai/v1'
-
 export const AI_PROVIDERS: AiProviderPreset[] = [
-  {
-    id: 'trial', label: '内置试用通道', baseUrl: TRIAL_BASE_URL,
-    defaultModel: 'deepseek-ai/DeepSeek-V4-Flash', needsKey: false,
-    models: [{ id: 'deepseek-ai/DeepSeek-V4-Flash', label: 'DeepSeek V4 Flash' }],
-  },
   {
     id: 'deepseek', label: 'DeepSeek', baseUrl: 'https://api.deepseek.com/v1',
     defaultModel: 'deepseek-flash', needsKey: true,
@@ -73,7 +65,7 @@ export const AI_PROVIDERS: AiProviderPreset[] = [
 ]
 
 /** Old profiles remain inert archives; they are not selectable or eligible for requests. */
-const LEGACY_AI_PROVIDER_IDS = new Set(['siliconflow', 'zhipu', 'qwen', 'kimi', 'doubao', 'ollama', 'custom'])
+const LEGACY_AI_PROVIDER_IDS = new Set(['trial', 'siliconflow', 'zhipu', 'qwen', 'kimi', 'doubao', 'ollama', 'custom'])
 
 export function isSelectableAiProvider(id: string): boolean {
   return AI_PROVIDERS.some(provider => provider.id === id)

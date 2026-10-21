@@ -25,7 +25,7 @@ test('real detail, classification, role manager and filter/session interactions;
       await route.fulfill({status:200,contentType:'text/event-stream',body:`data: ${JSON.stringify({choices:[{delta:{content:answer}}]})}\n\ndata: [DONE]\n\n`})
     })
     page.on('request',req=>{const url=new URL(req.url());if(['http:','https:'].includes(url.protocol)&&url.origin!==base&&url.hostname!=='fixture.invalid')report.externalAttempts.push(url.origin)})
-    await page.evaluate(()=>localStorage.setItem('lightread-settings',JSON.stringify({version:14,language:'zh',aiProvider:'custom',aiBaseUrl:'https://fixture.invalid/v1',aiModel:'fixture',aiApiKey:'',sync:{autoSync:false}})))
+    await page.evaluate(()=>localStorage.setItem('lightread-settings',JSON.stringify({version:14,language:'zh',aiProvider:'deepseek',aiBaseUrl:'https://fixture.invalid/v1',aiModel:'fixture',aiApiKey:'fixture-key',sync:{autoSync:false}})))
     const ids=await page.evaluate(async description=>{
       const s=await(await import('/src/storage/index.ts')).getStorage()
       const make=(title,tags,extra={})=>s.addBook({title,author:'Synthetic author',format:'txt',fileName:'fixture.txt',addedAt:1,tags,description,...extra},new Blob(['SYNTHETIC BODY NEVER SENT']))
@@ -41,10 +41,9 @@ test('real detail, classification, role manager and filter/session interactions;
       await tid('select-facet-textbook').selectOption('false')
       assert.equal((await read(ids[0])).classification,undefined)
     })
-    await check('disclosure cancel sends nothing; completion preserves unsaved manual assignments',async()=>{
-      await tid('btn-generate-classification').click();await tid('btn-disclosure-cancel').click()
-      assert.equal(report.aiRequests.length,0)
-      await tid('btn-generate-classification').click();await tid('btn-disclosure-confirm').click()
+    await check('one click generates without disclosure; completion preserves unsaved manual assignments',async()=>{
+      await tid('btn-generate-classification').click()
+      assert.equal(await tid('ai-disclosure-modal').count(),0)
       await tid('topic-chip').filter({hasText:'几何'}).waitFor()
       assert.equal(await tid('topic-chip').count(),2)
       assert.equal(await tid('input-facet-audience').inputValue(),'儿童')
@@ -75,7 +74,7 @@ test('real detail, classification, role manager and filter/session interactions;
     })
     await check('invalid AI output leaves draft and persisted tags unchanged',async()=>{
       mode='invalid';const before=await read(ids[0])
-      await tid('btn-generate-classification').click();await tid('btn-disclosure-confirm').click()
+      await tid('btn-generate-classification').click()
       await tid('classification-error').waitFor()
       assert.deepEqual(await read(ids[0]),before)
       assert.equal(await tid('topic-chip').count(),1)

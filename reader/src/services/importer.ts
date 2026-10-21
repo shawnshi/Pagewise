@@ -1,6 +1,7 @@
 import { getStorage, type NewBookMeta } from '../storage'
 import { detectFormat } from './format'
 import { readBookMetadata } from './bibliographicMetadata'
+import { supportsNativeBookImport, importNativeFiles } from './nativeBookImport.ts'
 
 export interface ImportResult {
   ok: boolean
@@ -38,6 +39,10 @@ export async function importFile(
   source = '本地导入',
   overrides?: MetaOverrides,
 ): Promise<ImportResult> {
+  if (supportsNativeBookImport()) {
+    await getStorage()
+    return (await importNativeFiles([file], source, overrides))[0]
+  }
   let prepared: Awaited<ReturnType<typeof prepareBookImport>>
   try {
     prepared = await prepareBookImport(file, source, overrides)
@@ -62,6 +67,10 @@ export async function importFiles(
   onProgress?: (done: number, total: number, current: string) => void,
   overrides?: MetaOverrides,
 ): Promise<ImportResult[]> {
+  if (supportsNativeBookImport()) {
+    await getStorage()
+    return importNativeFiles(files, source, overrides, onProgress)
+  }
   const list = Array.from(files)
   const results: ImportResult[] = []
   let done = 0

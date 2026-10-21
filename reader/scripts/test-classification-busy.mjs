@@ -27,7 +27,7 @@ test('delayed SSE locks non-native tag shortcuts and keeps manual draft unchange
         await route.fulfill({ status: 200, contentType: 'text/event-stream', body: `data: ${JSON.stringify({ choices: [{ delta: { content: answer } }] })}\n\ndata: [DONE]\n\n` })
       } finally { finished() }
     })
-    await page.evaluate(() => localStorage.setItem('lightread-settings', JSON.stringify({ version: 14, language: 'zh', aiProvider: 'custom', aiBaseUrl: 'https://fixture.invalid/v1', aiModel: 'fixture', aiApiKey: '', sync: { autoSync: false } })))
+    await page.evaluate(() => localStorage.setItem('lightread-settings', JSON.stringify({ version: 14, language: 'zh', aiProvider: 'deepseek', aiBaseUrl: 'https://fixture.invalid/v1', aiModel: 'fixture', aiApiKey: 'fixture-key', sync: { autoSync: false } })))
     const id = await page.evaluate(async description => {
       const storage = await (await import('/src/storage/index.ts')).getStorage()
       return storage.addBook({ title: 'Busy classification', author: 'Synthetic author', format: 'txt', fileName: 'fixture.txt', tags: ['legacy'], addedAt: 1, description }, new Blob(['Synthetic body never sent']))
@@ -39,8 +39,8 @@ test('delayed SSE locks non-native tag shortcuts and keeps manual draft unchange
     await page.getByTestId('input-new-topic').fill('数学')
     await page.getByTestId('btn-add-topic').click()
     await page.getByTestId('btn-generate-classification').click()
-    await page.getByTestId('btn-disclosure-confirm').click()
     await request
+    assert.equal(await page.getByTestId('ai-disclosure-modal').count(), 0)
     const chip = page.getByTestId('topic-chip').first()
     await chip.focus(); await page.keyboard.press('Enter')
     assert.equal(await page.getByTestId('tag-edit-dialog').count(), 0, 'Enter cannot edit a tag while SSE is pending')
@@ -79,7 +79,7 @@ test('pending storage acquisition saves the original book snapshot and cannot ov
   let release
   const gate = new Promise(resolve => { release = resolve })
   const context = vm.createContext({ original, draft, saving, generating, props, disposed: false,
-    busy: computed(() => saving.value || generating.value), dirty: ref(true), editingTag: ref(null), showDisclosure: ref(false),
+    busy: computed(() => saving.value || generating.value), dirty: ref(true), editingTag: ref(null),
     getStorage: () => gate, parseClassification: classification.parseClassification, classificationTags: classification.classificationTags,
     validatedDraft: () => classification.parseClassification(draft.value), t: key => key, toast() {}, emit: (...args) => events.push(args),
     saveBookClassification: async (_storage, book, value) => { writes.push({ id: book.id, legacyTags: [...value.legacyTags] }); return { ...value, revision: 1 } },

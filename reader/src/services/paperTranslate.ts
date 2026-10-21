@@ -15,7 +15,7 @@ const SYSTEM_PROMPT =
   '文中形如 {v1} {v2} 的占位符代表公式或特殊符号, 必须在译文的对应位置原样保留, 不得翻译、改写或遗漏。' +
   '严格按输入编号输出, 每段以 [[编号]] 开头, 编号一一对应, 除译文外不输出任何内容。'
 
-/** 单请求段落字符预算 (过长分批, 兼容试用通道上下文限制) */
+/** 单请求段落字符预算；过长输入按段落分批。 */
 const BATCH_CHAR_BUDGET = 6000
 
 const cacheKey = (bookId: string, page: number) => `lightread-ptr:${bookId}:${page}`

@@ -59,7 +59,7 @@ import { computed, onScopeDispose, ref, shallowRef, watch } from 'vue'
 import { useSettings } from '../stores/settings'
 import { t } from '../i18n'
 import { toast } from '../services/toast'
-import { aiConfigured, providerById, TRIAL_BASE_URL, type ReaderAssistantContext } from '../services/ai'
+import { aiConfigured, type ReaderAssistantContext } from '../services/ai'
 import { PagewiseCompanion, type CardTarget, type CompanionPosition, type CompanionStatus } from '../services/PagewiseCompanion/engine'
 import { streamPagewiseCompanion, type CompanionChannel } from '../services/PagewiseCompanion/client'
 import { companionColors } from '../services/PagewiseCompanion/theme'
@@ -162,15 +162,9 @@ export function usePagewiseCompanion(opts: UsePagewiseCompanionOptions) {
   try { reducedMotion = !!window.matchMedia?.('(prefers-reduced-motion: reduce)').matches } catch { /* 无 matchMedia */ }
 
   const channel = (): CompanionChannel | null => {
-    const mode = prefs.value.channel
-    let provider
-    try { provider = providerById(settings.aiProvider) }
-    catch { return null } // Retired/unknown saved services stay inactive; never route them to the trial service.
-    const own = provider.id !== 'trial' && aiConfigured() && !settings.aiBaseUrl.startsWith(TRIAL_BASE_URL)
-    const ownChannel: CompanionChannel = { kind: 'own', baseUrl: settings.aiBaseUrl, apiKey: settings.aiApiKey, model: settings.aiModel }
-    if (mode === 'own') return own ? ownChannel : null
-    if (mode === 'auto' && own) return ownChannel
-    return { kind: 'builtin', baseUrl: TRIAL_BASE_URL }
+    // Retired builtin consent does not authorize switching documents to a user's paid service.
+    if (prefs.value.channel === 'builtin' || !aiConfigured()) return null
+    return { kind: 'own', baseUrl: settings.aiBaseUrl, apiKey: settings.aiApiKey, model: settings.aiModel }
   }
 
   const view = () => opts.getView()
@@ -219,7 +213,7 @@ export function usePagewiseCompanion(opts: UsePagewiseCompanionOptions) {
   /** 选的版本: 基础 (按词着色) / 智能 (AI) */
   const level = computed<CompanionLevel>(() => normalizeLevel(prefs.value.level))
   /** 智能版在本书开着 (只在选了智能版时为 true; AI 引擎随它启停) */
-  const enabled = computed(() => !opts.presentationSuppressed?.() && level.value === 'smart' && smartOnFor(prefs.value, opts.bookId))
+  const enabled = computed(() => !opts.presentationSuppressed?.() && prefs.value.channel !== 'builtin' && level.value === 'smart' && smartOnFor(prefs.value, opts.bookId))
   const basicOn = computed(() => !opts.presentationSuppressed?.() && level.value === 'basic' && !!opts.basic?.isOn())
   /** 伴读开着 (按所选版本) */
   const on = computed(() => basicOn.value || enabled.value)
@@ -236,7 +230,6 @@ export function usePagewiseCompanion(opts: UsePagewiseCompanionOptions) {
   })
   const errorCode = computed(() => { void tick.value; return engine.error?.code ?? null })
   const progress = computed(() => { void tick.value; return engine.progress() })
-  const remaining = computed(() => { void tick.value; return engine.remaining })
   const fiction = computed(() => { void tick.value; return engine.fiction })
   const fictionSource = computed(() => { void tick.value; return engine.fictionSource })
   const active = computed(() => enabled.value && supported.value)
@@ -265,6 +258,11 @@ export function usePagewiseCompanion(opts: UsePagewiseCompanionOptions) {
   function apply(action: CompanionAction): boolean {
     if (opts.presentationSuppressed?.()) return false
     const p = prefs.value
+    if (p.channel === 'builtin' && ((action.kind === 'toggle' && level.value === 'smart') || (action.kind === 'setLevel' && action.level === 'smart'))) {
+      opts.beforeOverlay?.()
+      consentOpen.value = true
+      return false
+    }
     const before: CompanionSwitchState = {
       level: level.value,
       basicOn: !!opts.basic?.isOn(),
@@ -309,6 +307,11 @@ export function usePagewiseCompanion(opts: UsePagewiseCompanionOptions) {
 
   /** 同意 (智能版): 仅本书 / 所有书 */
   function consent(scope: 'book' | 'all') {
+    if (!aiConfigured()) return
+    if (prefs.value.channel === 'builtin') {
+      // This explicit consent concerns a different service; old trial grants cannot follow it.
+      settings.pagewiseCompanion = { ...prefs.value, channel: 'own', consentAll: false, enabled: false, perBook: {} }
+    }
     consentOpen.value = false
     apply({ kind: 'consent', scope })
   }
@@ -729,7 +732,6 @@ export function usePagewiseCompanion(opts: UsePagewiseCompanionOptions) {
     status,
     errorCode,
     progress,
-    remaining,
     fiction,
     fictionSource,
     density,

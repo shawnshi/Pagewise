@@ -75,8 +75,8 @@ test('Activity wiring preserves native speech lifecycle and never globally pause
 })
 
 test('SAF never chooses Base64 based on provider-declared size and still checks authorization after copying', () => {
-  const source = readFileSync(new URL('../src-tauri/android/MonitoredFolderPlugin.kt', import.meta.url), 'utf8')
-  const read = source.slice(source.indexOf('fun read(invoke:'), source.indexOf('private fun writeTempDocument'))
+  const source = readFileSync(new URL('../src-tauri/android/MonitoredFolderIo.kt', import.meta.url), 'utf8')
+  const read = source.slice(source.indexOf('fun read('), source.indexOf('private fun writeTempDocument'))
   assert.match(read, /JSObject\(\).put\("path", writeTempDocument\(descriptor, cancellation, deadline\)\)/)
   assert.doesNotMatch(source, /ByteArrayOutputStream|encodeToString|BASE64_MAX_BYTES/)
   assert.match(read, /check\(cancellation, deadline\)\s*authorized\(folder.id\)/)

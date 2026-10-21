@@ -33,13 +33,14 @@ import java.util.concurrent.ThreadPoolExecutor
 import java.util.concurrent.TimeUnit
 import java.util.concurrent.atomic.AtomicBoolean
 
-private const val MAX_READ_BYTES = 64L * 1024 * 1024
+private typealias Folder = MonitoredFolderIo.Folder
 
 /** Only the system tree picker can create a registry entry; no caller-supplied URI is opened. */
 @TauriPlugin
 class MonitoredFolderPlugin(
     private val activity: Activity,
 ) : Plugin(activity) {
+    private val io = MonitoredFolderIo(activity.applicationContext)
     private val resolver get() = activity.contentResolver
     private val preferences = activity.getSharedPreferences("pagewise-monitored-folder", Activity.MODE_PRIVATE)
     private val handler = Handler(Looper.getMainLooper())
@@ -75,18 +76,6 @@ class MonitoredFolderPlugin(
     private class Failure(
         val code: String,
     ) : IOException(code)
-
-    private data class Folder(
-        val id: String,
-        val label: String,
-        val uri: Uri,
-    )
-
-    private data class Directory(
-        val id: String,
-        val path: String,
-        val depth: Int,
-    )
 
     override fun load(webView: WebView) {
         view = webView
@@ -156,53 +145,27 @@ class MonitoredFolderPlugin(
         view = null
     }
 
-    private fun tree(value: String): Uri {
-        val uri = Uri.parse(value)
-        if (uri.scheme != "content" || uri.authority?.matches(
-                Regex("[A-Za-z0-9._-]+"),
-            ) != true || uri.query != null || uri.fragment != null ||
-            uri.pathSegments.size != 2 ||
-            uri.pathSegments[0] != "tree" ||
-            !validId(DocumentsContract.getTreeDocumentId(uri))
-        ) {
-            throw Failure("invalid_reference")
-        }
-        return uri
-    }
+    private fun tree(value: String) = io.tree(value)
 
-    private fun validId(value: String) = value.isNotEmpty() && value.length <= 4096 && value.none { it < ' ' }
+    private fun validId(value: String) = io.validId(value)
 
-    private fun stored(): Folder? {
-        val raw = preferences.getString("selected", null) ?: return null
-        val json = JSONObject(raw)
-        val uri = tree(json.getString("uri"))
-        val id = identity(uri)
-        if (id != json.getString("id")) throw Failure("invalid_reference")
-        return Folder(id, json.getString("label"), uri)
-    }
+    private fun validName(value: String?) = io.validName(value)
 
-    private fun identity(uri: Uri): String =
-        "saf-" +
-            MessageDigest.getInstance("SHA-256").digest(uri.toString().toByteArray(Charsets.UTF_8)).joinToString("") { "%02x".format(it) }
+    private fun stored() = io.stored()
 
-    private fun granted(folder: Folder) = resolver.persistedUriPermissions.any { it.uri == folder.uri && it.isReadPermission }
+    private fun identity(uri: Uri) = io.identity(uri)
 
-    private fun describe(folder: Folder) =
-        JSObject().put("id", folder.id).put("label", folder.label).put("permission", if (granted(folder)) "granted" else "lost")
+    private fun granted(folder: Folder) = io.granted(folder)
 
-    // Mobile Invoke.resolve(null) becomes {}, so nullable folder results need an explicit envelope.
+    private fun describe(folder: Folder) = io.describe(folder)
+
     private fun folderResult(folder: Folder?): JSObject = JSObject().put("folder", folder?.let { describe(it) } ?: JSONObject.NULL)
-
-    private fun authorized(id: String): Folder {
-        val folder = stored() ?: throw Failure("invalid_reference")
-        if (folder.id != id) throw Failure("invalid_reference")
-        if (!granted(folder)) throw Failure("permission_denied")
-        return folder
-    }
 
     private fun code(error: Exception): String =
         when (error) {
             is Failure -> error.code
+            is MonitoredFolderIo.Failure -> error.code
+            is NativeImportFailure -> error.code
             is SecurityException -> "permission_denied"
             is FileNotFoundException -> "not_found"
             is OperationCanceledException -> "unavailable"
@@ -436,187 +399,25 @@ class MonitoredFolderPlugin(
         }
     }
 
-    private fun validName(value: String?) =
-        value != null && value.isNotEmpty() && value.length <= 255 && value != "." && value != ".." &&
-            value.none { it < ' ' || it == '/' || it == '\\' }
-
-    private fun supported(name: String) = Regex("(?i).*\\.(epub|mobi|pdf|txt|md|markdown)$").matches(name)
-
+    // Legacy commands keep their response shape; new callers use durable service jobs.
     @Command
     fun list(invoke: Invoke) =
         work(invoke) { cancellation, deadline ->
-            val folder = authorized(invoke.getArgs().getString("folderId"))
-            val files = JSArray()
-            val errors = JSArray()
-            val errorCodes = mutableSetOf<String>()
-
-            fun error(value: String) {
-                if (errorCodes.size < 32 && errorCodes.add(value)) errors.put(JSObject().put("code", value))
-            }
-            val pending = ArrayDeque<Directory>()
-            pending.add(Directory(DocumentsContract.getTreeDocumentId(folder.uri), "", 0))
-            val seen = mutableSetOf<String>()
-            var entries = 0
-            val columns =
-                arrayOf(
-                    DocumentsContract.Document.COLUMN_DOCUMENT_ID,
-                    DocumentsContract.Document.COLUMN_DISPLAY_NAME,
-                    DocumentsContract.Document.COLUMN_MIME_TYPE,
-                    DocumentsContract.Document.COLUMN_SIZE,
-                    DocumentsContract.Document.COLUMN_LAST_MODIFIED,
-                )
-            while (pending.isNotEmpty()) {
-                if (entries >= 5000) {
-                    error("resource_limit")
-                    break
-                }
-                val directory = pending.removeFirst()
-                if (!seen.add(directory.id)) {
-                    error("invalid_reference")
-                    continue
-                }
-                try {
-                    check(cancellation, deadline)
-                    val children = DocumentsContract.buildChildDocumentsUriUsingTree(folder.uri, directory.id)
-                    val cursor = resolver.query(children, columns, null, null, null, cancellation) ?: throw Failure("unavailable")
-                    cursor.use {
-                        while (it.moveToNext()) {
-                            check(cancellation, deadline)
-                            if (++entries > 5000) {
-                                error("resource_limit")
-                                break
-                            }
-                            val id = it.getString(0)
-                            val name = it.getString(1)
-                            if (!validId(id) || !validName(name)) {
-                                error("invalid_reference")
-                                continue
-                            }
-                            val path = if (directory.path.isEmpty()) name else "${directory.path}/$name"
-                            if (it.getString(2) == DocumentsContract.Document.MIME_TYPE_DIR) {
-                                if (directory.depth >= 8) {
-                                    error("depth_limit")
-                                } else {
-                                    pending.add(Directory(id, path, directory.depth + 1))
-                                }
-                            } else if (supported(name)) {
-                                files.put(
-                                    JSObject()
-                                        .put("documentId", id)
-                                        .put("name", name)
-                                        .put("relativePath", path)
-                                        .put("size", if (it.isNull(3) || it.getLong(3) < 0) JSONObject.NULL else it.getLong(3))
-                                        .put("modifiedAt", if (it.isNull(4) || it.getLong(4) <= 0) JSONObject.NULL else it.getLong(4)),
-                                )
-                            }
-                        }
-                        if (it.extras.getBoolean(DocumentsContract.EXTRA_LOADING, false)) error("provider_loading")
-                    }
-                } catch (failure: Exception) {
-                    error(code(failure))
-                }
-                if (cancellation.isCanceled || SystemClock.elapsedRealtime() >= deadline) break
-            }
-            authorized(folder.id)
-            JSObject().put("files", files).put("complete", errorCodes.isEmpty()).put("errors", errors)
+            io.list(invoke.getArgs().getString("folderId"), cancellation, deadline)
         }
 
     @Command
     fun read(invoke: Invoke) =
         work(invoke, lane = interactiveLane) { cancellation, deadline ->
             val args = invoke.getArgs()
-            val folder = authorized(args.getString("folderId"))
-            val id = args.getString("documentId")
-            if (!validId(id) || id == DocumentsContract.getTreeDocumentId(folder.uri)) throw Failure("invalid_reference")
-            val root = DocumentsContract.buildDocumentUriUsingTree(folder.uri, DocumentsContract.getTreeDocumentId(folder.uri))
-            val document = DocumentsContract.buildDocumentUriUsingTree(folder.uri, id)
-            // Prefix-string checks are not tree membership checks. Fail closed for providers without isChildDocument.
-            if (!DocumentsContract.isChildDocument(resolver, root, document)) throw Failure("invalid_reference")
-            resolver
-                .query(
-                    document,
-                    arrayOf(
-                        DocumentsContract.Document.COLUMN_DISPLAY_NAME,
-                        DocumentsContract.Document.COLUMN_MIME_TYPE,
-                        DocumentsContract.Document.COLUMN_SIZE,
-                    ),
-                    null,
-                    null,
-                    null,
-                    cancellation,
-                )?.use {
-                    if (!it.moveToFirst()) throw Failure("not_found")
-                    if (!supported(it.getString(0)) ||
-                        it.getString(1) == DocumentsContract.Document.MIME_TYPE_DIR
-                    ) {
-                        throw Failure("invalid_reference")
-                    }
-                    val sourceSize = if (it.isNull(2)) null else it.getLong(2)
-                    if ((sourceSize ?: 0L) > MAX_READ_BYTES) throw Failure("resource_limit")
-                } ?: throw Failure("unavailable")
-            check(cancellation, deadline)
-            val descriptor = resolver.openFileDescriptor(document, "r", cancellation) ?: throw Failure("unavailable")
-            val closeOnTimeout =
-                Runnable {
-                    try {
-                        descriptor.close()
-                    } catch (_: IOException) {
-                    }
-                }
-            handler.postDelayed(closeOnTimeout, (deadline - SystemClock.elapsedRealtime()).coerceAtLeast(1))
-            try {
-                // Provider sizes are untrusted (including files that grow during reading). Always spool
-                // with the actual-byte limit; otherwise an understated size can create a huge UTF-16 Base64 string.
-                val result = JSObject().put("path", writeTempDocument(descriptor, cancellation, deadline))
-                try {
-                    check(cancellation, deadline)
-                    authorized(folder.id)
-                    result
-                } catch (error: Exception) {
-                    discard(result)
-                    throw error
-                }
-            } finally {
-                handler.removeCallbacks(closeOnTimeout)
-                descriptor.close()
-            }
+            io.read(args.getString("folderId"), args.getString("documentId"), cancellation, deadline)
         }
 
-    /** 流式写 cache/pagewise-read/<uuid>.bin; 过期临时文件一小时清理。 */
-    private fun writeTempDocument(
-        descriptor: android.os.ParcelFileDescriptor,
-        cancellation: CancellationSignal,
-        deadline: Long,
-    ): String {
-        val dir = File(activity.cacheDir, "pagewise-read")
-        if (!dir.isDirectory && !dir.mkdirs()) throw Failure("io_error")
-        val cutoff = System.currentTimeMillis() - 60L * 60L * 1000L
-        dir.listFiles()?.forEach { file ->
-            if (file.isFile && file.lastModified() < cutoff) file.delete()
+    @Command
+    fun job(invoke: Invoke) =
+        work(invoke, lane = interactiveLane) { _, _ ->
+            NativeFileJobs.command(activity.applicationContext, invoke.getArgs())
         }
-        val target = File(dir, "${UUID.randomUUID()}.bin")
-        try {
-            FileOutputStream(target).use { output ->
-                android.os.ParcelFileDescriptor.AutoCloseInputStream(descriptor).use { stream ->
-                    val buffer = ByteArray(65536)
-                    var written = 0L
-                    while (true) {
-                        check(cancellation, deadline)
-                        val count = stream.read(buffer)
-                        if (count < 0) break
-                        written += count
-                        if (written > MAX_READ_BYTES) throw Failure("resource_limit")
-                        output.write(buffer, 0, count)
-                    }
-                    check(cancellation, deadline)
-                }
-            }
-        } catch (error: Exception) {
-            target.delete()
-            throw error
-        }
-        return "cache/pagewise-read/${target.name}"
-    }
 
     @Command
     fun watch(invoke: Invoke) {

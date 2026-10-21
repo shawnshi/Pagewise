@@ -94,6 +94,15 @@ pub async fn read_monitored_file(
 }
 
 #[tauri::command]
+pub async fn monitored_file_job(
+    app: tauri::AppHandle,
+    action: String,
+    payload: Value,
+) -> Result<Value, FolderError> {
+    call(app, "job", json!({ "action": action, "payload": payload })).await
+}
+
+#[tauri::command]
 pub async fn watch_monitored_folder(
     app: tauri::AppHandle,
     enabled: bool,

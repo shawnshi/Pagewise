@@ -1,7 +1,8 @@
 import { defineStore } from 'pinia'
 import { watch } from 'vue'
+import { getNativeState, hasNativeState, jsonClone, jsonObject, rebaseSettings, settingsDiff, stateError, type JsonObject, type SettingsPatch } from '../services/nativeState.ts'
 import { profileDefaults, defaultTypographyProfile, normalizeTypographyCalibration, calibrationStatus as getCalibrationStatus, type TypographyProfile, type TypographyCalibration } from '../services/readerTypographyProfiles.ts'
-import { normalizeAiProfiles, providerById, type AiProviderProfile } from '../services/aiProviders.ts'
+import { isSelectableAiProvider, normalizeAiProfiles, providerById, type AiProviderProfile } from '../services/aiProviders.ts'
 import type { TypographyApplyPayload } from '../services/readerTypography.ts'
 import { DIM_MAX } from '../services/readingModes/eyeCare.ts'
 import { isTauri } from '../storage/types.ts'
@@ -402,7 +403,7 @@ export interface PagewiseCompanionPrefs {
   density: 'low' | 'normal' | 'high'
   /** 标记类型 (kw: 智能版的重点词) */
   kinds: { key: boolean; term: boolean; note: boolean; kw: boolean }
-  /** 通道: auto (已配置自己的密钥则用自己的, 否则内置) / builtin / own */
+  /** auto / own 仅使用自有服务；builtin 仅保留旧配置，运行时停用。 */
   channel: 'auto' | 'builtin' | 'own'
   /** 体裁手动设置 (bookId → 叙事 / 非叙事), 未设置时自动识别 */
   fiction: Record<string, 'fiction' | 'nonfiction'>
@@ -410,7 +411,7 @@ export interface PagewiseCompanionPrefs {
   chapterCard: boolean
 }
 
-interface SettingsState {
+export interface SettingsState {
   version?: number
   /** 界面语言 */
   language: 'zh' | 'en'
@@ -496,10 +497,10 @@ const defaults: SettingsState = {
   corsProxy: '',
   httpProxy: '',
   libraryRoot: '',
-  aiProvider: 'trial',
-  aiBaseUrl: 'https://lightread-ai.jiangshu.ai/v1',
+  aiProvider: 'deepseek',
+  aiBaseUrl: providerById('deepseek').baseUrl,
   aiApiKey: '',
-  aiModel: 'deepseek-ai/DeepSeek-V4-Flash',
+  aiModel: providerById('deepseek').defaultModel,
   aiProfiles: {},
   dailyGoalMinutes: 30,
   pagewiseCompanion: {
@@ -579,12 +580,60 @@ function firstRunDefaults(): SettingsState {
   return fresh
 }
 
-function load(): SettingsState {
-  try {
-    const raw = localStorage.getItem(STORAGE_KEY)
-    if (!raw) return firstRunDefaults()
-    const saved = JSON.parse(raw)
+/** Strict at the migration boundary: malformed stored values must never turn into fresh defaults. */
+function validateLegacySettings(saved: JsonObject): void {
+  const check = (value: unknown, example: unknown): void => {
+    if (example === null) return
+    if (Array.isArray(example)) {
+      if (!Array.isArray(value)) throw stateError('invalid_legacy_settings')
+    } else if (example && typeof example === 'object') {
+      const record = jsonObject(value)
+      for (const [key, child] of Object.entries(example)) if (Object.hasOwn(record, key)) check(record[key], child)
+    } else if (typeof value !== typeof example || (typeof value === 'number' && !Number.isFinite(value))) {
+      throw stateError('invalid_legacy_settings')
+    }
+  }
+  check(saved, defaults)
+  const maps = ['aiProfiles', 'typographyLanguages', 'typographyBooks']
+  for (const name of maps) if (Object.hasOwn(saved, name)) {
+    for (const value of Object.values(jsonObject(saved[name]))) jsonObject(value)
+  }
+  for (const name of ['typographyLanguages', 'typographyBooks']) if (saved[name] !== undefined) {
+    for (const value of Object.values(jsonObject(saved[name]))) {
+      const typography = jsonObject(value)
+      check(typography, { ...defaults.reader, displayMode: 'optimized', profile: 'auto', paragraphSpacing: 0, textIndent: 0, maxLineLength: 0, publicationBaseline: false })
+    }
+  }
+  if (saved.aiProfiles !== undefined) for (const profile of Object.values(jsonObject(saved.aiProfiles))) {
+    const p = jsonObject(profile)
+    if (['baseUrl', 'apiKey', 'model'].some(key => typeof p[key] !== 'string')) throw stateError('invalid_legacy_ai_profile')
+  }
+  if (saved.typographyCalibration !== undefined && saved.typographyCalibration !== null && !normalizeTypographyCalibration(saved.typographyCalibration)) throw stateError('invalid_legacy_calibration')
+  if (Array.isArray(saved.customFonts) && saved.customFonts.some(value => {
+    const font = jsonObject(value)
+    return typeof font.name !== 'string' || typeof font.file !== 'string'
+  })) throw stateError('invalid_legacy_font')
+  if (saved.version !== undefined && (!Number.isSafeInteger(saved.version) || Number(saved.version) < 1 || Number(saved.version) > SETTINGS_VERSION)) throw stateError('unsupported_settings_version')
+}
+
+export function normalizeLegacySettings(raw: string | null, strict = true): SettingsState {
+    if (raw === null) return firstRunDefaults()
+    const saved = (() => {
+      try { return JSON.parse(raw) } catch { throw stateError('invalid_legacy_settings_json') }
+    })()
+    if (strict) validateLegacySettings(jsonObject(saved))
+    // Old anonymous endpoint/key fields must not inherit a newly selected provider on upgrade.
+    if (saved.aiProvider == null && ['aiBaseUrl', 'aiApiKey', 'aiModel'].some(key => Object.hasOwn(saved, key))) saved.aiProvider = 'custom'
     saved.pagewiseCompanion = readCompanionPreferences(saved)
+    const previousPreset = isSelectableAiProvider(saved.aiProvider) ? providerById(saved.aiProvider) : undefined
+    const previousOwn = !!previousPreset && typeof saved.aiBaseUrl === 'string' && !!saved.aiBaseUrl.trim()
+      && typeof saved.aiModel === 'string' && !!saved.aiModel.trim()
+      && (!previousPreset.needsKey || (typeof saved.aiApiKey === 'string' && !!saved.aiApiKey.trim()))
+    const oldGrants = saved.pagewiseCompanion.consentAll || Object.values(saved.pagewiseCompanion.perBook ?? {}).some(value => value === true)
+    if ((saved.pagewiseCompanion.channel ?? 'auto') === 'auto' && oldGrants && !previousOwn) {
+      // Auto used the removed trial fallback. Archive its grants without authorizing a new destination.
+      saved.pagewiseCompanion.channel = 'builtin'
+    }
     delete saved[LEGACY_COMPANION_SETTINGS_KEY]
     // 退役功能不再进入内存或随后持久化的设置；其余偏好保持不变。
     delete saved.ambient
@@ -651,34 +700,245 @@ function load(): SettingsState {
     merged.readingMode.wordGuide.mark = savedBasicMark(saved.readingMode?.wordGuide?.mark)
     merged.version = SETTINGS_VERSION
     return merged
+}
+
+function load(): SettingsState {
+  if (hasNativeState()) return normalizeLegacySettings(getNativeState().settingsSnapshot().raw)
+  try {
+    const raw = localStorage.getItem(STORAGE_KEY)
+    return normalizeLegacySettings(raw || null, false)
   } catch {
     return structuredClone(defaults)
   }
+}
+
+interface NativeSettingsOwner {
+  $state: SettingsState
+  $patch(patch: (state: SettingsState) => void): void
+}
+/** Disclosure contains paths only; retained credentials never leave this owner. */
+export interface NativeSettingsRecovery {
+  unsavedPaths: string[][]
+  failedCommits: { paths: string[][] }[]
+  decision?: { token: string; retryable: boolean }
+}
+type SettingsIntent = { kind: 'provider'; id: string } | { kind: 'reset' }
+  | { kind: 'typography'; payload: TypographyApplyPayload }
+  | { kind: 'calibration'; value: SettingsState['typographyCalibration'] }
+type SettingsDraft = { before: JsonObject; patches: SettingsPatch[]; explicit: boolean; intent?: SettingsIntent }
+
+interface NativeSettingsPersistence {
+  flush(): Promise<void>
+  stop(): void
+  start(): void
+  commit(patch: Partial<SettingsState>, intent?: SettingsIntent): Promise<void>
+  edit(intent: SettingsIntent, update: () => void): void
+  refresh(): Promise<NativeSettingsRecovery>
+  decide(token: string, choice: 'retry' | 'discard', metrics?: { dpr: number; textScale: number }): Promise<void>
+  onError?: (error: unknown) => void
+}
+const persistence = new WeakMap<NativeSettingsOwner, NativeSettingsPersistence>()
+function nativePersistence(owner: NativeSettingsOwner, onError?: (error: unknown) => void) {
+  const existing = persistence.get(owner)
+  if (existing) {
+    if (onError) existing.onError = onError
+    existing.start()
+    return existing
+  }
+  let observed = jsonObject(jsonClone(owner.$state))
+  let acknowledged = jsonClone(observed)
+  const drafts = new Set<SettingsDraft>()
+  let applying = false, recoveryFence = false, generation = 0, inspectionId = 0
+  let inspection: { token: string; revision: number; raw: string; generation: number } | null = null
+  let retryAttempt: { desired: JsonObject; local: JsonObject; drafts: SettingsDraft[] } | null = null
+  let queue: Promise<unknown> = Promise.resolve()
+  const applyAcknowledged = (sent: JsonObject) => {
+    const canonical = jsonObject(normalizeLegacySettings(getNativeState().settingsSnapshot().raw))
+    const merged = rebaseSettings(canonical, sent, jsonObject(jsonClone(owner.$state)))
+    const normalized = normalizeLegacySettings(JSON.stringify(merged))
+    applying = true
+    try {
+      owner.$patch(target => {
+        for (const key of Object.keys(target)) if (!Object.hasOwn(normalized, key)) Reflect.deleteProperty(target, key)
+        Object.assign(target, normalized)
+      })
+      observed = jsonObject(jsonClone(owner.$state))
+      acknowledged = canonical
+    } finally { applying = false }
+  }
+  const matches = (root: JsonObject, patches: SettingsPatch[]) => patches.every(patch => {
+    let value: unknown = root
+    for (const key of patch.path.slice(0, -1)) {
+      if (!value || typeof value !== 'object' || Array.isArray(value)) return !patch.after.present
+      value = jsonObject(value)[key]
+    }
+    if (!value || typeof value !== 'object' || Array.isArray(value)) return !patch.after.present
+    const parent = jsonObject(value), key = patch.path.at(-1)!
+    return !settingsDiff({ field: Object.hasOwn(parent, key) ? parent[key] : null, present: Object.hasOwn(parent, key) },
+      { field: patch.after.present ? patch.after.value : null, present: patch.after.present }).length
+  })
+  const retain = (before: JsonObject, desired: JsonObject, explicit: boolean, intent?: SettingsIntent) => {
+    const draft = { before: jsonClone(before), patches: settingsDiff(before, desired), explicit, intent: intent && jsonClone(intent) }
+    drafts.add(draft); generation++; inspection = null
+    return draft
+  }
+  const observe = (intent?: SettingsIntent) => {
+    const next = jsonObject(jsonClone(owner.$state)), before = observed
+    observed = next
+    if (!settingsDiff(before, next).length) return
+    const draft = retain(before, next, false, intent)
+    queue = queue.then(async () => {
+      if (recoveryFence) throw stateError('settings_recovery_required')
+      await getNativeState().patchSettings(draft.patches)
+      drafts.delete(draft)
+      applyAcknowledged(next)
+    })
+    // A handled watcher error does not unpoison the queue or remove its retained draft.
+    return controller.onError ? queue.catch(error => controller.onError!(error)) : queue
+  }
+  const subscribe = () => watch(() => owner.$state, () => { if (!applying) return observe() }, { deep: true, flush: 'sync' })
+  let stopWatch: (() => void) | null = subscribe()
+  const retryable = (draft: SettingsDraft) => !!draft.intent || draft.patches.every(p =>
+    p.after.present && (p.after.value === null || typeof p.after.value !== 'object') &&
+    ((p.path.length === 2 && ['reader', 'pdf'].includes(p.path[0]!)) ||
+      (p.path.length === 1 && ['language', 'appearance', 'dailyGoalMinutes', 'autoReadSeconds', 'ttsEngine', 'ttsRate', 'ttsVoice', 'edgeVoice', 'localVoiceId', 'aiBaseUrl', 'aiApiKey', 'aiModel', 'httpProxy', 'corsProxy'].includes(p.path[0]!))))
+  const recover = async (): Promise<NativeSettingsRecovery> => {
+    recoveryFence = true; inspection = null
+    const client = getNativeState()
+    // This entry point must not await flush: its rejected queue is precisely what it repairs.
+    await client.reconcilePendingMutation()
+    await client.refreshSettings()
+    const canonical = jsonObject(normalizeLegacySettings(client.settingsSnapshot().raw))
+    if (retryAttempt && matches(canonical, settingsDiff(acknowledged, retryAttempt.desired))) {
+      for (const draft of retryAttempt.drafts) drafts.delete(draft)
+      applyAcknowledged(retryAttempt.local)
+    } else applyAcknowledged(acknowledged)
+    retryAttempt = null
+    for (const draft of drafts) if (matches(canonical, draft.patches)) drafts.delete(draft)
+    const unsavedPaths = settingsDiff(acknowledged, jsonObject(jsonClone(owner.$state))).map(p => p.path)
+    recoveryFence = unsavedPaths.length > 0 || drafts.size > 0
+    const report: NativeSettingsRecovery = { unsavedPaths, failedCommits: [...drafts].filter(d => d.explicit).map(d => ({ paths: d.patches.map(p => p.path.slice()) })) }
+    if (recoveryFence) {
+      const snapshot = client.settingsSnapshot()
+      inspection = { token: String(++inspectionId), ...snapshot, generation }
+      report.decision = { token: inspection.token, retryable: [...drafts].every(retryable) }
+    }
+    return report
+  }
+  const controller: NativeSettingsPersistence = {
+    onError,
+    async flush() {
+      await queue
+      if (recoveryFence) throw stateError('settings_recovery_required')
+    },
+    refresh() {
+      const task = queue.then(recover, recover)
+      queue = task
+      return task
+    },
+    decide(token, choice, metrics) {
+      const selected = inspection
+      const decide = async () => {
+        recoveryFence = true
+        if (!selected || selected.token !== token || selected.generation !== generation || inspection !== selected) throw stateError('settings_recovery_stale')
+        const client = getNativeState()
+        await client.reconcilePendingMutation()
+        await client.refreshSettings()
+        const snapshot = client.settingsSnapshot()
+        if (snapshot.revision !== selected.revision || snapshot.raw !== selected.raw || selected.generation !== generation) {
+          inspection = null
+          throw stateError('settings_recovery_stale')
+        }
+        const current = jsonObject(normalizeLegacySettings(snapshot.raw))
+        if (choice === 'retry') {
+          let desired = jsonClone(current)
+          const retained = [...drafts]
+          for (const draft of retained) {
+            if (!retryable(draft)) throw stateError('settings_recovery_reentry_required')
+            const intent = draft.intent
+            if (intent?.kind === 'provider') Object.assign(desired, providerSelection(normalizeLegacySettings(JSON.stringify(desired)), intent.id))
+            else if (intent?.kind === 'reset') desired.reader = jsonClone(defaults.reader)
+            else if (intent?.kind === 'typography') {
+              const state = normalizeLegacySettings(JSON.stringify(desired))
+              Object.assign(desired, prepareTypographyCommit(state, intent.payload))
+              const readingMode = jsonObject(desired.readingMode), eyeCare = jsonObject(readingMode.eyeCare)
+              eyeCare.dim = clampNum(intent.payload.dim, 0, DIM_MAX, Number(eyeCare.dim))
+            } else if (intent?.kind === 'calibration') {
+              if (intent.value && (!metrics || !(metrics.dpr >= 0.5 && metrics.dpr <= 8 && metrics.textScale >= 0.5 && metrics.textScale <= 3) || Math.abs(metrics.dpr - intent.value.dpr) > 0.02 || Math.abs(metrics.textScale - intent.value.textScale) > 0.01)) throw stateError('calibration_context_changed')
+              desired.typographyCalibration = jsonClone(intent.value)
+            } else {
+              // Raw credential edits cannot cross a provider switch; structural edits require re-entry.
+              if (draft.patches.some(p => ['aiBaseUrl', 'aiApiKey', 'aiModel'].includes(p.path[0]!)) && draft.before.aiProvider !== current.aiProvider) throw stateError('settings_recovery_reentry_required')
+              for (const p of draft.patches) {
+                let parent = desired
+                for (const key of p.path.slice(0, -1)) parent = jsonObject(parent[key])
+                parent[p.path.at(-1)!] = jsonClone(p.after.value)
+              }
+            }
+          }
+          const local = jsonObject(jsonClone(owner.$state))
+          retryAttempt = { desired, local, drafts: retained }
+          // New command only after receipt resolution AND explicit fresh inspection; CAS fences races after inspection.
+          await client.patchSettings(settingsDiff(current, desired))
+          for (const draft of retained) drafts.delete(draft)
+          retryAttempt = null
+          applyAcknowledged(local)
+        } else {
+          drafts.clear()
+          applyAcknowledged(jsonObject(jsonClone(owner.$state)))
+        }
+        inspection = null
+        recoveryFence = drafts.size > 0 || settingsDiff(acknowledged, jsonObject(jsonClone(owner.$state))).length > 0
+      }
+      const task = queue.then(decide, decide)
+      queue = task
+      return task
+    },
+    edit(intent, update) {
+      applying = true
+      try { update() } finally { applying = false; void observe(intent) }
+    },
+    // Detaching UI observation must not create a second writer or forget a live envelope/draft.
+    start() { if (!stopWatch) { stopWatch = subscribe(); void observe() } },
+    stop() { stopWatch?.(); stopWatch = null },
+    commit(patch, intent) {
+      const before = jsonObject(jsonClone(owner.$state)), desired = { ...before, ...jsonClone(patch) }
+      const draft = retain(before, desired, true, intent)
+      const task = queue.then(async () => {
+        if (recoveryFence) throw stateError('settings_recovery_required')
+        await getNativeState().patchSettings(draft.patches)
+        applyAcknowledged(before)
+        drafts.delete(draft)
+      })
+      queue = task
+      return task
+    },
+  }
+  persistence.set(owner, controller)
+  return controller
+}
+
+function providerSelection(state: SettingsState, id: string) {
+  const preset = providerById(id)
+  if (id === state.aiProvider) return {}
+  const profiles = { ...state.aiProfiles, [state.aiProvider]: { baseUrl: state.aiBaseUrl, apiKey: state.aiApiKey, model: state.aiModel } }
+  const next = state.aiProfiles[id] ?? { baseUrl: preset.baseUrl, apiKey: '', model: preset.defaultModel }
+  return { aiProfiles: profiles, aiProvider: id, aiBaseUrl: next.baseUrl, aiApiKey: next.apiKey, aiModel: next.model }
 }
 
 export const useSettings = defineStore('settings', {
   state: (): SettingsState => load(),
   actions: {
     selectAiProvider(id: string) {
-      const preset = providerById(id)
       if (id === this.aiProvider) return
-      const current: AiProviderProfile = {
-        baseUrl: this.aiBaseUrl, apiKey: this.aiApiKey, model: this.aiModel,
-      }
-      const next = this.aiProfiles[id] ?? {
-        baseUrl: preset.baseUrl, apiKey: '', model: preset.defaultModel,
-      }
-      this.$patch({
-        aiProfiles: { ...this.aiProfiles, [this.aiProvider]: current },
-        aiProvider: id,
-        aiBaseUrl: next.baseUrl,
-        aiApiKey: next.apiKey,
-        aiModel: next.model,
-      })
+      const update = () => this.$patch(providerSelection(this.$state, id))
+      if (hasNativeState()) nativePersistence(this).edit({ kind: 'provider', id }, update)
+      else update()
     },
-    persistOnChange() {
+    persistOnChange(onError?: (error: unknown) => void) {
+      if (hasNativeState()) return nativePersistence(this, onError).stop
       let timer: ReturnType<typeof setTimeout> | undefined
-      watch(
+      return watch(
         () => this.$state,
         state => {
           clearTimeout(timer)
@@ -690,19 +950,36 @@ export const useSettings = defineStore('settings', {
         { deep: true },
       )
     },
+    flushNativeSettings(): Promise<void> {
+      return hasNativeState() ? nativePersistence(this).flush() : Promise.resolve()
+    },
+    reloadNativeSettings(): Promise<NativeSettingsRecovery> {
+      return hasNativeState() ? nativePersistence(this).refresh() : Promise.resolve({ unsavedPaths: [], failedCommits: [] })
+    },
+    commitNativeSettingsEdits(next: JsonObject) {
+      return nativePersistence(this).commit(normalizeLegacySettings(JSON.stringify(next)))
+    },
+    resolveNativeSettingsRecovery(token: string, choice: 'retry' | 'discard', metrics?: { dpr: number; textScale: number }) {
+      if (!hasNativeState()) return Promise.resolve()
+      return nativePersistence(this).decide(token, choice, metrics)
+    },
     resetReader() {
-      this.reader = structuredClone(defaults.reader)
+      const update = () => { this.reader = structuredClone(defaults.reader) }
+      if (hasNativeState()) nativePersistence(this).edit({ kind: 'reset' }, update)
+      else update()
     },
     commitTypography(payload: TypographyApplyPayload) {
       const { typographyLanguages, typographyBooks } = prepareTypographyCommit(this, payload)
       const patch = { typographyLanguages, typographyBooks,
         readingMode: { ...this.readingMode, eyeCare: { ...this.readingMode.eyeCare, dim: clampNum(payload.dim, 0, DIM_MAX, this.readingMode.eyeCare.dim) } } }
+      if (hasNativeState()) return nativePersistence(this).commit(patch, { kind: 'typography', payload })
       localStorage.setItem(STORAGE_KEY, JSON.stringify(serializeCompanionSettings({ ...this.$state, ...patch })))
       this.$patch(state => { Object.assign(state, patch) })
     },
     setTypographyCalibration(value: unknown) {
       const typographyCalibration = value === null ? null : normalizeTypographyCalibration(value)
       if (value !== null && !typographyCalibration) throw new Error('无效的显示校准')
+      if (hasNativeState()) return nativePersistence(this).commit({ typographyCalibration }, { kind: 'calibration', value: typographyCalibration })
       localStorage.setItem(STORAGE_KEY, JSON.stringify(serializeCompanionSettings({ ...this.$state, typographyCalibration })))
       this.typographyCalibration = typographyCalibration
     },

@@ -10,7 +10,7 @@ import { CompanionError, streamPagewiseCompanion, type CompanionChannel } from '
 import { cacheKey, feedbackKey, getCompanionCache, sectionKey, type ChunkRecord, type CompanionCache, type FeedbackRecord, type SectionSummary } from './cache.ts'
 import { decideFiction, fictionFromMeta, fictionFromText, type FictionVerdict } from './fiction.ts'
 import { createCompanionLayer, hitTest, type CompanionLayer, type HitTarget } from './layer.ts'
-import { buildSummarySource, planMarkInput, COMPANION_FALLBACK_MODEL, COMPANION_MODEL, LEGACY_PROMPT_VERSIONS, PROMPT_VERSION } from './prompt.ts'
+import { buildSummarySource, planMarkInput, LEGACY_PROMPT_VERSIONS, PROMPT_VERSION } from './prompt.ts'
 import {
   isCompanionItem,
   keyWordsUsable,
@@ -121,7 +121,6 @@ export class PagewiseCompanion {
   sections = new Map<number, SectionState>()
   status: CompanionStatus = 'idle'
   error: CompanionError | null = null
-  remaining: number | undefined
   active = false
   /** 读者当前位置 (防剧透与预取) */
   position: CompanionPosition | null = null
@@ -267,7 +266,7 @@ export class PagewiseCompanion {
   #models(): string[] {
     const ch = this.host.channel()
     if (!ch) return []
-    return ch.kind === 'builtin' ? [COMPANION_MODEL, COMPANION_FALLBACK_MODEL] : [ch.model ?? '']
+    return [ch.model ?? '']
   }
 
   /** 从缓存补齐本节已完成的块与要义 */
@@ -451,7 +450,6 @@ export class PagewiseCompanion {
         c.items.push(it)
         this.#schedulePaint(s.index)
       }, ctrl.signal)
-      if (typeof res.remaining === 'number') this.remaining = res.remaining
       const total = res.good + res.bad
       const gistBlocks = new Set(c.items.filter(i => i.t === 'gist').map(i => i.block))
       const missingGist = gistBlocks.size === 0 || mark.gistParagraphs.some(p => !gistBlocks.has(c.chunk.blocks[p - 1].block))

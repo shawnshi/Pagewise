@@ -1,5 +1,6 @@
 /** 存储抽象层: Web 走 IndexedDB, 桌面 (Tauri) 走文件系统 + SQLite 索引 */
 import type { BookClassification, BookTaggingMetadata } from '../services/bookClassification'
+import { getNativeState, hasNativeState, stateError } from '../services/nativeState.ts'
 
 /** Includes retired formats solely to preserve existing stored books and archives. */
 export type BookFormat =
@@ -208,6 +209,11 @@ export const isTauri = () =>
 /** 用户自定义的书库根目录 (桌面端); 空为默认应用数据目录.
  *  存储初始化早于 pinia 使用, 直接读 localStorage. */
 export function getLibraryRoot(): string {
+  if (hasNativeState()) {
+    const root = getNativeState().settings().libraryRoot
+    if (typeof root !== 'string') throw stateError('invalid_native_library_root')
+    return root
+  }
   try {
     const raw = localStorage.getItem('lightread-settings')
     return raw ? (JSON.parse(raw).libraryRoot ?? '') : ''

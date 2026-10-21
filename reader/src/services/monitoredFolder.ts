@@ -1,3 +1,5 @@
+import { supportsNativeFileJobs, withNativeFileJob } from './nativeFileJobs.ts'
+
 /** Read-only SAF IO. Browser preview has no persistent directory capability. */
 export interface MonitoredFolderDescriptor {
   id: string
@@ -17,6 +19,7 @@ export interface MonitoredFolderListing {
   errors: Array<{ code: string; message?: string }>
 }
 export type MonitoredFolderErrorCode = 'permission_denied' | 'not_found' | 'unavailable' | 'invalid_reference' | 'io_error' | 'busy'
+  | 'cancelled' | 'timeout' | 'interrupted' | 'background_start_denied' | 'receipt_error' | 'invalid_receipt'
 export class MonitoredFolderError extends Error {
   readonly code: MonitoredFolderErrorCode
   constructor(code: MonitoredFolderErrorCode, message: string = code) { super(message); this.name = 'MonitoredFolderError'; this.code = code }
@@ -48,6 +51,7 @@ function normalize(error: unknown): MonitoredFolderError {
     switch (error.code) {
       case 'permission_denied': case 'not_found': case 'unavailable':
       case 'invalid_reference': case 'io_error': case 'busy':
+      case 'cancelled': case 'timeout': case 'interrupted': case 'background_start_denied': case 'receipt_error': case 'invalid_receipt':
         return new MonitoredFolderError(error.code)
       case 'resource_limit': return new MonitoredFolderError('unavailable', 'File exceeds the monitored-folder read limit')
     }
@@ -166,23 +170,13 @@ function updateObserver(enabled: boolean) {
 const service = createMonitoredFolderService({
   get: () => native() ? invoke('get_monitored_folder') : Promise.resolve(null),
   select: () => invoke('select_monitored_folder'),
-  list: id => invoke('list_monitored_files', { folderId: id }),
+  list: id => supportsNativeFileJobs()
+    ? withNativeFileJob('list', { folderId: id }, async result => result)
+    : invoke('list_monitored_files', { folderId: id }),
   read: async (id, documentId) => {
-    const result = await invoke<{ data?: string; path?: string }>('read_monitored_file', { folderId: id, documentId })
-    if (object(result) && typeof result.path === 'string') {
-      // 大文件由原生写入 app cache, 再用 plugin-fs 二进制读取; 路径由原生生成, 仍做白名单校验。
-      if (!/^cache\/pagewise-read\/[A-Za-z0-9-]{1,64}\.bin$/.test(result.path)) return badResponse()
-      const fs = await import('@tauri-apps/plugin-fs')
-      try {
-        const bytes = await fs.readFile(result.path, { baseDir: fs.BaseDirectory.AppData })
-        if (!(bytes instanceof Uint8Array) || bytes.byteLength > MONITORED_FOLDER_LIMITS.readBytes) return badResponse()
-        return bytes
-      } finally {
-        await fs.remove(result.path, { baseDir: fs.BaseDirectory.AppData }).catch(() => { /* 过期文件由原生兜底清理 */ })
-      }
-    }
-    if (!object(result) || typeof result.data !== 'string' || result.data.length > Math.ceil(MONITORED_FOLDER_LIMITS.readBytes / 3) * 4) return badResponse()
-    return decodeBase64Bytes(result.data)
+    // Old installed shells retain their narrow IO commands; service errors never trigger fallback.
+    if (supportsNativeFileJobs()) return withNativeFileJob('read', { folderId: id, documentId }, readNativeResult)
+    return readNativeResult(await invoke('read_monitored_file', { folderId: id, documentId }))
   },
   watch: async listener => {
     if (!native()) return () => {}
@@ -201,4 +195,20 @@ const service = createMonitoredFolderService({
     }
   },
 })
+async function readNativeResult(result: unknown): Promise<Uint8Array> {
+    if (object(result) && typeof result.path === 'string') {
+      // 大文件由原生写入 app cache, 再用 plugin-fs 二进制读取; 路径由原生生成, 仍做白名单校验。
+      if (!/^cache\/pagewise-read\/[A-Za-z0-9-]{1,64}\.bin$/.test(result.path)) return badResponse()
+      const fs = await import('@tauri-apps/plugin-fs')
+      try {
+        const bytes = await fs.readFile(result.path, { baseDir: fs.BaseDirectory.AppData })
+        if (!(bytes instanceof Uint8Array) || bytes.byteLength > MONITORED_FOLDER_LIMITS.readBytes) return badResponse()
+        return bytes
+      } finally {
+        await fs.remove(result.path, { baseDir: fs.BaseDirectory.AppData }).catch(() => { /* 过期文件由原生兜底清理 */ })
+      }
+    }
+    if (!object(result) || typeof result.data !== 'string' || result.data.length > Math.ceil(MONITORED_FOLDER_LIMITS.readBytes / 3) * 4) return badResponse()
+    return decodeBase64Bytes(result.data)
+}
 export const { getMonitoredFolder, selectMonitoredFolder, listMonitoredFiles, readMonitoredFile, subscribeMonitoredFolderChanges } = service

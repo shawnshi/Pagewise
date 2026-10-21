@@ -4,6 +4,7 @@ import { useRoute } from 'vue-router'
 import { getStorage, isTauri } from '../storage'
 import { useSettings } from '../stores/settings'
 import { serializeCompanionSettings } from '../services/PagewiseCompanion/compatibility.ts'
+import { hasNativeState } from '../services/nativeState.ts'
 import { useLibrary } from '../stores/library'
 import { exportBackup, exportBackupToSink, importBackup, LIBRARY_ARCHIVE_EXTENSION } from '../services/backup'
 import { downloadArchiveBlob, exportLibraryArchiveToDevice } from '../services/archiveExport'
@@ -179,7 +180,7 @@ const aiTestResult = ref('')
 const aiBaseUrlOpen = ref(false)
 const aiReady = computed(() => aiConfigured())
 const aiNeedsKey = computed(() => isSelectableAiProvider(settings.aiProvider) && providerById(settings.aiProvider).needsKey)
-const aiCanEditBaseUrl = computed(() => isSelectableAiProvider(settings.aiProvider) && settings.aiProvider !== 'trial')
+const aiCanEditBaseUrl = computed(() => isSelectableAiProvider(settings.aiProvider))
 const aiShowBaseUrl = computed(() => {
   try {
     const preset = providerById(settings.aiProvider)
@@ -244,6 +245,7 @@ async function testAi() {
 
 const migrating = ref('')
 async function changeLibraryRoot() {
+  if (hasNativeState()) { toast('请使用原生设置；此界面不允许移动原生书库目录。', 'error'); return }
   const { open } = await import('@tauri-apps/plugin-dialog')
   const picked = await open({ directory: true, title: t('settings.pickLibraryFolder') })
   if (typeof picked !== 'string') return
@@ -266,6 +268,7 @@ async function changeLibraryRoot() {
   }
 }
 function resetLibraryRoot() {
+  if (hasNativeState()) { toast('请使用原生设置；此界面不允许重置原生书库目录。', 'error'); return }
   if (!confirm(t('settings.resetLocationConfirm'))) return
   settings.libraryRoot = ''
   localStorage.setItem('lightread-settings', JSON.stringify(serializeCompanionSettings(settings.$state)))

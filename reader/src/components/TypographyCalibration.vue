@@ -19,24 +19,30 @@ onBeforeUnmount(() => window.removeEventListener('resize', refreshFrameMetrics))
 const measuredMm = ref('')
 const message = ref('')
 const failed = ref(false)
+const saving = ref(false)
 const status = computed(() => calibrationStatus(settings.typographyCalibration, dpr.value, textScale.value ?? NaN))
-function saveCalibration() {
+async function saveCalibration() {
+  if (saving.value) return
+  saving.value = true
   message.value = ''; failed.value = false
   try {
     refreshFrameMetrics()
     const width = rulerFrame.value?.contentDocument?.getElementById('ruler')?.getBoundingClientRect().width ?? 0
     const value = measureTypographyCalibration(width, Number(measuredMm.value), dpr.value, textScale.value ?? NaN)
-    settings.setTypographyCalibration(value)
+    await settings.setTypographyCalibration(value)
     message.value = t('reader.calibrationSaved')
   } catch (error) {
     failed.value = true
-    message.value = error instanceof DOMException ? error.message : t('reader.calibrationInvalid')
-  }
+    message.value = error instanceof Error ? error.message : t('reader.calibrationInvalid')
+  } finally { saving.value = false }
 }
-function clearCalibration() {
+async function clearCalibration() {
+  if (saving.value) return
+  saving.value = true
   message.value = ''; failed.value = false
-  try { settings.setTypographyCalibration(null); message.value = t('reader.calibrationCleared') }
+  try { await settings.setTypographyCalibration(null); message.value = t('reader.calibrationCleared') }
   catch (error) { failed.value = true; message.value = error instanceof Error ? error.message : t('reader.calibrationInvalid') }
+  finally { saving.value = false }
 }
 </script>
 
@@ -53,8 +59,8 @@ function clearCalibration() {
       <span>mm</span>
     </label>
     <div class="calibration-actions">
-      <button class="btn btn-sm" type="button" :disabled="textScale === null" @click="saveCalibration">{{ t('reader.calibrationSave') }}</button>
-      <button class="btn btn-sm" type="button" :disabled="!settings.typographyCalibration" @click="clearCalibration">{{ t('reader.calibrationClear') }}</button>
+      <button class="btn btn-sm" type="button" :disabled="saving || textScale === null" @click="saveCalibration">{{ t('reader.calibrationSave') }}</button>
+      <button class="btn btn-sm" type="button" :disabled="saving || !settings.typographyCalibration" @click="clearCalibration">{{ t('reader.calibrationClear') }}</button>
     </div>
     <p v-if="message" :role="failed ? 'alert' : 'status'" class="calibration-note">{{ message }}</p>
   </details>

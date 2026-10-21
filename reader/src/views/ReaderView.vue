@@ -33,7 +33,7 @@ import { TTS_RATE_MAX, TTS_RATE_MIN, TTS_RATE_STOPS, rateText } from '../service
 import { toast } from '../services/toast'
 import { t } from '../i18n'
 import { searchBook, type SearchHit } from '../services/bookSearch'
-import { chatStream, aiConfigured, buildReaderMessages, readerRangeExcerpt, explainPrompt, providerById, READER_QUESTION_LIMIT, type ReaderAssistantContext, type ReaderAssistantMessage } from '../services/ai'
+import { chatStream, aiConfigured, buildReaderMessages, readerRangeExcerpt, explainPrompt, READER_QUESTION_LIMIT, type ReaderAssistantContext, type ReaderAssistantMessage } from '../services/ai'
 import TocList, { type TocItem } from '../components/TocList.vue'
 import ReadingModePanel from '../components/ReadingModePanel.vue'
 import TypographyPanel, { type TypographySection } from '../components/TypographyPanel.vue'
@@ -368,22 +368,6 @@ function aiExplainSelection() {
   sendAi(explainPrompt(settings.language), { kind: 'selection', text: selected.slice(0, 1500), truncated: selected.length > 1500, chapter: '' })
 }
 
-/** 一键改用内置试用通道 (服务端中转, 免注册免密钥) */
-function useTrialAi() {
-  const trial = providerById('trial')
-  settings.aiProvider = trial.id
-  settings.aiBaseUrl = trial.baseUrl
-  settings.aiModel = trial.defaultModel
-}
-
-async function openRegister() {
-  const url = 'https://cloud.siliconflow.cn/'
-  if (isTauri()) {
-    const { openUrl } = await import('@tauri-apps/plugin-opener')
-    await openUrl(url)
-  } else window.open(url, '_blank', 'noopener,noreferrer')
-}
-
 function clearAi() {
   stopAi()
   aiMessages.value = []
@@ -698,7 +682,7 @@ async function applyTypography(payload: TypographyApplyPayload): Promise<{ succe
     await navigateReader(anchor)
     await typographyLayoutReady(currentView)
     if (view !== currentView || !readerContext.current(token)) throw new Error('Reader context changed')
-    settings.commitTypography({ ...payload, textLayoutProtected: !!bookTypographyContext.value.protectedLayout })
+    await settings.commitTypography({ ...payload, textLayoutProtected: !!bookTypographyContext.value.protectedLayout })
     typographyFontWarning.value = false
     pendingTypography.value = null
     await nextTick()
@@ -4079,9 +4063,7 @@ onBeforeRouteLeave(async () => {
             <li>{{ t('ai.step3') }}</li>
           </ol>
           <div class="ai-setup-actions">
-            <button class="btn btn-sm btn-primary" @click="useTrialAi">{{ t('ai.useTrial') }}</button>
-            <button class="btn btn-sm" @click="openRegister">{{ t('ai.register') }}</button>
-            <button class="btn btn-sm" @click="router.push('/settings')">{{ t('ai.goSettings') }}</button>
+            <button class="btn btn-sm btn-primary" @click="router.push('/settings')">{{ t('ai.goSettings') }}</button>
           </div>
           <p class="ai-setup-alt">{{ t('ai.setupAlt') }}</p>
         </div>

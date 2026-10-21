@@ -6,33 +6,14 @@
  */
 import { fetchRemote } from './net'
 import { useSettings } from '../stores/settings'
-import { AI_PROVIDERS, compatibleChatBody, providerById, TRIAL_BASE_URL } from './aiProviders.ts'
+import { AI_PROVIDERS, compatibleChatBody, providerById } from './aiProviders.ts'
 
-export { AI_PROVIDERS, providerById, TRIAL_BASE_URL } from './aiProviders.ts'
+export { AI_PROVIDERS, providerById } from './aiProviders.ts'
 export type { AiProviderPreset, AiProviderProfile } from './aiProviders.ts'
 
 export interface AiMessage {
   role: 'system' | 'user' | 'assistant'
   content: string
-}
-
-/** 匿名设备标识: 首启生成随机 id, 仅用于试用通道按设备限额, 不含任何个人信息 */
-export function trialDeviceId(): string {
-  try {
-    return deviceId()
-  } catch {
-    return 'noid-' + Math.random().toString(36).slice(2, 12)
-  }
-}
-
-function deviceId(): string {
-  const KEY = 'lightread-device-id'
-  let id = localStorage.getItem(KEY)
-  if (!id) {
-    id = crypto.randomUUID()
-    localStorage.setItem(KEY, id)
-  }
-  return id
 }
 
 /** AI 是否已完成必要配置 */
@@ -65,9 +46,7 @@ export async function* chatStream(
     headers: {
       'content-type': 'application/json',
       accept: 'text/event-stream, application/json',
-      ...(preset.id !== 'trial' && s.aiApiKey.trim() ? { authorization: `Bearer ${s.aiApiKey.trim()}` } : {}),
-      // 试用通道: 携带匿名设备标识用于每日配额
-      ...(preset.id === 'trial' && s.aiBaseUrl.trim().replace(/\/+$/, '') === TRIAL_BASE_URL ? { 'x-device-id': deviceId() } : {}),
+      ...(s.aiApiKey.trim() ? { authorization: `Bearer ${s.aiApiKey.trim()}` } : {}),
     },
     body: JSON.stringify(compatibleChatBody({
       model: s.aiModel.trim(),

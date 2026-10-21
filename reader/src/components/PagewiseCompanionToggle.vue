@@ -264,7 +264,6 @@ function openOutline() {
           <button type="button" class="btn btn-sm" @click="dj.switchToBasic()">{{ t('companion.useBasic') }}</button>
           <button v-if="needsSettings" type="button" class="btn btn-sm" @click="emit('open-settings')">{{ t('companion.openSettings') }}</button>
         </div>
-        <p v-if="dj.remaining.value != null && status !== 'quota'" class="dj-hint">{{ t('companion.remaining', { n: dj.remaining.value }) }}</p>
 
         <div class="dj-actions dj-minor">
           <button type="button" class="btn btn-ghost btn-sm" @click="dj.redoSection()">{{ t('companion.redo') }}</button>

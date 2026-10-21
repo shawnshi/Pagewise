@@ -17,7 +17,6 @@ function client(fetchRemote) {
   vm.runInNewContext(code, { exports, TextDecoder, require(id) {
     if (id === '../net') return { fetchRemote }
     if (id === '../aiProviders.ts') return { compatibleChatBody }
-    if (id === '../ai') return { TRIAL_BASE_URL: 'https://synthetic.invalid/v1', trialDeviceId: () => 'synthetic-test-device' }
     if (id === './prompt.ts') return prompt
     if (id === './protocol.ts') return protocol
     throw Error('Unexpected dependency: ' + id)
@@ -68,32 +67,29 @@ test('RA-SOURCE-01: long-paragraph numbering is budgeted and an unfit sentence f
   }
 })
 
-test('RA-RELAY-01: old metadata or mismatched response revision never accepts old mark/summary output', async () => {
-  for (const mode of ['mark', 'summary']) for (const variant of ['old-metadata', 'missing-header', 'wrong-header']) {
+test('retired builtin mark/summary channels fail closed without metadata, device IDs or document requests', async () => {
+  for (const mode of ['mark', 'summary', 'translate']) {
     const calls = [], accepted = []
-    const runtime = client(async (url, _proxy, init = {}) => {
-      calls.push({ url, method: init.method ?? 'GET' })
-      if (url.endsWith('/models')) return new Response(JSON.stringify({ data: [], ...(variant === 'old-metadata' ? {} : { dianjingPromptVersion: prompt.PROMPT_VERSION }) }), { headers: { 'content-type': 'application/json' } })
-      return new Response(mode === 'summary' ? '{"t":"sum","text":"Old summary"}\n' : rows,
-        { headers: { 'content-type': 'application/x-ndjson', ...(variant === 'wrong-header' ? { 'x-dj-prompt-version': 'dj2' } : {}) } })
-    })
-    await assert.rejects(runtime.streamPagewiseCompanion(req(mode), { kind: 'builtin', baseUrl: 'https://synthetic.invalid/v1' }, raw => accepted.push(raw)), e => e.code === 'version')
-    assert.equal(accepted.length, 0)
-    if (variant === 'old-metadata') assert.deepEqual(calls.map(c => c.method), ['GET'], 'No billed/document POST to an unverified relay')
+    const runtime = client(async (...args) => { calls.push(args); throw Error('Network forbidden') })
+    await assert.rejects(runtime.streamPagewiseCompanion(req(mode), { kind: 'builtin', baseUrl: 'https://synthetic.invalid/v1' }, raw => accepted.push(raw)), e => e.code === 'config')
+    assert.deepEqual(calls, [])
+    assert.deepEqual(accepted, [])
   }
 })
 
-test('RA-RELAY-01: actual worker advertises its effective version and attested current NDJSON succeeds', async () => {
-  const res = await worker.fetch(new Request('https://synthetic.invalid/v1/models'), {}, { waitUntil() {} })
-  assert.equal((await res.json()).dianjingPromptVersion, prompt.PROMPT_VERSION)
-  assert.match(res.headers.get('access-control-expose-headers'), /x-dj-prompt-version/i)
+test('own service streams bounded current output without consulting the retired relay', async () => {
+  // Standalone server code is not an application route and is not deployed by this task.
+  const metadata = await worker.fetch(new Request('https://synthetic.invalid/v1/models'), {}, { waitUntil() {} })
+  assert.equal((await metadata.json()).dianjingPromptVersion, prompt.PROMPT_VERSION)
   const calls = [], accepted = []
   const runtime = client(async (url, _proxy, init = {}) => {
-    calls.push(init.method ?? 'GET')
-    if (url.endsWith('/models')) return new Response(JSON.stringify({ dianjingPromptVersion: prompt.PROMPT_VERSION }), { headers: { 'content-type': 'application/json' } })
-    return new Response(rows, { headers: { 'content-type': 'application/x-ndjson', 'x-dj-prompt-version': prompt.PROMPT_VERSION, 'x-dj-model': 'synthetic' } })
+    calls.push({ url, init })
+    return new Response(JSON.stringify({ choices: [{ finish_reason: 'stop', message: { content: rows } }] }), { headers: { 'content-type': 'application/json' } })
   })
-  const result = await runtime.streamPagewiseCompanion(req('mark'), { kind: 'builtin', baseUrl: 'https://synthetic.invalid/v1' }, raw => accepted.push(raw))
+  const result = await runtime.streamPagewiseCompanion(req('mark'), { kind: 'own', baseUrl: 'https://synthetic.invalid/v1', apiKey: 'synthetic-key', model: 'synthetic' }, raw => accepted.push(raw))
   assert.equal(result.good, 2); assert.equal(result.bad, 0); assert.equal(accepted.length, 2)
-  assert.deepEqual(calls, ['GET', 'POST'])
+  assert.equal(calls.length, 1)
+  assert.equal(calls[0].url, 'https://synthetic.invalid/v1/chat/completions')
+  assert.equal(calls[0].init.headers.authorization, 'Bearer synthetic-key')
+  assert.equal(calls[0].init.headers['x-device-id'], undefined)
 })

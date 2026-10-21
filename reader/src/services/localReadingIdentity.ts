@@ -11,6 +11,14 @@ export interface ReadingIdentity {
 
 /** Keep the historical identity and hash mapping without opening baseline or account values. */
 export function createReadingIdentity(): ReadingIdentity {
+  const host = typeof window === 'undefined' ? undefined : window as Window & { LightReadInsets?: { nativeStorageVersion?: () => number } }
+  if (host?.LightReadInsets?.nativeStorageVersion?.() === 1) {
+    const native = () => import('./nativeState.ts').then(({ getNativeState }) => getNativeState().identity())
+    return {
+      getDeviceId: async () => (await native()).getDeviceId(),
+      getHashes: async () => (await native()).getHashes(),
+    }
+  }
   type Db = Dexie & { kv: Table<KvRow, string>; hashes: Table<HashRow, string> }
   let dbPromise: Promise<Db> | null = null
   const db = () => {

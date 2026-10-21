@@ -4,19 +4,19 @@ import { createPinia, setActivePinia } from 'pinia'
 import { AI_PROVIDERS, AI_MODEL_CATALOG_VERIFIED_AT, aiModelOptions, compatibleChatBody, normalizeAiProfiles, providerById } from '../src/services/aiProviders.ts'
 import { useSettings } from '../src/stores/settings.ts'
 
-const latest = { trial: 'deepseek-ai/DeepSeek-V4-Flash', deepseek: 'deepseek-flash', openai: 'gpt-6.1-sol', gemini: 'gemini-4-argon', openrouter: 'openai/gpt-6.1-sol' }
+const latest = { deepseek: 'deepseek-flash', openai: 'gpt-6.1-sol', gemini: 'gemini-4-argon', openrouter: 'openai/gpt-6.1-sol' }
 
-test('exactly five services expose verified model defaults and dropdown choices', () => {
+test('exactly four own-key services expose verified model defaults and dropdown choices', () => {
   assert.deepEqual(AI_PROVIDERS.map(p => p.id), Object.keys(latest))
   assert.equal(AI_MODEL_CATALOG_VERIFIED_AT, '2026-10-20')
   for (const p of AI_PROVIDERS) {
     assert.equal(p.defaultModel, latest[p.id])
-    assert.equal(p.needsKey, p.id !== 'trial')
+    assert.equal(p.needsKey, true)
     assert.ok(p.models.some(model => model.id === p.defaultModel))
     assert.equal(new Set(p.models.map(model => model.id)).size, p.models.length)
     assert.ok(p.baseUrl.startsWith('https://'))
   }
-  for (const retired of ['custom', 'siliconflow', 'zhipu', 'qwen', 'kimi', 'doubao', 'ollama']) assert.throws(() => providerById(retired), /unknown provider/)
+  for (const retired of ['trial', 'custom', 'siliconflow', 'zhipu', 'qwen', 'kimi', 'doubao', 'ollama']) assert.throws(() => providerById(retired), /unknown provider/)
   assert.ok(aiModelOptions('openrouter').some(model => model.id === 'openrouter/auto'))
 })
 
@@ -31,8 +31,8 @@ test('saved explicit models remain selectable without mutating the provider cata
 
 test('retired profile archives survive normalization without becoming selectable', () => {
   const profile = { baseUrl: 'https://synthetic.invalid/v1', apiKey: 'synthetic-retained-key', model: 'synthetic-saved' }
-  const normalized = normalizeAiProfiles({ siliconflow: profile, openai: profile, unknown: profile, gemini: { ...profile, apiKey: null } })
-  assert.deepEqual(normalized, { siliconflow: profile, openai: profile })
+  const normalized = normalizeAiProfiles({ trial: profile, siliconflow: profile, openai: profile, unknown: profile, gemini: { ...profile, apiKey: null } })
+  assert.deepEqual(normalized, { trial: profile, siliconflow: profile, openai: profile })
   assert.throws(() => providerById('siliconflow'))
   assert.deepEqual(normalizeAiProfiles(null), {})
   assert.deepEqual(normalizeAiProfiles([]), {})
@@ -48,7 +48,7 @@ test('real settings provider switches use separate credentials and never activat
     settings = useSettings()
     assert.equal(settings.aiProvider, 'siliconflow', 'do not silently switch the user to a different service')
     assert.equal(settings.aiProfiles.siliconflow.apiKey, 'synthetic-legacy-only')
-    for (const provider of ['deepseek', 'openai', 'gemini', 'openrouter', 'trial']) {
+    for (const provider of ['deepseek', 'openai', 'gemini', 'openrouter']) {
       settings.selectAiProvider(provider)
       assert.equal(settings.aiApiKey, '')
       assert.equal(settings.aiModel, latest[provider])

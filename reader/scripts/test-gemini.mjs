@@ -106,18 +106,13 @@ test('legacy settings never silently migrate active provider/model/URL/key', () 
   ]) {
     const s = reset(data)
     for (const field of ['aiProvider', 'aiBaseUrl', 'aiApiKey', 'aiModel']) assert.equal(s[field], data[field], field)
-    if (data.aiProvider !== 'trial') assert.equal(aiConfigured(), false)
+    assert.equal(aiConfigured(), false)
     s.selectAiProvider('gemini')
     assert.equal(s.aiApiKey, '')
-    if (data.aiProvider === 'trial') {
-      s.selectAiProvider(data.aiProvider)
-      for (const field of ['aiProvider', 'aiBaseUrl', 'aiApiKey', 'aiModel']) assert.equal(s[field], data[field], field)
-    } else {
-      assert.equal(s.aiProfiles[data.aiProvider].apiKey, data.aiApiKey)
-      assert.throws(() => s.selectAiProvider(data.aiProvider), /unknown provider/)
-      assert.equal(s.aiProvider, 'gemini')
-      assert.equal(s.aiApiKey, '')
-    }
+    assert.equal(s.aiProfiles[data.aiProvider].apiKey, data.aiApiKey)
+    assert.throws(() => s.selectAiProvider(data.aiProvider), /unknown provider/)
+    assert.equal(s.aiProvider, 'gemini')
+    assert.equal(s.aiApiKey, '')
   }
 })
 
@@ -233,11 +228,49 @@ test('current OpenAI/OpenRouter model requests omit unsupported sampling without
   }
 })
 
-test('built-in trial never forwards a user API key', async () => {
+test('retired trial settings remain inert even with an archived user key', async () => {
+  reset({ version: 16, aiProvider: 'trial', aiBaseUrl: 'https://old-trial.invalid/v1', aiModel: 'legacy-model', aiApiKey: 'synthetic-retained-key' })
+  assert.equal(aiConfigured(), false)
+  await assert.rejects(collect(), /unknown provider/i)
+  assert.equal(transport.calls.length, 0)
+})
+
+test('legacy unnamed AI fields are archived instead of inheriting a different active provider', () => {
+  const data = { version: 16, aiBaseUrl: 'https://synthetic.invalid/legacy', aiApiKey: 'synthetic-key', aiModel: 'saved' }
+  const s = reset(data)
+  assert.equal(s.aiProvider, 'custom')
+  assert.equal(s.aiBaseUrl, data.aiBaseUrl)
+  assert.equal(s.aiApiKey, data.aiApiKey)
+  assert.equal(aiConfigured(), false)
+  s.selectAiProvider('openai')
+  assert.deepEqual(s.aiProfiles.custom, { baseUrl: data.aiBaseUrl, apiKey: data.aiApiKey, model: data.aiModel })
+})
+
+test('auto trial grants cannot silently follow later own-key configuration; prior own grants stay intact', () => {
+  const grants = { level: 'smart', enabled: true, consentAll: true, perBook: { one: true }, channel: 'auto' }
+  for (const ai of [
+    { aiProvider: 'trial', aiBaseUrl: 'https://synthetic.invalid/v1', aiApiKey: '', aiModel: 'saved' },
+    { aiProvider: 'deepseek', aiBaseUrl: 'https://synthetic.invalid/v1', aiApiKey: '', aiModel: 'saved' },
+  ]) {
+    const s = reset({ version: 16, ...ai, pagewiseCompanion: grants })
+    assert.equal(s.pagewiseCompanion.channel, 'builtin')
+    s.selectAiProvider('openai'); s.aiApiKey = 'synthetic-own-key'
+    assert.equal(s.pagewiseCompanion.channel, 'builtin', 'settings changes do not transfer the old grant')
+    assert.equal(s.pagewiseCompanion.perBook.one, true, 'the obsolete preference remains archived')
+  }
+  const own = reset({ version: 16, aiProvider: 'openai', aiBaseUrl: 'https://synthetic.invalid/v1', aiApiKey: 'synthetic-own-key', aiModel: 'saved', pagewiseCompanion: grants })
+  assert.equal(own.pagewiseCompanion.channel, 'auto')
+  assert.equal(own.pagewiseCompanion.consentAll, true)
+  assert.equal(own.pagewiseCompanion.perBook.one, true)
+})
+
+test('fresh defaults never supply a trial service or credentials', async () => {
   const s = reset()
-  s.aiApiKey = 'synthetic-must-not-reach-trial'
-  assert.deepEqual(await collect(), ['OK'])
-  assert.equal(transport.calls[0][2].headers.authorization, undefined)
+  assert.equal(s.aiProvider, 'deepseek')
+  assert.equal(s.aiApiKey, '')
+  assert.equal(aiConfigured(), false)
+  await assert.rejects(collect(), /key/i)
+  assert.equal(transport.calls.length, 0)
 })
 
 test('DONE and early consumer exit cancel unread stream and release lock', async () => {

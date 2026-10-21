@@ -26,6 +26,9 @@ type EpdBridgeHost = {
     notifyEpdPageTurn?: () => string
     setEpdFastMode?: (enabled: boolean, scene: string, mode: string) => string
     repaintEpd?: (mode: string) => string
+    scheduleEpdFastExit?: (delayMs: number) => void
+    scheduleEpdOverlayRepaint?: (mode: string, delayMs: number) => void
+    getEpdStatus?: () => string
   }
 }
 
@@ -58,6 +61,8 @@ class OnyxEpdService {
   }
 
   getStatus(): OnyxEpdStatus {
+    const raw = this.bridge()?.getEpdStatus?.()
+    if (raw) this.syncFromJson(raw, true)
     return { ...this.state }
   }
 
@@ -75,6 +80,11 @@ class OnyxEpdService {
   }
 
   notifyPageTurn(host?: EpdBridgeHost): OnyxEpdStatus {
+    const bridge = this.bridge(host)
+    if (bridge?.getEpdStatus && bridge.notifyEpdPageTurn) {
+      this.syncFromJson(bridge.notifyEpdPageTurn(), true)
+      return this.getStatus()
+    }
     if (this.state.fastMode) return this.getStatus()
     this.state.pageTurnCount += 1
     if (this.state.gcIntervalPages > 0 && this.state.pageTurnCount >= this.state.gcIntervalPages) {
@@ -101,7 +111,7 @@ class OnyxEpdService {
     this.state.fastMode = true
     this.state.scene = scene
     this.state.mode = mode
-    if (!alreadyInSameFastMode) {
+    if (!alreadyInSameFastMode || this.bridge(host)?.scheduleEpdFastExit) {
       try {
         const raw = this.bridge(host)?.setEpdFastMode?.(true, scene, mode)
         if (raw) this.syncFromJson(raw)
@@ -116,7 +126,13 @@ class OnyxEpdService {
     if (this.fastExitTimer !== null) {
       clearTimeout(this.fastExitTimer)
     }
-    const safeDelay = Math.max(16, Math.min(2000, Math.round(delayMs)))
+    const safeDelay = Number.isFinite(delayMs) ? Math.max(16, Math.min(2000, Math.round(delayMs))) : 180
+    const bridge = this.bridge(host)
+    if (bridge?.scheduleEpdFastExit) {
+      this.fastExitTimer = null
+      bridge.scheduleEpdFastExit(safeDelay)
+      return
+    }
     this.fastExitTimer = setTimeout(() => {
       this.fastExitTimer = null
       this.exitFastModeNow(host)
@@ -132,7 +148,7 @@ class OnyxEpdService {
     this.state.fastMode = false
     this.state.scene = ''
     this.state.mode = this.state.defaultMode
-    if (wasFast) {
+    if (wasFast || this.bridge(host)?.scheduleEpdFastExit) {
       try {
         const raw = this.bridge(host)?.setEpdFastMode?.(false, '', 'regal')
         if (raw) this.syncFromJson(raw)
@@ -161,10 +177,17 @@ class OnyxEpdService {
     if (this.overlayRepaintTimer !== null) {
       clearTimeout(this.overlayRepaintTimer)
     }
+    const safeDelay = Number.isFinite(delayMs) ? Math.max(0, Math.min(2000, Math.round(delayMs))) : 32
+    const bridge = this.bridge(host)
+    if (bridge?.scheduleEpdOverlayRepaint) {
+      this.overlayRepaintTimer = null
+      bridge.scheduleEpdOverlayRepaint(mode, safeDelay)
+      return
+    }
     this.overlayRepaintTimer = setTimeout(() => {
       this.overlayRepaintTimer = null
       this.repaint(mode, host)
-    }, Math.max(0, delayMs))
+    }, safeDelay)
   }
 
   resetForTest(): void {
@@ -182,10 +205,19 @@ class OnyxEpdService {
     }
   }
 
-  private syncFromJson(raw: string): void {
+  private syncFromJson(raw: string, authoritative = false): void {
     try {
       const parsed = JSON.parse(raw) as Partial<OnyxEpdStatus>
       if (!parsed || typeof parsed !== 'object') return
+      // Command replies can precede their UI-thread action, especially on installed old shells.
+      // Only the new explicit status endpoint may replace the pending local mode intent.
+      if (authoritative) {
+        const modes: OnyxEpdMode[] = ['regal', 'gc', 'gu', 'du', 'a2']
+        if (parsed.mode && modes.includes(parsed.mode)) this.state.mode = parsed.mode
+        if (parsed.defaultMode && modes.includes(parsed.defaultMode)) this.state.defaultMode = parsed.defaultMode
+        if (typeof parsed.fastMode === 'boolean') this.state.fastMode = parsed.fastMode
+        if (typeof parsed.scene === 'string') this.state.scene = parsed.scene
+      }
       if (typeof parsed.gcIntervalPages === 'number') {
         this.state.gcIntervalPages = clampGcIntervalPages(parsed.gcIntervalPages, this.state.gcIntervalPages)
       }

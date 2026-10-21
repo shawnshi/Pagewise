@@ -18,7 +18,11 @@ import { initSystemTts } from './services/systemTts'
 
 const settings = useSettings()
 const library = useLibrary()
-settings.persistOnChange()
+const stopSettingsPersistence = settings.persistOnChange(() => {
+  toast(settings.language === 'en'
+    ? 'Settings were not confirmed saved. Keep this app open and reconcile before retrying.'
+    : '设置尚未确认保存，请保持应用开启并核对，避免重复提交。', 'error', 12000)
+})
 useAppearance()
 const route = useRoute()
 const router = useRouter()
@@ -86,6 +90,7 @@ async function recoverFromLocalTtsCrash() {
 onBeforeUnmount(() => {
   disposed = true
   stopPerformanceProbe?.()
+  stopSettingsPersistence()
   stopReaderActivity()
   readerActivity.dispose()
   stopExternalOpen?.()

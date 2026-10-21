@@ -1,8 +1,8 @@
 import test from 'node:test'
 import assert from 'node:assert/strict'
-import { existsSync, readdirSync, readFileSync, mkdirSync, writeFileSync } from 'node:fs'
+import { readFileSync, mkdirSync, writeFileSync } from 'node:fs'
 import { join, resolve, delimiter } from 'node:path'
-import { homedir } from 'node:os'
+import { toolchain } from './native-import-test-tools.mjs'
 import { spawnSync } from 'node:child_process'
 
 // Real production command bodies, scaled byte ceilings and controlled Android/filesystem faults.
@@ -91,7 +91,7 @@ private const val MAX_IMPORT_BYTES = 1024L
 ${constants}
 annotation class Command
 class JSObject
-class Args(private val values: Map<String, String>) { fun getString(key: String): String = values.getValue(key) }
+class Args(private val values: Map<String, String>) { fun getString(key: String): String = values.getValue(key); fun optString(key:String)=values[key]?:"" }
 class Invoke(val values: Map<String, String>) {
     var status = "pending"
     fun getArgs() = Args(values)
@@ -105,7 +105,7 @@ ${lifecycle}
 ${helpers}
 ${baseline ? `    private fun run(invoke: Invoke, timeoutMs: Long = 30000, action: () -> JSObject?) {
         try { invoke.resolve(action()) } catch(e: Exception) { invoke.reject(if(e is Failure) e.code else "io_error") }
-    }` : `    private fun run(invoke: Invoke, timeoutMs: Long = 30000, action: (Operation) -> JSObject?) {
+    }` : `    private fun run(invoke: Invoke, timeoutMs: Long = 30000, importPath: String? = null, action: (Operation) -> JSObject?) {
         val operation = Operation(invoke)
         try { if (operation.start()) operation.finish(action(operation)) } catch(e: Exception) { operation.finish(null, e) }
     }`}
@@ -160,13 +160,7 @@ fun main(args: Array<String>) {
     println("PASS: $assertions native export commit assertions; host filesystem faults, scaled limits; no timeout/provider claim")
 }
 `)
-  const modules = join(homedir(), '.gradle/caches/modules-2/files-2.1')
-  const jars = (path) => existsSync(path) ? readdirSync(path, { recursive: true, withFileTypes: true }).filter(e => e.isFile() && e.name.endsWith('.jar')).map(e => join(e.parentPath, e.name)) : []
-  const jar = (g, a, v) => { const found = jars(join(modules, g, a, v)); assert.equal(found.length, 1, `${a}:${v}`); return found[0] }
-  const stdlib = jar('org.jetbrains.kotlin', 'kotlin-stdlib', '1.9.25')
-  const compiler = [jar('org.jetbrains.kotlin', 'kotlin-compiler-embeddable', '1.9.25'), stdlib,
-    jar('org.jetbrains.kotlin', 'kotlin-script-runtime', '1.9.25'), jar('org.jetbrains.kotlin', 'kotlin-reflect', '1.6.10'),
-    jar('org.jetbrains.intellij.deps', 'trove4j', '1.0.20200330'), ...jars(join(modules, 'org.jetbrains', 'annotations'))]
+  const tools = toolchain(), compiler = tools.compiler, stdlib = tools.stdlib
   const compile = spawnSync('java', ['-cp', compiler.join(delimiter), 'org.jetbrains.kotlin.cli.jvm.K2JVMCompiler', '-no-stdlib', '-no-reflect', '-jvm-target', '1.8', '-classpath', stdlib, '-d', join(out, 'classes'), base64, os, io, host], { encoding: 'utf8', timeout: 90000 })
   writeFileSync(join(out, 'compile.log'), JSON.stringify({ exitCode: compile.status }) + '\n' + compile.stdout + compile.stderr)
   assert.equal(compile.status, 0, compile.error?.message ?? compile.stdout + compile.stderr)

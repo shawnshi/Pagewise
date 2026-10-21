@@ -43,18 +43,18 @@ function compile(label, inputs, classpath) {
 const mode = process.argv[2] ?? 'host'
 if (mode === 'android') {
   const project = join(root, 'reader/src-tauri/gen/android')
-  const classpath = [join(home, 'AppData/Local/Android/Sdk/platforms/android-32/android.jar'), stdlib,
+  const classpath = [join(home, 'AppData/Local/Android/Sdk/platforms/android-36/android.jar'), stdlib,
     join(home, '.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/tauri-2.11.5/mobile/android/build/intermediates/compile_library_classes_jar/debug/bundleLibCompileToJarDebug/classes.jar'),
     join(project, 'app/build/tmp/kotlin-classes/universalDebug'),
     ...files(join(home, '.gradle/caches/8.14.3/transforms'), 'classes.jar'),
     jar('androidx.lifecycle', 'lifecycle-common', '2.5.1')]
   for (const input of classpath) if (!existsSync(input)) throw Error(`Missing installed Android compile input: ${input}`)
   writeFileSync(join(out, 'android-inputs.json'), JSON.stringify(classpath, null, 2))
-  compile('android', ['MainActivity.kt', 'ReaderWindowState.kt', 'OnyxSdkBridge.kt', 'MonitoredFolderPlugin.kt', 'ExportPlugin.kt'].map(p => join(root, 'reader/src-tauri/android', p)), classpath)
+  compile('android', ['MainActivity.kt', 'ReaderWindowState.kt', 'OnyxSdkBridge.kt', 'MonitoredFolderPlugin.kt', 'MonitoredFolderIo.kt', 'NativeFileJobs.kt', 'ExportPlugin.kt'].map(p => join(root, 'reader/src-tauri/android', p)), classpath)
 } else if (mode === 'host') {
-  const folder = readFileSync(join(root, 'reader/src-tauri/android/MonitoredFolderPlugin.kt'), 'utf8')
+  const folder = readFileSync(join(root, 'reader/src-tauri/android/MonitoredFolderIo.kt'), 'utf8')
   const start = folder.indexOf('    private fun writeTempDocument(')
-  const end = folder.indexOf('    @Command\n    fun watch(', start)
+  const end = folder.lastIndexOf('\n}')
   if (start < 0 || end < start) throw Error('Production copy method could not be located; host extraction must be reviewed')
   const method = folder.slice(start, end).replace('private fun writeTempDocument', 'fun writeTempDocument')
   const limit = folder.match(/private const val MAX_READ_BYTES = ([^\r\n]+)/)?.[1]
@@ -76,7 +76,7 @@ import android.os.ParcelFileDescriptor
 private const val MAX_READ_BYTES = ${limit}
 class CancellationSignal(var remainingChecks: Int = Int.MAX_VALUE)
 class HostActivity(val cacheDir: File)
-class SpoolHost(val activity: HostActivity) {
+class SpoolHost(val context: HostActivity) {
     class Failure(val code: String) : Exception(code)
     private fun check(cancellation: CancellationSignal, deadline: Long) {
         if (--cancellation.remainingChecks <= 0) throw Failure("cancelled")

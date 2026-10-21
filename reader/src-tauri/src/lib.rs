@@ -6,6 +6,8 @@ mod export_file;
 mod fonts;
 #[cfg(target_os = "android")]
 mod monitored_folder;
+#[cfg(target_os = "android")]
+mod native_pages;
 mod system_tts;
 
 use std::{collections::HashSet, path::Path, sync::Mutex};
@@ -142,6 +144,9 @@ pub fn run() {
             monitored_folder::select_monitored_folder,
             monitored_folder::list_monitored_files,
             monitored_folder::read_monitored_file,
+            monitored_folder::monitored_file_job,
+            native_pages::native_state,
+            native_pages::native_page,
             export_file::begin_export,
             export_file::append_export,
             export_file::write_export,
@@ -163,6 +168,8 @@ pub fn run() {
         .plugin(tauri_plugin_sql::Builder::new().build())
         .plugin(tauri_plugin_fs::init())
         .plugin(monitored_folder::init())
+        .plugin(native_pages::init())
+        .plugin(native_pages::init_pages())
         .plugin(export_file::init())
         .plugin(system_tts::init())
         .plugin(tauri_plugin_http::init())

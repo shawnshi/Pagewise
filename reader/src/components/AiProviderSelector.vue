@@ -20,7 +20,7 @@ function selectProvider(event: Event) {
     <select id="ai-provider" :value="isSelectableAiProvider(settings.aiProvider) ? settings.aiProvider : ''" class="input ai-provider-control" @change="selectProvider">
       <option v-if="!isSelectableAiProvider(settings.aiProvider)" value="" disabled>{{ t('settings.aiChooseSupported') }}</option>
       <option v-for="p in AI_PROVIDERS" :key="p.id" :value="p.id">
-        {{ p.label }}{{ p.id === 'trial' ? t('settings.aiTrialTag') : '' }}
+        {{ p.label }}
       </option>
     </select>
     <p v-if="!isSelectableAiProvider(settings.aiProvider)" class="provider-retired" role="status">{{ t('settings.aiRetiredProvider') }}</p>

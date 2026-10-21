@@ -80,7 +80,12 @@ pub async fn system_tts_session(
     action: String,
     payload: Value,
 ) -> Result<Value, TtsError> {
-    call(app, "session", json!({ "action": action, "payload": payload })).await
+    call(
+        app,
+        "session",
+        json!({ "action": action, "payload": payload }),
+    )
+    .await
 }
 
 #[tauri::command]

@@ -1,4 +1,7 @@
 import { createRouter, createWebHashHistory } from 'vue-router'
+import type { Component } from 'vue'
+import { hasNativePages } from '../services/nativePages'
+const managed = (load: () => Promise<{ default: Component }>) => () => hasNativePages() ? import('../views/NativePageView.vue') : load()
 import { bookFileProblem } from '../services/bookAvailability'
 import { saveLibrarySession } from '../services/librarySession'
 import { isSupportedBookFormat } from '../services/format'
@@ -12,10 +15,10 @@ export const router = createRouter({
   history: createWebHashHistory(),
   routes: [
     { path: '/', redirect: () => { try { return restoreView(localStorage) } catch { return '/library' } } },
-    { path: '/library', component: () => import('../views/LibraryView.vue') },
-    { path: '/reading', component: () => import('../views/ReadingView.vue') },
-    { path: '/book/:id', component: () => import('../views/BookDetailView.vue') },
-    { path: '/notes', component: () => import('../views/NotesView.vue') },
+    { path: '/library', component: managed(() => import('../views/LibraryView.vue')) },
+    { path: '/reading', component: managed(() => import('../views/ReadingView.vue')) },
+    { path: '/book/:id', component: managed(() => import('../views/BookDetailView.vue')) },
+    { path: '/notes', component: managed(() => import('../views/NotesView.vue')) },
     // 论文功能已退休, 旧路由重定向至藏书与通用 PDF 阅读
     { path: '/papers', redirect: '/library' },
     { path: '/read-paper/:id', redirect: to => ({ path: `/read-pdf/${encodeURIComponent(String(to.params.id))}`, query: to.query, hash: to.hash }) },
@@ -23,10 +26,10 @@ export const router = createRouter({
     { path: '/read/:id', component: () => import('../views/ReaderView.vue') },
     { path: '/read-djvu/:id', redirect: '/library' },
     { path: '/catalogs', redirect: '/library' },
-    { path: '/stats', component: () => import('../views/StatsView.vue') },
+    { path: '/stats', component: managed(() => import('../views/StatsView.vue')) },
     { path: '/transfer', redirect: '/library' },
-    { path: '/settings', component: () => import('../views/SettingsView.vue') },
-    { path: '/manual', component: () => import('../views/ManualView.vue') },
+    { path: '/settings', component: managed(() => import('../views/SettingsView.vue')) },
+    { path: '/manual', component: managed(() => import('../views/ManualView.vue')) },
   ],
 })
 

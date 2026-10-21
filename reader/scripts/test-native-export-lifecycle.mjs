@@ -4,6 +4,8 @@ import { existsSync, readdirSync, mkdtempSync, mkdirSync, writeFileSync } from '
 import { join, resolve, delimiter } from 'node:path'
 import { homedir } from 'node:os'
 import { spawnSync } from 'node:child_process'
+import { toolchain } from './native-import-test-tools.mjs'
+import { readFileSync } from 'node:fs'
 
 const root = resolve(import.meta.dirname, '..')
 const out = resolve(root, '../.cache/audit-stage1/export-lifecycle')
@@ -13,11 +15,7 @@ function jars(dir) {
     .filter(e => e.isFile() && e.name.endsWith('.jar') && !e.name.endsWith('-sources.jar'))
     .map(e => join(e.parentPath, e.name))
 }
-const compiler = jars(join(modules, 'org.jetbrains.kotlin/kotlin-compiler-embeddable/2.0.21'))
-const kotlin = ['org.jetbrains.kotlin/kotlin-stdlib', 'org.jetbrains.kotlin/kotlin-script-runtime',
-  'org.jetbrains.kotlin/kotlin-reflect', 'org.jetbrains.intellij.deps/trove4j',
-  'org.jetbrains.kotlinx/kotlinx-coroutines-core-jvm', 'org.jetbrains/annotations'].flatMap(p => jars(join(modules, p)))
-const stdlib = kotlin.find(p => /kotlin-stdlib-[\d.]+\.jar$/.test(p))
+const tools = toolchain(), compiler = tools.compiler, kotlin = [tools.stdlib], stdlib = tools.stdlib
 function compile(args, name) {
   mkdirSync(out, { recursive: true })
   const argFile = join(out, `${name}.args`)
@@ -90,6 +88,17 @@ object Os {
  fun rename(source: String, target: String) { calls++; before(source, target); java.nio.file.Files.move(java.nio.file.Path.of(source), java.nio.file.Path.of(target), java.nio.file.StandardCopyOption.REPLACE_EXISTING, java.nio.file.StandardCopyOption.ATOMIC_MOVE) }
 }
 `,
+      'Stream.kt': `package io.pagewise.reader
+class HostFileOutputStream(file:java.io.File, append:Boolean=false):java.io.OutputStream() {
+ companion object { @Volatile var before:(java.io.File)->Unit={} }
+ private val actual=run { before(file); java.io.FileOutputStream(file,append) }
+ val fd get()=actual.fd
+ override fun write(value:Int)=actual.write(value)
+ override fun write(bytes:ByteArray,offset:Int,count:Int)=actual.write(bytes,offset,count)
+ override fun flush()=actual.flush()
+ override fun close()=actual.close()
+}
+`,
       'Annotations.kt': `package app.tauri.annotation
 annotation class Command
 annotation class TauriPlugin
@@ -100,6 +109,7 @@ open class JSObject {
  private val values = mutableMapOf<String, String>()
  var beforeGet: (String) -> Unit = {}
  fun put(key: String, value: String) { values[key] = value }
+ fun optString(key: String): String = values[key] ?: ""
  fun getString(key: String): String? { beforeGet(key); return values[key] }
 }
 class Invoke(vararg pairs: Pair<String, String>) {
@@ -114,9 +124,11 @@ class Invoke(vararg pairs: Pair<String, String>) {
 `,
     }
     mkdirSync(out, { recursive: true })
+    const production = join(out, 'ProductionExportPlugin.kt')
+    writeFileSync(production, readFileSync(join(root, 'src-tauri/android/ExportPlugin.kt'), 'utf8').replace('import java.io.FileOutputStream', 'import io.pagewise.reader.HostFileOutputStream as FileOutputStream'))
     const paths = Object.entries(stubs).map(([name, body]) => { const p = join(out, name); writeFileSync(p, body); return p })
     compile(['-no-stdlib', '-no-reflect', '-classpath', kotlin.join(delimiter), '-d', join(out, 'host-classes'),
-      ...paths, join(root, 'src-tauri/android/ExportPlugin.kt'), join(import.meta.dirname, 'fixtures/export-lifecycle-host/ExportLifecycleHost.kt')], 'host-compile')
+      ...paths, production, join(import.meta.dirname, 'fixtures/export-lifecycle-host/ExportLifecycleHost.kt')], 'host-compile')
     const run = spawnSync('java', ['-cp', [join(out, 'host-classes'), stdlib].join(delimiter), 'io.pagewise.reader.ExportLifecycleHostKt', mkdtempSync(join(out, 'synthetic-'))], { encoding: 'utf8', timeout: 25000 })
     writeFileSync(join(out, 'host-run.log'), JSON.stringify({ exitCode: run.status }) + '\n' + run.stdout + run.stderr)
     assert.equal(run.status, 0, run.error?.message ?? run.stdout + run.stderr)

@@ -12,21 +12,18 @@ import type { PagewiseCompanionController } from '../composables/usePagewiseComp
 const props = defineProps<{ dj: PagewiseCompanionController }>()
 const settings = useSettings()
 const first = ref<HTMLButtonElement | null>(null)
+const cancel = ref<HTMLButtonElement | null>(null)
 
-const own = computed(() => {
-  const mode = settings.pagewiseCompanion.channel
-  const p = providerById(settings.aiProvider)
-  const configured = p.id !== 'trial' && aiConfigured()
-  return mode === 'own' || (mode === 'auto' && configured)
-})
+// A retired builtin preference can opt into this displayed service only via a fresh consent click.
+const own = computed(() => aiConfigured())
 const service = computed(() => {
-  if (!own.value) return t('companion.consentServiceBuiltin')
+  if (!own.value) return t('companion.consentServiceUnconfigured')
   const p = providerById(settings.aiProvider)
   return t('companion.consentServiceOwn', { name: p.label })
 })
 const ollama = computed(() => own.value && settings.aiProvider === 'ollama')
 
-onMounted(() => first.value?.focus())
+onMounted(() => (own.value ? first.value : cancel.value)?.focus())
 </script>
 
 <template>
@@ -41,9 +38,9 @@ onMounted(() => first.value?.focus())
         <button type="button" class="dj-consent-link" @click="props.dj.switchToBasic()">{{ t('companion.useBasic') }}</button>
       </p>
       <div class="dj-consent-actions">
-        <button type="button" class="btn btn-ghost" @click="props.dj.cancelConsent()">{{ t('companion.consentCancel') }}</button>
-        <button type="button" class="btn" @click="props.dj.consent('all')">{{ t('companion.consentAll') }}</button>
-        <button ref="first" type="button" class="btn btn-primary" @click="props.dj.consent('book')">{{ t('companion.consentBook') }}</button>
+        <button ref="cancel" type="button" class="btn btn-ghost" @click="props.dj.cancelConsent()">{{ t('companion.consentCancel') }}</button>
+        <button type="button" class="btn" :disabled="!own" @click="props.dj.consent('all')">{{ t('companion.consentAll') }}</button>
+        <button ref="first" type="button" class="btn btn-primary" :disabled="!own" @click="props.dj.consent('book')">{{ t('companion.consentBook') }}</button>
       </div>
     </div>
   </div>

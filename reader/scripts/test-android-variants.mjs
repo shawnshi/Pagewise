@@ -21,7 +21,7 @@ const gradle = `android {
   }
 }`
 function fixture() {
-  const dir = resolve(import.meta.dirname, '../../.cache/deployment-1.2-20261020/variant-fixtures')
+  const dir = resolve(import.meta.dirname, '../../.cache/deployment-1.5/variant-fixtures')
   mkdirSync(dir, { recursive: true })
   const base = mkdtempSync(join(dir, 'case-'))
   const put = (path, data) => { mkdirSync(dirname(join(base, path)), { recursive: true }); writeFileSync(join(base, path), data) }
@@ -40,6 +40,7 @@ function snapshot(dir) {
 }
 
 test('release keeps the product name and debug includes the complete package version', () => {
+  assert.deepEqual(androidVariantMetadata('1.5.0'), { versionName: '1.5.0', versionCode: 1005000, releaseLabel: '知页', debugLabel: '知页 1.5.0 测试版' })
   assert.deepEqual(androidVariantMetadata('1.4.0'), { versionName: '1.4.0', versionCode: 1004000, releaseLabel: '知页', debugLabel: '知页 1.4.0 测试版' })
   assert.deepEqual(androidVariantMetadata('1.3.0'), { versionName: '1.3.0', versionCode: 1003000, releaseLabel: '知页', debugLabel: '知页 1.3.0 测试版' })
   assert.deepEqual(androidVariantMetadata('1.2.0'), { versionName: '1.2.0', versionCode: 1002000, releaseLabel: '知页', debugLabel: '知页 1.2.0 测试版' })

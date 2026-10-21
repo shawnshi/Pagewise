@@ -1,6 +1,7 @@
 import assert from 'node:assert/strict'
 import { test } from 'node:test'
-import { readFileSync, mkdirSync, writeFileSync, readdirSync } from 'node:fs'
+import { readFileSync, mkdirSync, writeFileSync } from 'node:fs'
+import { toolchain } from './native-import-test-tools.mjs'
 import { resolve, join } from 'node:path'
 import { spawnSync } from 'node:child_process'
 import { performance } from 'node:perf_hooks'
@@ -10,21 +11,14 @@ import { performance } from 'node:perf_hooks'
 const root = resolve(import.meta.dirname, '..')
 const output = resolve(root, '../.cache/performance-20261019/kotlin-folder')
 const source = readFileSync(join(root, 'src-tauri/android/MonitoredFolderPlugin.kt'), 'utf8')
-function jars(directory) {
-  return readdirSync(directory, { recursive: true, withFileTypes: true })
-    .filter(entry => entry.isFile() && entry.name.endsWith('.jar')).map(entry => join(entry.parentPath, entry.name))
-}
 function method(name, next) {
   return source.slice(source.indexOf(`    private fun ${name}(`), source.indexOf(`    private fun ${next}(`))
 }
 
 test('real SAF scheduler isolates stalled enumeration; bounds admission, picker, timeout and shutdown', { timeout: 90000 }, () => {
-  const cache = resolve(process.env.USERPROFILE, '.gradle/caches/modules-2/files-2.1')
-  const compiler = jars(join(cache, 'org.jetbrains.kotlin/kotlin-compiler-embeddable/2.0.21'))
-  const dependencies = ['org.jetbrains.kotlin/kotlin-stdlib', 'org.jetbrains.kotlin/kotlin-script-runtime',
-    'org.jetbrains.kotlin/kotlin-reflect', 'org.jetbrains.intellij.deps/trove4j', 'org.jetbrains.kotlinx/kotlinx-coroutines-core-jvm',
-    'org.jetbrains/annotations'].flatMap(part => jars(join(cache, part))).filter(path => !path.endsWith('-sources.jar'))
-  const cp = [...compiler, ...dependencies].join(';')
+  const tools = toolchain()
+  const dependencies = [tools.stdlib]
+  const cp = tools.compiler.join(';')
   const fields = source.slice(source.indexOf(source.includes('private class Lane') ? '    private class Lane' : '    private val executor'), source.indexOf('    private var view'))
   const admission = source.includes('private fun reserveSelection(') ? method('reserveSelection', 'work') : ''
   const work = method('work', source.includes('private fun discard(') ? 'discard' : 'check')

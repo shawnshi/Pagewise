@@ -1,5 +1,70 @@
 # Pagewise：Android / BOOX 原生边界审计与分步改造
 
+## 当前阶段：1.5.0 七页原生管理与共享存储
+
+藏书、正在阅读、书籍详情、全部笔记、阅读统计、设置和使用手册已改为 Android 原生 Views；EPUB/PDF 正文保留现有实现。设置与统计迁至同一原生数据库，业务、草稿、导入、TTS 和 EPD 仍各有单一所有者，不能据历史章节将当前管理页误记为 Vue 页面。
+
+七页源码/host 实现通过 v4 独立复审。1.5.0 release/debug 已构建、签名并在 Note X3 Pro 覆盖安装；本次未主动启动应用，也未验收真实书籍/SAF/原生迁移、物理尺标或 EPD。详见[原生管理页与迁移](android-native-pages.md)和[1.5.0 安装记录](deployment-1.5-status.md)。
+
+以下保留各阶段当时的范围、设备清单和审计判断，不作为当前版本仍缺少这些实现、或已经通过真机验收的依据。
+
+## 历史阶段：原生解析、封面与批量入库（实现复核通过，待设备验收）
+
+本阶段保留 Vue 页面和现有书库，不另建书籍、批注或分类存储。权威代码位于 `reader/src-tauri/android/`；生成 Android 工程由 `prepare-android-project.mjs` 原子同步。
+
+- `NativeBookMetadata.kt` 读取 EPUB OPF、MOBI/EXTH/KF8、TXT、Markdown；`NativePdfMetadata.kt` 使用 PDFium 读 PDF 书目，使用 Android `PdfRenderer` 提取首页面封面。封面失败可独立降级，不能把书籍解析、目录权限或数据库错误伪装成空结果。
+- `NativeBookImporter.kt` 与 `NativeImportDatabase.kt` 在现有 `application.dataDir/lightread.db` 中逐书提交，仅增加 `native_import_batches` 回执表。已有书籍只按引用 CAS 更新文件关联和可用性，不覆盖手动分类、标签、批注或阅读历史；只有无扫描错误的完整目录结果才可标记未见文件缺失。自定义书库路径明确拒绝，不偷偷改用默认库。
+- `NativeFileJobs.kt` 复用既有前台服务，`index`、`import` 共用单写入 lane。提交期取消/超时必须等提交结果落定；SQLite 回执与逐书写入同事务，提交结果未知保留恢复入口。
+- `nativeBookImport.ts` 在上传前保存批次身份、已分配暂存路径和输入位置，重载后复用同一 SQL 批次，而非重新生成 ID、重新上传整批。最后一本提交后即保存可恢复的完成回执；原生任务 JSON 尚未写成功的崩溃窗口通过请求指纹和 SQLite 对账。中断、数据库错误及提交结果未知的恢复输入不再被观察回执的一小时 TTL 删除；仍须考虑 Android 自行回收 cache 的可能性。提交结果未知在释放提交保护的同一临界区落定，优先于提交期间及 catch/finally 间隙的新取消意图。
+- 上传前即预留字节，失败或丢失响应的上传仍计入单批 1 GiB 额度。`ExportPlugin.kt` 登记排队和执行中的上传路径；原生清理与入库读取先等这些所有者物理结束，再封闭 token，迟到 IPC 不得重新创建已释放路径。进程内跟踪最多 16384 个路径，满额明确报资源限制。改名后的 inspect 使用完整请求身份，并保留旧任务的取消／释放回执，不能把新文件名塞进旧任务。
+- 发布文件保留原扩展名大小写，匹配现有 `bookPath()` 的读取和删除行为。目录读取仍限 64 MiB；复制输入单文件/单批最多 1 GiB、128 项，目录最多 5000 项，原生任务期限 15 分钟。复制前的 Blob 分块上传仍由前端驱动，不能承诺在上传完成前切后台也能继续。
+
+### 已执行证据与剩余门禁
+
+证据位于 `.cache/native-import-20261021/`：
+
+- `commit-settlement-race-green.log`、`kotlin-full/compile.log`：最新全部原生模板以 Kotlin **2.4.20**、Gradle 8.14.3、AGP 8.11.0 编译通过；生产导入所有者／仓储执行 **60 条断言**，覆盖 SQLite 回滚、过期后的部分批次续跑、提交结果未知叠加取消、大小写读取／删除、丢失最终任务状态恢复和上传／入库共享释放保护。新增调度闸门精确暂停在异常分类与 guard settlement 之间，再触发取消；`commit-settlement-race-red.log` 记录修复前失败，green 记录未知结果保留及两项批次续跑成功。host 仅插入该时序闸门，Android/provider/bitmap 为受控适配器。元数据的 **30 条断言**仍见 `final-android-host-tests.log`，包含 48 MiB heap 下不解压未使用的 64 MiB ZIP 章节。
+- `upload-owner-tests.log`、`review-fixes-tests.log`：生产 ExportPlugin 的 **18 个生命周期场景**通过，包括销毁 WebView 后旧 append 仍在 COMMIT 内、清理必须等待、迟到 begin 不得重建 token。测试仅替换 Android 与文件输出流构造边界，未模拟真实 PDF 成功。
+- `final-frontend-tests.log`：**78 项**通过，覆盖真实前端 import 分支、持久批次、丢 ACK／重载、失败上传额度、更名 inspect 和损坏日志拒绝；prepare 的失败回滚与幂等也通过。`vue-tsc -b --pretty false` 通过。主动 LSP 返回零诊断但全部为 inconclusive，不把静默当作 clean。
+- `dependency-audit.json`、`osv-response.json`：经用户批准，从存在 **GHSA-r937-wjx7-w2jp / CVE-2026-53914** 的 2.4.0 升至项目内 **2.4.20**。当前 **33 项** Maven 坐标（含实际 compiler/daemon classpath）完成本地 SHA-256、仓库 SHA-1 和许可证核验，在线 OSV 没有返回匹配公告。此为有界检索，不是“无漏洞”保证，亦不覆盖嵌入式 PDFium/C++ 二进制或完整 SBOM。未修改全局环境或 Cargo registry 中的 Tauri 源码。
+- 较宽的旧回归曾为 134/136：Kotlin 并发 harness 的版本问题已修复并通过；另一项 SSE 失败对应未改动的 `test-book-tagging.mjs` 与 HEAD 一致的 AI／分类模块，单列保留，没有借本任务修改标签工作。不能把该宽回归称为全绿。
+- `device-inventory.json` 当前在线、离线及未授权设备均为 0。未安装 APK、未读取真实用户书库。PDF 运行时、设备 SQLite、后台／进程终止／SAF 生命周期、通知权限、电子墨水屏整机表现仍须真机验收；JVM 和 Gradle 结果不能替代这些证据。最终独立复核已闭合：v3 的四项问题和 v4 的提交／取消竞态均获修复确认，`independent_review_completed: true`，实现门禁 PASS。报告依次为 `native-import-final-review.md`、`native-import-recheck.md`、`native-import-race-closure.md`（保留在本会话托管的 subagent 输出目录），本地验收索引见 `acceptance.json`。这不是整机运行验收通过。
+
+安全来源：[GitHub 公告](https://github.com/advisories/GHSA-r937-wjx7-w2jp)、[OSV 原始记录](https://api.osv.dev/v1/vulns/GHSA-r937-wjx7-w2jp)。回滚恢复点为本阶段 `preflight.json`、`before/`、`generated-before/`；仅恢复本阶段 write-set，保留其他未提交工作。回滚旧代码不删除现有书籍或新增回执表，且本次 host 测试只写合成数据库。
+
+## 上一阶段：原生文件任务与 EPD 调度
+
+以下为当前工作区相对 `b5291853` 的增量；后面的 2026-10-19—20 记录是历史审计，不代表本次设备状态。
+
+- **文件访问与大文件暂存**：`MonitoredFolderIo.kt` 是 picker 插件与后台服务共同使用的 SAF 授权和 I/O 实现。保留目录归属、tree membership、只读权限、复制后权限复查、64 KiB 缓冲区和 64 MiB 实际字节上限。
+- **后台任务**：新壳经 `monitored_file_job` 将目录遍历和单文件暂存交给非导出的 `NativeFileJobService`（`dataSync` 前台服务）。一条枚举 lane、一条读取 lane；JS 仅观察回执，不驱动任务。回执原子持久化，页面重建可以按请求 ID 重连。
+- **失败与恢复**：启动被系统拒绝、provider 错误、取消、120 秒超时、进程／服务中断分别保留明确状态。watchdog 不等待阻塞 provider 就发布超时终态；未返回的实际 worker 仍占用物理额度，迟到结果丢弃，不能以逻辑结束冒充 IO 已停止。进程重启将未完成回执标为 `interrupted`，不自动重放源文件操作。
+- **资源和清理**：最多 16 份回执，完整 envelope 统一限制 8 MiB，终态一小时过期。前端独立保存待释放 ID，重连时有界补做 ACK；ACK 幂等且允许权限丢失后的清理。取消接口不返回目录结果或暂存路径。
+- **阅读设备控制**：EPD 快速模式的延迟退出和弹层关闭后的重绘改由 Kotlin Handler 持有。新手势会撤销旧退出任务，Activity 暂停／销毁清理两类定时任务。新壳状态以原生快照为准，不再由 JS 定时器重复执行。
+- **后台朗读与媒体控制**：继续复用已有 `SystemTtsService`／`NativeSpeechSession`、音频焦点、MediaSession、通知控制和原生窗口／按键所有者。没有新增竞争服务或另一套阅读位置状态。
+- **旧壳兼容**：缺少 `nativeFileJobsVersion()` 的旧壳继续使用既有窄化 SAF 命令；新服务返回失败时不回落为旧 IO，也不返回假空目录。旧壳不具备本次服务化保证。
+
+**实施边界**：这不是整个导入流程的原生重写。书籍解析、封面提取、批量入库编排和页面渲染仍使用现有 Web 路径；单文件暂存结束后，前端仍会读取字节，因此不声称零复制、整批导入后台完成或无限制大文件支持。已 force-stop 的应用不会自动完成任务，不能承诺进程死亡后续跑。
+
+**本次验证**：TypeScript 检查、所有 authoritative Kotlin 模板对真实 Android 36／AndroidX／Tauri 类型编译、离线 Android Rust cross-check，以及定向 Node／生产 Kotlin host 测试。Host 覆盖失联重连、权限撤销、独立 lane、取消与阻塞超时、迟到结果、原子回执重启恢复、完整回执大小边界；原有窗口与 SAF copy host 包含 58 条断言。Android prepare 已在当前生成工程执行并验证模板一致、服务声明和幂等；未安装 APK。
+
+本次 ADB 列表没有连接设备。尚未验证真实 DocumentsProvider、Android 前台服务许可／通知、锁屏与杀进程行为、BOOX 波形和性能；编译或 host 成功不能替代这些验收。基线中已有的 Reader Back 测试 harness 缺少 `onyxNativeAccelerator`，不在本次修复范围。
+
+复验入口：
+
+```sh
+cd reader
+node --test scripts/test-native-file-jobs.mjs scripts/test-native-file-jobs-host.mjs scripts/test-native-epd-scheduler.mjs
+node --test scripts/test-folder-kotlin-compile.mjs
+node scripts/check-reader-environment-kotlin.mjs host
+```
+
+本次恢复点、原有脏工作树快照和实际日志在 `.cache/native-boundaries-20261021/`；回退只恢复本次 write-set，保留开始时已有的四个标签修改。没有数据库迁移或依赖升级。
+
+---
+
+## 历史记录：2026-10-19—20
+
 审计与实施：2026-10-19—20。基线：`baa1d76` 加本次开始时的未提交工作树。没有把已有原生 TTS、导出、PDF Worker 等改动计算为本次新增能力。
 
 ## 结论
