@@ -67,65 +67,49 @@ const activeSection = ref('general')
 const rootEl = ref<HTMLElement>()
 const navEl = ref<HTMLElement>()
 let scroller: HTMLElement | null = null
-let spyFrame = 0
-let spyLockUntil = 0
+const sectionPositions = new Map<string, number>()
 
-function updateActiveSection() {
-  spyFrame = 0
-  if (!scroller || Date.now() < spyLockUntil) return
-  const navBottom = navEl.value?.getBoundingClientRect().bottom ?? 0
-  let current = navSections.value[0]?.id ?? ''
-  for (const s of navSections.value) {
-    const el = document.getElementById(`settings-${s.id}`)
-    if (el && el.getBoundingClientRect().top <= navBottom + 32) current = s.id
-  }
-  if (scroller.scrollTop + scroller.clientHeight >= scroller.scrollHeight - 4) {
-    current = navSections.value[navSections.value.length - 1]?.id ?? current
-  }
-  setActiveSection(current)
+const isWide = ref(typeof window !== 'undefined' ? window.innerWidth >= 960 : true)
+const showingDetailNarrow = ref(false)
+const currentCategoryLabel = computed(() => navSections.value.find(s => s.id === activeSection.value)?.label ?? '')
+
+function onWindowResize() {
+  if (typeof window !== 'undefined') isWide.value = window.innerWidth >= 960
 }
 
-function setActiveSection(id: string) {
-  if (activeSection.value === id) return
+function selectCategory(id: string) {
+  if (!navSections.value.some(section => section.id === id)) return
+  if (scroller) sectionPositions.set(activeSection.value, scroller.scrollTop)
   activeSection.value = id
+  showingDetailNarrow.value = true
   nextTick(() => {
-    const nav = navEl.value
-    const chip = nav?.querySelector<HTMLElement>(`[data-section="${id}"]`)
-    if (!nav || !chip) return
-    const left = chip.offsetLeft - 16
-    const right = chip.offsetLeft + chip.offsetWidth + 16 - nav.clientWidth
-    if (nav.scrollLeft > left) nav.scrollTo({ left, behavior: 'smooth' })
-    else if (nav.scrollLeft < right) nav.scrollTo({ left: right, behavior: 'smooth' })
+    scroller?.scrollTo({ top: sectionPositions.get(id) ?? 0, behavior: 'auto' })
+    document.getElementById(`settings-${id}`)?.querySelector<HTMLElement>('h2')?.focus({ preventScroll: true })
   })
 }
 
-function onSettingsScroll() {
-  if (!spyFrame) spyFrame = requestAnimationFrame(updateActiveSection)
-}
-
-function jumpTo(id: string) {
-  const el = document.getElementById(`settings-${id}`)
-  if (!el) return
-  const reduce = window.matchMedia?.('(prefers-reduced-motion: reduce)').matches
-  spyLockUntil = Date.now() + (reduce ? 50 : 700)
-  setActiveSection(id)
-  el.scrollIntoView({ behavior: reduce ? 'auto' : 'smooth', block: 'start' })
-  el.querySelector<HTMLElement>('h2')?.focus({ preventScroll: true })
+function showDirectory() {
+  showingDetailNarrow.value = false
+  nextTick(() => navEl.value?.querySelector<HTMLElement>(`[data-section="${activeSection.value}"]`)?.focus({ preventScroll: true }))
 }
 
 const route = useRoute()
+watch(() => route.query.section, section => { if (typeof section === 'string') selectCategory(section) })
 onMounted(async () => {
+  window.addEventListener('resize', onWindowResize, { passive: true })
   scroller = rootEl.value?.closest<HTMLElement>('.main') ?? null
-  scroller?.addEventListener('scroll', onSettingsScroll, { passive: true })
   const section = typeof route.query.section === 'string' ? route.query.section : ''
-  if (section && navSections.value.some(s => s.id === section)) nextTick(() => jumpTo(section))
+  if (section && navSections.value.some(s => s.id === section)) {
+    activeSection.value = section
+    showingDetailNarrow.value = true
+    nextTick(() => selectCategory(section))
+  }
   parseProxyUrl(settings.httpProxy)
   const storage = await getStorage()
   storageKind.value = storage.kind
 })
 onBeforeUnmount(() => {
-  scroller?.removeEventListener('scroll', onSettingsScroll)
-  if (spyFrame) cancelAnimationFrame(spyFrame)
+  window.removeEventListener('resize', onWindowResize)
 })
 
 const PROXY_SCHEMES: Array<{ label?: string; labelKey?: string; value: string }> = [
@@ -317,13 +301,41 @@ const APPEARANCE_OPTIONS = [
 </script>
 
 <template>
-  <div ref="rootEl" class="settings">
-    <h1>{{ t('settings.title') }}</h1>
-    <nav ref="navEl" class="settings-nav" :aria-label="t('settings.navLabel')">
-      <button v-for="s in navSections" :key="s.id" type="button" class="nav-chip" :class="{ active: activeSection === s.id }" :aria-current="activeSection === s.id ? 'true' : undefined" :data-section="s.id" @click="jumpTo(s.id)">{{ s.label }}</button>
-    </nav>
+  <div ref="rootEl" class="settings" :class="{ 'is-wide': isWide, 'narrow-detail': !isWide && showingDetailNarrow }">
+    <header class="settings-head">
+      <div v-if="!isWide && showingDetailNarrow" class="narrow-nav-bar">
+        <button type="button" class="btn btn-ghost btn-sm back-btn" @click="showDirectory">
+          <svg viewBox="0 0 24 24" width="18" height="18" aria-hidden="true"><path fill="currentColor" d="M14.7 5.3a1 1 0 0 1 0 1.4L9.41 12l5.3 5.3a1 1 0 0 1-1.42 1.4l-6-6a1 1 0 0 1 0-1.4l6-6a1 1 0 0 1 1.42 0z" /></svg>
+          {{ t('stats.prev') === '上一期' ? '返回设置列表' : 'Back' }}
+        </button>
+        <span class="narrow-current-title">{{ currentCategoryLabel }}</span>
+      </div>
+      <h1 v-else>{{ t('settings.title') }}</h1>
+    </header>
 
-    <section id="settings-general" class="card section" aria-labelledby="settings-general-heading">
+    <div class="settings-body">
+      <!-- 侧边目录 (宽屏 >= 960px 宽度 232px; 窄屏在未展开详情时充当导航列表) -->
+      <aside v-show="isWide || !showingDetailNarrow" class="settings-sidebar" aria-label="设置目录">
+        <nav ref="navEl" class="sidebar-nav" :aria-label="t('settings.navLabel')">
+          <button
+            v-for="s in navSections"
+            :key="s.id"
+            type="button"
+            class="dir-item"
+            :class="{ active: activeSection === s.id }"
+            :aria-selected="activeSection === s.id"
+            :data-section="s.id"
+            @click="selectCategory(s.id)"
+          >
+            <span class="dir-item-label">{{ s.label }}</span>
+            <svg v-if="!isWide" class="dir-chevron" viewBox="0 0 24 24" width="16" height="16" aria-hidden="true"><path fill="currentColor" d="M9.3 18.7a1 1 0 0 1 0-1.4l5.29-5.3-5.3-5.3a1 1 0 0 1 1.42-1.4l6 6a1 1 0 0 1 0 1.4l-6 6a1 1 0 0 1-1.42 0z" /></svg>
+          </button>
+        </nav>
+      </aside>
+
+      <!-- 内容区: 宽屏持续显示所选分类; 窄屏进入详情时显示 -->
+      <main v-show="isWide || showingDetailNarrow" class="settings-main">
+        <section v-show="activeSection === 'general'" id="settings-general" class="card section" aria-labelledby="settings-general-heading">
       <h2 id="settings-general-heading" tabindex="-1">{{ t('settings.general') }}</h2>
       <div class="row">
         <div class="row-text"><div class="row-title">{{ t('settings.language') }}</div></div>
@@ -342,7 +354,7 @@ const APPEARANCE_OPTIONS = [
       </div>
     </section>
 
-    <section id="settings-folder" class="card section" aria-labelledby="settings-folder-heading">
+    <section v-show="activeSection === 'folder'" id="settings-folder" class="card section" aria-labelledby="settings-folder-heading">
       <h2 id="settings-folder-heading" tabindex="-1">{{ t('settings.monitoredFolderTitle') }}</h2>
       <p class="section-desc">{{ t('settings.monitoredFolderDesc') }}</p>
       <div class="folder-status-box">
@@ -391,7 +403,7 @@ const APPEARANCE_OPTIONS = [
       </div>
     </section>
 
-    <section id="settings-library-display" class="card section" aria-labelledby="settings-library-display-heading">
+    <section v-show="activeSection === 'library-display'" id="settings-library-display" class="card section" aria-labelledby="settings-library-display-heading">
       <h2 id="settings-library-display-heading" tabindex="-1">{{ t('library.libraryDisplay') }}</h2>
       <div class="row">
         <label for="library-page-size" class="row-title">{{ t('library.pageSize') }}</label>
@@ -401,7 +413,7 @@ const APPEARANCE_OPTIONS = [
       </div>
     </section>
 
-    <section id="settings-reading" class="card section" aria-labelledby="settings-reading-heading">
+    <section v-show="activeSection === 'reading'" id="settings-reading" class="card section" aria-labelledby="settings-reading-heading">
       <h2 id="settings-reading-heading" tabindex="-1">{{ t('settings.reading') }}</h2>
       <div class="row">
         <div class="row-text"><div class="row-title">{{ t('settings.pdfRenderer') }}</div><div class="row-desc">{{ t('settings.pdfRendererDesc') }}</div></div>
@@ -417,7 +429,7 @@ const APPEARANCE_OPTIONS = [
       <TypographyCalibration />
     </section>
 
-    <section id="settings-ai" class="card section" aria-labelledby="settings-ai-heading">
+    <section v-show="activeSection === 'ai'" id="settings-ai" class="card section" aria-labelledby="settings-ai-heading">
       <h2 id="settings-ai-heading" tabindex="-1">{{ t('settings.aiTitle') }}</h2>
       <p class="section-desc">{{ t('settings.aiDesc') }}</p>
       <div class="field-grid">
@@ -436,7 +448,7 @@ const APPEARANCE_OPTIONS = [
       <div v-if="aiTestResult" class="status-info" role="status">{{ aiTestResult }}</div>
     </section>
 
-    <section id="settings-data" class="card section" aria-labelledby="settings-data-heading">
+    <section v-show="activeSection === 'data'" id="settings-data" class="card section" aria-labelledby="settings-data-heading">
       <h2 id="settings-data-heading" tabindex="-1">{{ t('settings.data') }}</h2>
       <div class="row"><div class="row-text"><div class="row-title">{{ t('settings.storageBackend') }}</div><div class="row-desc">{{ storageKind === 'filesystem' ? t('settings.storageDesktop') : t('settings.storageWeb') }}</div></div></div>
       <div v-if="isTauri()" class="row">
@@ -452,7 +464,7 @@ const APPEARANCE_OPTIONS = [
       <div v-if="busy" class="status-info" role="status">{{ busy }}</div>
     </section>
 
-    <section id="settings-network" class="card section" aria-labelledby="settings-network-heading">
+    <section v-show="activeSection === 'network'" id="settings-network" class="card section" aria-labelledby="settings-network-heading">
       <h2 id="settings-network-heading" tabindex="-1">{{ t('settings.network') }}</h2>
       <template v-if="isTauri()">
         <p class="section-desc">{{ t('settings.proxyDesc') }}</p>
@@ -473,7 +485,7 @@ const APPEARANCE_OPTIONS = [
       <div class="proxy-test"><button class="btn" :disabled="testing" @click="testProxy">{{ testing ? t('settings.testingProxy') : t('settings.testConnection') }}</button><span v-if="testResult" class="test-result" role="status">{{ testResult }}</span></div>
     </section>
 
-    <section id="settings-about" class="card section" aria-labelledby="settings-about-heading">
+    <section v-show="activeSection === 'about'" id="settings-about" class="card section" aria-labelledby="settings-about-heading">
       <h2 id="settings-about-heading" tabindex="-1">{{ t('settings.about') }}</h2>
       <div class="app-identity">
         <img class="app-icon" src="/pagewise-logo.png" alt="" aria-hidden="true" />
@@ -485,10 +497,88 @@ const APPEARANCE_OPTIONS = [
       <p class="section-desc about-formats">{{ t('settings.author') }}: 云中江树 ({{ t('settings.wechat') }}: 云中江树) · {{ t('settings.license') }}: GNU AGPL v3.0+</p>
       <p class="about-links"><button class="link-btn" type="button" @click="openExternal('https://github.com/yzfly/LightRead')">{{ t('settings.repoLink') }}</button><span class="about-sep" aria-hidden="true"> · </span><button class="link-btn" type="button" @click="openExternal('https://github.com/shawnshi/Pagewise')">{{ t('settings.pagewiseRepo') }}</button></p>
     </section>
+      </main>
+    </div>
   </div>
 </template>
 
 <style scoped>
+
+
+.settings-head {
+  margin-bottom: 20px;
+}
+.narrow-nav-bar {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+}
+.narrow-current-title {
+  font-size: 18px;
+  font-weight: 500;
+}
+.back-btn {
+  min-height: 48px;
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 8px 12px;
+}
+
+.settings-body {
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
+}
+@media (min-width: 960px) {
+  .settings-body {
+    flex-direction: row;
+    align-items: flex-start;
+    gap: 24px;
+  }
+  .settings-sidebar {
+    width: 232px;
+    flex-shrink: 0;
+    position: sticky;
+    top: 24px;
+  }
+  .settings-main {
+    flex: 1;
+    min-width: 0;
+  }
+}
+
+.sidebar-nav {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+.dir-item {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  width: 100%;
+  min-height: 48px;
+  padding: 10px 16px;
+  font-size: 16px;
+  font-weight: 400;
+  border: 1px solid var(--border, #555555);
+  border-radius: 2px;
+  background: var(--bg, #FFFFFF);
+  color: var(--text, #000000);
+  text-align: left;
+  cursor: pointer;
+  box-sizing: border-box;
+}
+.dir-item.active {
+  background: var(--eink-selected-surface, #DDDDDD) !important;
+  font-weight: 500;
+  border-color: var(--border, #555555);
+}
+:root[data-theme='dark'] .dir-item.active {
+  background: var(--eink-selected-surface, #2A2A2A) !important;
+  color: var(--text, #FFFFFF) !important;
+}
 .settings { max-width: 820px; margin: 0 auto; padding: 24px 28px calc(40px + var(--lr-safe-bottom)); }
 h1 { margin: 0 0 20px; font-size: 24px; }
 .settings-nav { position: sticky; top: 0; z-index: 10; display: flex; gap: 6px; overflow-x: auto; padding: 12px 0; margin-bottom: 16px; background: var(--bg); scrollbar-width: thin; }
@@ -570,3 +660,5 @@ button:focus-visible, a:focus-visible { outline: 2px solid var(--brand); outline
   .nav-chip { min-height: 40px; }
 }
 </style>
+
+<style src="../styles/stats-settings.css"></style>

@@ -30,11 +30,29 @@ class NativeStatePlugin(
         try {
             executor.execute {
                 try {
-                    val result = NativeStateStore(context, requestedRoot).use { it.command(action, payload) }
+                    val root =
+                        requestedRoot
+                            ?: context
+                                .getSharedPreferences(
+                                    "pagewise-native-state-location",
+                                    android.content.Context.MODE_PRIVATE,
+                                ).getString("root", "")
+                                .orEmpty()
+                    val directory = if (root.isEmpty()) context.dataDir else java.io.File(root)
+                    val result =
+                        CanonicalDatabase.protect(java.io.File(directory, "lightread.db")) {
+                            if (action.startsWith("sql.")) {
+                                NativeSqlDatabase(context, requestedRoot, action == "sql.initialize").use { it.command(action, payload) }
+                            } else {
+                                NativeStateStore(context, requestedRoot).use { it.command(action, payload) }
+                            }
+                        }
                     invoke.resolve(JSObject(result.toString()))
                 } catch (error: Exception) {
                     val code =
-                        if (error is NativeStateFailure) {
+                        if (error is CanonicalDatabaseFailure) {
+                            error.code
+                        } else if (error is NativeStateFailure) {
                             error.code
                         } else if (error is org.json.JSONException) {
                             "invalid_payload"

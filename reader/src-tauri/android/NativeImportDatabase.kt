@@ -11,18 +11,14 @@ internal class NativeImportDatabase(
     context: Context,
 ) : Closeable {
     private val database: SQLiteDatabase
+    private val canonicalFile = File(context.dataDir, "lightread.db")
 
     init {
-        val path = File(context.dataDir, "lightread.db")
+        val path = canonicalFile
         if (!path.isFile) throw NativeImportFailure("library_not_initialized")
-        database =
-            SQLiteDatabase.openDatabase(
-                path.path,
-                null,
-                SQLiteDatabase.OPEN_READWRITE or SQLiteDatabase.NO_LOCALIZED_COLLATORS or SQLiteDatabase.ENABLE_WRITE_AHEAD_LOGGING,
-            )
+        database = CanonicalDatabase.open(path)
         try {
-            database.execSQL("PRAGMA busy_timeout=5000")
+            rows("PRAGMA busy_timeout=5000")
             val required =
                 setOf(
                     "id",
@@ -59,47 +55,50 @@ internal class NativeImportDatabase(
         sql: String,
         args: List<String> = emptyList(),
     ): List<Map<String, String?>> =
-        database.rawQuery(sql, args.toTypedArray()).use { cursor ->
-            val names = cursor.columnNames
-            val result = ArrayList<Map<String, String?>>()
-            while (cursor.moveToNext()) {
-                result.add(
-                    names.withIndex().associate {
-                        it.value to
-                            if (cursor.isNull(it.index)) null else cursor.getString(it.index)
-                    },
-                )
+        CanonicalDatabase.protect(canonicalFile) {
+            database.rawQuery(sql, args.toTypedArray()).use { cursor ->
+                val names = cursor.columnNames
+                val result = ArrayList<Map<String, String?>>()
+                while (cursor.moveToNext()) {
+                    result.add(
+                        names.withIndex().associate {
+                            it.value to
+                                if (cursor.isNull(it.index)) null else cursor.getString(it.index)
+                        },
+                    )
+                }
+                result
             }
-            result
         }
 
     fun execute(
         sql: String,
         args: List<Any?> = emptyList(),
     ) {
-        database.execSQL(sql, args.toTypedArray())
+        CanonicalDatabase.protect(canonicalFile) { database.execSQL(sql, args.toTypedArray()) }
     }
 
-    fun <T> transaction(action: () -> T): T {
-        database.beginTransactionNonExclusive()
-        var failure: Throwable? = null
-        try {
-            val result = action()
-            database.setTransactionSuccessful()
-            return result
-        } catch (error: Throwable) {
-            failure = error
-            throw error
-        } finally {
+    fun <T> transaction(action: () -> T): T =
+        CanonicalDatabase.protect(canonicalFile) {
+            database.beginTransactionNonExclusive()
+            var failure: Throwable? = null
             try {
-                database.endTransaction()
-            } catch (error: Exception) {
-                val uncertain = NativeImportFailure("commit_outcome_unknown").apply { initCause(error) }
-                failure?.let { uncertain.addSuppressed(it) }
-                throw uncertain
+                val result = action()
+                database.setTransactionSuccessful()
+                result
+            } catch (error: Throwable) {
+                failure = error
+                throw error
+            } finally {
+                try {
+                    database.endTransaction()
+                } catch (error: Exception) {
+                    val uncertain = NativeImportFailure("commit_outcome_unknown").apply { initCause(error) }
+                    failure?.let { uncertain.addSuppressed(it) }
+                    throw uncertain
+                }
             }
         }
-    }
 
     fun batch(
         jobId: String,
@@ -222,16 +221,22 @@ internal class NativeImportDatabase(
         ): JSONObject? {
             val file = File(context.dataDir, "lightread.db")
             if (!file.isFile) return null
-            SQLiteDatabase.openDatabase(file.path, null, SQLiteDatabase.OPEN_READONLY or SQLiteDatabase.NO_LOCALIZED_COLLATORS).use { db ->
-                val exists =
-                    db.rawQuery("SELECT name FROM sqlite_master WHERE type='table' AND name='native_import_batches'", null).use {
-                        it.moveToFirst()
+            return CanonicalDatabase.protect(file) {
+                CanonicalDatabase.open(file, readOnly = true).use { db ->
+                    val exists =
+                        db
+                            .rawQuery(
+                                "SELECT name FROM sqlite_master WHERE type='table' AND name='native_import_batches'",
+                                null,
+                            ).use {
+                                it.moveToFirst()
+                            }
+                    if (!exists) return@protect null
+                    db.rawQuery("SELECT request_hash,result FROM native_import_batches WHERE job_id = ?", arrayOf(jobId)).use { cursor ->
+                        if (!cursor.moveToFirst()) return@protect null
+                        if (expectedHash != null && cursor.getString(0) != expectedHash) throw NativeImportFailure("invalid_reference")
+                        JSONObject(cursor.getString(1))
                     }
-                if (!exists) return null
-                db.rawQuery("SELECT request_hash,result FROM native_import_batches WHERE job_id = ?", arrayOf(jobId)).use { cursor ->
-                    if (!cursor.moveToFirst()) return null
-                    if (expectedHash != null && cursor.getString(0) != expectedHash) throw NativeImportFailure("invalid_reference")
-                    return JSONObject(cursor.getString(1))
                 }
             }
         }

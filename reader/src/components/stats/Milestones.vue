@@ -157,12 +157,15 @@ dt {
 }
 .link {
   align-self: flex-start;
+  min-height: 48px;
+  display: inline-flex;
+  align-items: center;
   padding: 0;
   border: 0;
   background: none;
   font: inherit;
   text-align: left;
-  border-radius: var(--radius-sm);
+  border-radius: 2px;
 }
 .link .n {
   text-decoration: underline;
@@ -185,14 +188,16 @@ dt {
   align-items: center;
   gap: 12px;
   width: 100%;
+  min-height: 56px;
   margin-top: 18px;
   padding: 12px;
-  border: 0;
-  border-radius: var(--radius-lg);
-  background: var(--surface-2);
-  color: var(--text);
+  border: 1px solid var(--border, #555555);
+  border-radius: 2px;
+  background: var(--surface-2, #F5F5F5);
+  color: var(--text, #000000);
   font: inherit;
   text-align: left;
+  box-sizing: border-box;
 }
 button.top {
   cursor: pointer;

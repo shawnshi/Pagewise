@@ -15,14 +15,14 @@ const ACTIVITY_EVENTS = ['pointerdown', 'keydown', 'wheel', 'touchstart'] as con
  */
 export function useReadingTimer(
   bookId: string,
-  opts: { onCredit?: (seconds: number, at: number) => void } = {},
+  opts: { onCredit?: (seconds: number, at: number) => void; enabled?: () => boolean } = {},
 ): { ping: () => void; pingAuto: () => void } {
   const library = useLibrary()
   const clock = createReadingClock(Date.now())
   let timer: ReturnType<typeof setInterval> | undefined
 
-  const ping = () => clock.input(Date.now())
-  const pingAuto = () => clock.auto(Date.now())
+  const ping = () => { if (opts.enabled?.() !== false) clock.input(Date.now()) }
+  const pingAuto = () => { if (opts.enabled?.() !== false) clock.auto(Date.now()) }
 
   const flush = () => {
     const at = clock.creditedAt
@@ -41,7 +41,7 @@ export function useReadingTimer(
       const now = Date.now()
       // 跨零点: 先把昨天的时长按昨天落库
       if (clock.pendingFlush > 0 && localDay(clock.creditedAt) !== localDay(now)) flush()
-      clock.tick(now, 15, !document.hidden)
+      clock.tick(now, 15, !document.hidden && opts.enabled?.() !== false)
       if (clock.pendingFlush >= 60) flush()
     }, 15_000)
   })

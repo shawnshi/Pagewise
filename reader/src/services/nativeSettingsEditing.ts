@@ -43,6 +43,23 @@ export const NATIVE_SETTINGS_FIELDS: readonly NativeSettingField[] = Object.free
   field('httpProxy', '网络代理', 'Network proxy', 'network', 'string', { maxLength: 4096, secret: true }),
   field('corsProxy', '跨域代理模板', 'CORS proxy template', 'network', 'string', { maxLength: 4096 }),
 ])
+
+export function nativeSettingOptionLabel(value: unknown, language: 'zh' | 'en', path: readonly string[] = []): string {
+  if (path.join('.') === 'reader.maxColumnCount') return String(value) === '1' ? (language === 'en' ? 'Single column' : '单栏') : String(value) === '2' ? (language === 'en' ? 'Two columns' : '双栏') : String(value)
+  if (path.join('.') === 'ttsEngine' && value === 'system') return language === 'en' ? 'System speech' : '系统朗读'
+  const options: Record<string, readonly [string, string]> = {
+    true: ['开启', 'On'], false: ['关闭', 'Off'], zh: ['简体中文', 'Simplified Chinese'], en: ['English', 'English'],
+    system: ['跟随系统', 'System'], light: ['浅色', 'Light'], dark: ['深色', 'Dark'], auto: ['自动', 'Automatic'],
+    sepia: ['米色', 'Sepia'], green: ['绿色', 'Green'], paginated: ['分页', 'Paginated'], scrolled: ['滚动', 'Scrolled'],
+    paged: ['分页', 'Paged'], scroll: ['连续滚动', 'Continuous scroll'], fitH: ['适合高度', 'Fit height'], fitW: ['适合宽度', 'Fit width'],
+    single: ['单页', 'Single page'], facing: ['对页', 'Facing pages'], book: ['书籍对页', 'Book spread'],
+    both: ['页码与百分比', 'Page and percentage'], page: ['页码', 'Page'], percent: ['百分比', 'Percentage'],
+    edge: ['在线朗读', 'Online speech'], local: ['本地朗读', 'Local speech'], mupdf: ['MuPDF', 'MuPDF'], pdfium: ['PDFium', 'PDFium'],
+  }
+  const pair = options[String(value)]
+  return pair ? pair[language === 'en' ? 1 : 0] : String(value)
+}
+
 function same(a: unknown, b: unknown): boolean {
   if (Object.is(a, b)) return true
   if (Array.isArray(a) && Array.isArray(b)) return a.length === b.length && a.every((v, i) => same(v, b[i]))
@@ -169,7 +186,20 @@ export function createNativeSettingsActions(owner: NativeSettingsOwner,
     },
     settingsTestAi: p => probe('ai', p),
     settingsTestProxy: p => probe('proxy', p),
-    settingsSchema: async () => ({ ok: true, version: 1, fields: jsonClone(NATIVE_SETTINGS_FIELDS), providers: AI_PROVIDERS.map(p => ({ id: p.id, label: p.label, models: p.models, docsUrl: p.docsUrl })) }),
+    settingsSchema: async () => ({
+      ok: true, version: 1,
+      fields: jsonClone(NATIVE_SETTINGS_FIELDS.map(rule => {
+        const choices = rule.kind === 'boolean' ? [false, true] : rule.options
+        return {
+          ...rule,
+          ...(choices ? {
+            optionLabels: choices.map(value => nativeSettingOptionLabel(value, 'zh', rule.path)),
+            optionLabelsEn: choices.map(value => nativeSettingOptionLabel(value, 'en', rule.path)),
+          } : {}),
+        }
+      })),
+      providers: AI_PROVIDERS.map(p => ({ id: p.id, label: p.label, models: p.models, docsUrl: p.docsUrl })),
+    }),
     settingsPatch: async p => { await barrier(); const next = applyNativeSettingsEdits(client.settings(), p.patches); await owner.commitNativeSettingsEdits(next); return done() },
     selectAiProvider: async p => {
       if (typeof p.provider !== 'string' || !isSelectableAiProvider(p.provider)) throw stateError('invalid_provider')

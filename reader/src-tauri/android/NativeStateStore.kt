@@ -130,9 +130,9 @@ internal class NativeStateStore(
         if (!directory.isDirectory) throw NativeStateFailure("library_root_unavailable")
         val file = File(directory, "lightread.db")
         if ((located != null || root.isNotEmpty()) && !file.isFile) throw NativeStateFailure("library_database_missing")
-        database = SQLiteDatabase.openOrCreateDatabase(file.path, null)
+        database = CanonicalDatabase.open(file, create = located == null && root.isEmpty() && !file.exists())
         try {
-            database.execSQL("PRAGMA busy_timeout = 5000")
+            rows("PRAGMA busy_timeout = 5000")
             val ddls =
                 listOf(
                     "CREATE TABLE IF NOT EXISTS native_core_settings(id INTEGER PRIMARY KEY CHECK(id=1), revision INTEGER NOT NULL, json TEXT NOT NULL)",

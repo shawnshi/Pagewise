@@ -1,0 +1,230 @@
+/* stats-settings.css — Web Presentation Token Contract for Stats & Settings E-ink Redesign */
+
+/* Scoped exclusively to .stats, .settings, and .dd-panel / .dd-mask */
+:is(.stats, .settings, .dd-panel, .dd-mask) {
+  /* Opaque light tokens */
+  --eink-surface: #FFFFFF;
+  --eink-selected-surface: #DDDDDD;
+  --eink-secondary: #555555;
+  --eink-body: #222222;
+  --eink-primary: #000000;
+  --eink-border: #555555;
+  --eink-border-subtle: #555555;
+  --eink-radius: 2px;
+  --eink-focus: 2px solid #000000;
+
+  /* Typography scale */
+  --font-page-title-size: 26px;
+  --font-page-title-lh: 36px;
+  --font-primary-num-size: 40px;
+  --font-primary-num-lh: 48px;
+  --font-secondary-num-size: 24px;
+  --font-secondary-num-lh: 32px;
+  --font-section-size: 18px;
+  --font-section-lh: 26px;
+  --font-label-size: 16px;
+  --font-label-lh: 24px;
+  --font-meta-size: 14px;
+  --font-meta-lh: 20px;
+  --font-aux-size: 12px;
+  --font-aux-lh: 18px;
+
+  /* Weights strictly 400 and 500 */
+  --font-weight-regular: 400;
+  --font-weight-medium: 500;
+
+  /* Spacing */
+  --gap-8: 8px;
+  --gap-16: 16px;
+  --gap-24: 24px;
+  --touch-min: 48px;
+  --touch-primary: 56px;
+
+  /* Override component variables */
+  --bg: #FFFFFF;
+  --card: #FFFFFF;
+  --surface-2: #DDDDDD;
+  --surface-3: #DDDDDD;
+  --text: #000000;
+  --text-2: #222222;
+  --text-3: #555555;
+  --border: #555555;
+  --border-strong: #000000;
+  --radius: 2px;
+  --radius-sm: 2px;
+  --radius-lg: 2px;
+  --radius-xl: 2px;
+  --radius-pill: 2px;
+  --brand: #000000;
+  --brand-hover: #222222;
+  --brand-active: #000000;
+  --on-brand: #FFFFFF;
+  --ring: 0 0 0 2px #000000;
+}
+
+/* Dark counterpart preserves readable contrast */
+:root[data-theme='dark'] :is(.stats, .settings, .dd-panel, .dd-mask) {
+  --eink-surface: #000000;
+  --eink-selected-surface: #222222;
+  --eink-secondary: #AAAAAA;
+  --eink-body: #DDDDDD;
+  --eink-primary: #FFFFFF;
+  --eink-border: #888888;
+  --eink-border-subtle: #555555;
+  --eink-focus: 2px solid #FFFFFF;
+
+  --bg: #000000;
+  --card: #000000;
+  --surface-2: #222222;
+  --surface-3: #222222;
+  --text: #FFFFFF;
+  --text-2: #DDDDDD;
+  --text-3: #AAAAAA;
+  --border: #888888;
+  --border-strong: #FFFFFF;
+  --brand: #FFFFFF;
+  --brand-hover: #DDDDDD;
+  --brand-active: #FFFFFF;
+  --on-brand: #000000;
+  --ring: 0 0 0 2px #FFFFFF;
+}
+
+/* Strict token aesthetics: NO shadow, NO gradient, NO blur, radius 2px, outline 1px */
+:is(.stats, .settings, .dd-panel) *,
+:is(.stats, .settings, .dd-panel) *::before,
+:is(.stats, .settings, .dd-panel) *::after {
+  background-image: none !important;
+  box-shadow: none !important;
+  text-shadow: none !important;
+  backdrop-filter: none !important;
+  filter: none !important;
+  border-radius: 2px !important;
+}
+
+/* Weights 400 and 500 only */
+:is(.stats, .settings, .dd-panel) * {
+  font-weight: 400 !important;
+}
+:is(.stats, .settings, .dd-panel) :is(h1, h2, h3, dt, strong, b, th, .btn-primary, [aria-selected="true"], [aria-pressed="true"], .active, .num, .n, .highlight) {
+  font-weight: 500 !important;
+}
+
+/* Focus visible 2px outline */
+:is(.stats, .settings, .dd-panel) *:focus-visible {
+  outline: 2px solid var(--text, #000000) !important;
+  outline-offset: 2px !important;
+}
+
+/* Interactive elements min touch 48px, primary 56px */
+:is(.stats, .settings, .dd-panel) :is(button, .btn, a.btn, input:not([type="checkbox"]):not([type="radio"]), select) {
+  min-height: 48px;
+  min-width: 48px;
+  box-sizing: border-box;
+}
+
+:is(.stats, .settings, .dd-panel) :is(.btn-primary, .primary-action, .primary-btn) {
+  min-height: 56px;
+  min-width: 56px;
+}
+
+/* Selected state: surface #DDDDDD (light) / #2A2A2A (dark) */
+:is(.stats, .settings, .dd-panel) :is(.selected, .active, [aria-selected="true"], [aria-pressed="true"]):not(.btn-primary) {
+  background-color: var(--eink-selected-surface, #DDDDDD) !important;
+  color: var(--text, #000000) !important;
+  border-color: var(--border, #555555) !important;
+}
+:root[data-theme='dark'] :is(.stats, .settings, .dd-panel) :is(.selected, .active, [aria-selected="true"], [aria-pressed="true"]):not(.btn-primary) {
+  background-color: var(--eink-selected-surface, #2A2A2A) !important;
+  color: var(--text, #FFFFFF) !important;
+  border-color: var(--border, #888888) !important;
+}
+
+/* Primary buttons */
+:is(.stats, .settings, .dd-panel) .btn-primary {
+  background: var(--text, #000000) !important;
+  color: var(--bg, #FFFFFF) !important;
+  border: 1px solid var(--text, #000000) !important;
+}
+:root[data-theme='dark'] :is(.stats, .settings, .dd-panel) .btn-primary {
+  background: #FFFFFF !important;
+  color: #000000 !important;
+  border: 1px solid #FFFFFF !important;
+}
+
+/* Cards and sections */
+:is(.stats, .settings, .dd-panel) :is(.card, .section, .dd-panel) {
+  border: 1px solid var(--border, #555555) !important;
+  background: var(--bg, #FFFFFF) !important;
+  color: var(--text, #000000) !important;
+}
+:root[data-theme='dark'] :is(.stats, .settings, .dd-panel) :is(.card, .section, .dd-panel) {
+  border: 1px solid var(--border, #888888) !important;
+  background: var(--bg, #121212) !important;
+  color: var(--text, #FFFFFF) !important;
+}
+
+/* Page padding: 16 narrow (<720), 24 medium (720-959), 32 wide (>=960) */
+.stats, .settings {
+  max-width: 1200px;
+  margin: 0 auto;
+  padding: 16px 16px calc(24px + var(--lr-safe-bottom));
+  box-sizing: border-box;
+}
+@media (min-width: 720px) {
+  .stats, .settings {
+    padding: 24px 24px calc(32px + var(--lr-safe-bottom));
+  }
+}
+@media (min-width: 960px) {
+  .stats, .settings {
+    padding: 32px 32px calc(40px + var(--lr-safe-bottom));
+  }
+}
+
+:is(.stats, .settings, .dd-panel) { font-size: 16px; color: var(--text); background: var(--bg); }
+:is(.stats, .settings, .dd-panel) :is(h1, h2, h3, h4) { line-height: 1.5; }
+:is(.stats, .settings) h1 { font: 400 26px/36px Georgia, 'Noto Serif CJK SC', 'Songti SC', serif; }
+:is(.stats, .settings, .dd-panel) h2 { font-size: 18px; line-height: 26px; }
+:is(.stats, .settings, .dd-panel) :is(button, input, select, textarea) { font-size: 16px; line-height: 24px; white-space: normal; max-width: 100%; }
+:is(.stats, .settings, .dd-panel) .card { padding: 24px; }
+.settings.settings.settings { max-width: 1200px; width: 100%; }
+.settings.settings .section { scroll-margin-top: 16px; }
+.settings.settings .row { flex-wrap: wrap; gap: 12px 24px; min-height: 72px; }
+.settings.settings .row :is(input, select, textarea) { min-width: 0; }
+.stats .overview-layout { gap: 24px; }
+.stats .today .head { flex-wrap: wrap; }
+.stats .today .chips { min-width: 0; max-width: 100%; flex-wrap: wrap; }
+.stats .today .chip { max-width: 100%; white-space: normal; }
+.stats .stats-subnav { gap: 8px; flex-wrap: wrap; }
+.stats .subnav-btn { min-height: 56px; flex: 1 1 88px; }
+.stats .chart { overflow-x: auto; overflow-y: hidden; }
+.stats .chart-body, .stats .x-axis { min-width: 384px; }
+.stats .chart-year .chart-body, .stats .chart-year .x-axis { min-width: 624px; }
+.stats .bar-hit { min-width: 0; }
+.stats :is(.chart-week, .chart-year) .bars { gap: 0; }
+.stats .chart-month .bar-hit { pointer-events: none; min-width: 0; }
+.stats .chart-month .chart-body { pointer-events: none; }
+.stats .chart-month .month-day-list { pointer-events: auto; }
+.stats :is(.hm-month, .hm-wd, .y-axis, .x-axis) { font-size: 12px; line-height: 18px; }
+.stats :is(.hm-cell, .mc-cell, .sw)::before { display: none; }
+.stats :is(.hm-cell, .mc-cell, .sw) { background: var(--bg); border: 1px solid var(--border); }
+.stats :is(.hm-cell, .mc-cell, .sw).l1 { background: #DDDDDD; color: #222222; }
+.stats :is(.hm-cell, .mc-cell, .sw).l2 { background: #555555; color: #FFFFFF; }
+.stats :is(.hm-cell, .mc-cell, .sw).l3 { background: #222222; color: #FFFFFF; }
+.stats :is(.hm-cell, .mc-cell, .sw).l4 { background: #000000; color: #FFFFFF; }
+.stats .hm-cell { cursor: default; }
+.stats .weekdays { gap: 8px; grid-template-columns: repeat(auto-fit, minmax(56px, 1fr)); }
+.stats .weekdays .wd { min-width: 48px; min-height: 56px; }
+:is(.stats, .settings, .dd-panel, .dd-mask), :is(.stats, .settings, .dd-panel, .dd-mask) * { scroll-behavior: auto !important; }
+html[data-eink='true'] :is(.stats, .settings, .dd-panel, .dd-mask) *,
+html.lr-eink :is(.stats, .settings, .dd-panel, .dd-mask) *,
+html.pagewise-eink :is(.stats, .settings, .dd-panel, .dd-mask) * { transition: none !important; animation: none !important; }
+@media (prefers-reduced-motion: reduce) {
+  :is(.stats, .settings, .dd-panel, .dd-mask) * { transition: none !important; animation: none !important; }
+}
+
+/* Font scale wrapping (up to 1.8x) */
+:is(.stats, .settings, .dd-panel) {
+  overflow-wrap: break-word;
+  word-break: break-word;
+}

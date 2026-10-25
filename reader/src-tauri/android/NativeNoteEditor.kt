@@ -53,7 +53,7 @@ internal class NativeNoteEditor(
         val form =
             LinearLayout(activity).apply {
                 orientation = LinearLayout.VERTICAL
-                setPadding(24, 12, 24, 12)
+                setPadding(NativeUi.dp(activity, 24), NativeUi.dp(activity, 12), NativeUi.dp(activity, 24), NativeUi.dp(activity, 12))
             }
         form.addView(
             TextView(activity).apply {

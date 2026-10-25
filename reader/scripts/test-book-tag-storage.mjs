@@ -10,6 +10,24 @@ import vue from '@vitejs/plugin-vue'
 import { chromium } from 'playwright'
 
 const root = resolve(import.meta.dirname, '..')
+// Frozen pre-refactor SQL oracle. Android's real native transaction is tested separately on API32.
+const classificationReferenceSql = `
+  WITH changes AS MATERIALIZED (SELECT value AS item FROM json_each($1)),
+  eligible AS MATERIALIZED (
+    SELECT b.id FROM books b JOIN changes c ON b.id = json_extract(c.item, '$.id')
+    WHERE (json_type(c.item, '$.classification') = 'null'
+      OR coalesce(json_extract(b.classification, '$.revision'), 0) = json_extract(c.item, '$.expectedRevision'))
+    AND (json_type(c.item, '$.expectedTags') IS NULL OR (b.classification IS NULL AND json(b.tags) = json_extract(c.item, '$.expectedTags')))
+    AND (json_type(c.item, '$.expectedMetadata') IS NULL OR (
+      b.title IS json_extract(c.item, '$.expectedMetadata.title') AND b.author IS json_extract(c.item, '$.expectedMetadata.author')
+      AND b.publisher IS json_extract(c.item, '$.expectedMetadata.publisher')
+      AND b.publication_date IS json_extract(c.item, '$.expectedMetadata.publicationDate')
+      AND b.description IS json_extract(c.item, '$.expectedMetadata.description')))
+  )
+  UPDATE books SET classification=(SELECT json_extract(item, '$.classification') FROM changes WHERE json_extract(item, '$.id')=books.id),
+    tags=(SELECT json_extract(item, '$.tags') FROM changes WHERE json_extract(item, '$.id')=books.id)
+  WHERE id IN (SELECT id FROM eligible) AND (SELECT count(*) FROM eligible)=(SELECT count(*) FROM changes)
+`
 export async function createHarness() {
   const domain = process.env.BOOK_CLASSIFICATION_MODULE && resolve(process.env.BOOK_CLASSIFICATION_MODULE)
   await access(domain || resolve(root, 'src/services/bookClassification.ts'))
@@ -22,11 +40,11 @@ export async function createHarness() {
     plugins: [vue(), { name: 'book-tags-test', enforce: 'pre',
       resolveId(source) {
         if (domain && /(?:^|\/)bookClassification(?:\.ts)?$/.test(source)) return domain
-        if (source === '@tauri-apps/plugin-sql') return '\0tags-sql'
+        if (source === '@tauri-apps/api/core') return '\0tags-core'
         if (source === '@tauri-apps/plugin-fs') return '\0tags-fs'
       },
       load(id) {
-        if (id === '\0tags-sql') return `export default {load:async()=>({execute:(s,v)=>window.__sql('execute',s,v||[]),select:(s,v)=>window.__sql('select',s,v||[])})}`
+        if (id === '\0tags-core') return `export const invoke=async(command,args)=>{if(command!=='native_state')throw Error('Unexpected native command');return window.__nativeSql(args.action,args.payload)}`
         if (id === '\0tags-fs') return `export const BaseDirectory={AppData:1}; export const exists=async()=>true;export const mkdir=async()=>{};export const writeFile=async()=>{};export const readFile=async()=>new Uint8Array([1]);export const remove=async()=>{};`
       },
       configureServer(vite) { vite.middlewares.use((req,res,next) => {
@@ -48,6 +66,20 @@ export async function createHarness() {
       if (!values.length) { db.exec(sql); return {rowsAffected:0} }
       return {rowsAffected:Number(statement.run(bindings).changes)}
     })
+    await context.exposeFunction('__nativeSql', (action, payload) => {
+      if (action === 'sql.classify') return { rowsAffected: Number(db.prepare(classificationReferenceSql).run({ $1: JSON.stringify(payload.updates) }).changes) }
+      if (action === 'sql.batch') {
+        db.exec('BEGIN IMMEDIATE')
+        try { for (const sql of payload.statements) db.exec(sql); db.exec('COMMIT'); return { rowsAffected: 0 } }
+        catch (error) { db.exec('ROLLBACK'); throw error }
+      }
+      const bindings = Object.fromEntries((payload.values ?? []).map((value, index) => [`$${index + 1}`, typeof value === 'boolean' ? Number(value) : value]))
+      const statement = db.prepare(payload.sql)
+      if (action === 'sql.select') return { rows: (payload.values ?? []).length ? statement.all(bindings) : statement.all() }
+      if (action !== 'sql.execute') throw Error('Unexpected native SQL action')
+      if (!(payload.values ?? []).length) { db.exec(payload.sql); return { rowsAffected: 0 } }
+      return { rowsAffected: Number(statement.run(bindings).changes) }
+    })
     const page = await context.newPage()
     await page.goto(`${base}/__tags`)
     await page.evaluate(async () => {
@@ -60,10 +92,10 @@ export async function createHarness() {
 }
 
 if (import.meta.url === pathToFileURL(process.argv[1]).href) {
-  test('actual SQLite JSON1 change-set: revision/metadata gates and statement rollback', async () => {
-    const source = await readFile(resolve(root,'src/storage/tauri.ts'),'utf8')
-    const sql = source.match(/const result = await this\.db\.execute\(`(\s+WITH changes AS MATERIALIZED[\s\S]*?)`, \[JSON\.stringify\(prepared\)\]\)/)?.[1]
-    assert.ok(sql, 'Production atomic statement must be tested')
+  test('frozen SQLite CAS oracle: revision/metadata gates and statement rollback', async () => {
+    const sql = classificationReferenceSql
+    const source = await readFile(resolve(root, 'src/storage/tauri.ts'), 'utf8')
+    assert.match(source, /this\.db\.classify\(prepared\)/)
     const db = new DatabaseSync(':memory:')
     try {
       db.exec(`CREATE TABLE books(id TEXT PRIMARY KEY,title TEXT,author TEXT,publisher TEXT,publication_date TEXT,description TEXT,classification TEXT,tags TEXT);

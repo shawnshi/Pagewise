@@ -10,13 +10,16 @@ import { formatReadingTime } from '../composables/useReadingTimer'
 import { saveLibrarySession } from '../services/librarySession'
 import { acquireLibraryCover } from '../services/libraryCovers'
 import AppIcon from '../components/AppIcon.vue'
+import BookRecommendationsPanel from '../components/BookRecommendationsPanel.vue'
 import { t } from '../i18n'
 
 const router = useRouter()
 const library = useLibrary()
 
 type TabKind = 'reading' | 'recent' | 'wanted' | 'paused' | 'finished' | 'abandoned'
-const currentTab = ref<TabKind>('reading')
+const currentTab = ref<TabKind | 'recommendations'>('reading')
+const recommendationWriting = ref(false)
+const recommendationCount = ref<number | null>(null)
 
 onMounted(async () => {
   if (!library.loaded) {
@@ -75,6 +78,7 @@ const displayedBooks = computed(() => {
     case 'paused': return pausedBooks.value
     case 'finished': return finishedBooks.value
     case 'abandoned': return abandonedBooks.value
+    case 'recommendations': return []
   }
 })
 
@@ -149,6 +153,7 @@ function getProgress(book: BookMeta) {
           type="button"
           class="segmented-btn"
           :class="{ active: currentTab === 'reading' }"
+          :disabled="recommendationWriting"
           role="tab"
           :aria-selected="currentTab === 'reading'"
           @click="currentTab = 'reading'"
@@ -159,6 +164,7 @@ function getProgress(book: BookMeta) {
           type="button"
           class="segmented-btn"
           :class="{ active: currentTab === 'recent' }"
+          :disabled="recommendationWriting"
           role="tab"
           :aria-selected="currentTab === 'recent'"
           @click="currentTab = 'recent'"
@@ -169,6 +175,7 @@ function getProgress(book: BookMeta) {
           type="button"
           class="segmented-btn"
           :class="{ active: currentTab === 'wanted' }"
+          :disabled="recommendationWriting"
           role="tab"
           :aria-selected="currentTab === 'wanted'"
           @click="currentTab = 'wanted'"
@@ -179,6 +186,7 @@ function getProgress(book: BookMeta) {
           type="button"
           class="segmented-btn"
           :class="{ active: currentTab === 'paused' }"
+          :disabled="recommendationWriting"
           role="tab"
           :aria-selected="currentTab === 'paused'"
           @click="currentTab = 'paused'"
@@ -189,6 +197,7 @@ function getProgress(book: BookMeta) {
           type="button"
           class="segmented-btn"
           :class="{ active: currentTab === 'finished' }"
+          :disabled="recommendationWriting"
           role="tab"
           :aria-selected="currentTab === 'finished'"
           @click="currentTab = 'finished'"
@@ -199,16 +208,19 @@ function getProgress(book: BookMeta) {
           type="button"
           class="segmented-btn"
           :class="{ active: currentTab === 'abandoned' }"
+          :disabled="recommendationWriting"
           role="tab"
           :aria-selected="currentTab === 'abandoned'"
           @click="currentTab = 'abandoned'"
         >
           {{ t('uiV02.status.abandoned') }} ({{ abandonedBooks.length }})
         </button>
+        <button type="button" class="segmented-btn" :class="{ active: currentTab === 'recommendations' }" :disabled="recommendationWriting" role="tab" :aria-selected="currentTab === 'recommendations'" @click="currentTab = 'recommendations'">{{ t('recommendations.tab') }}<template v-if="recommendationCount != null"> ({{ recommendationCount }})</template></button>
       </nav>
     </header>
 
-    <div v-if="!displayedBooks.length" class="empty card">
+    <BookRecommendationsPanel v-if="currentTab === 'recommendations'" mode="reading" @writing="recommendationWriting = $event" @count="recommendationCount = $event" @navigate="id => router.push(`/book/${encodeURIComponent(id)}`)" />
+    <div v-else-if="!displayedBooks.length" class="empty card">
       <div class="empty-icon" aria-hidden="true">
         <AppIcon name="reading" :size="48" aria-hidden="true" />
       </div>

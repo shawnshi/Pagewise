@@ -29,6 +29,8 @@ def connect(path, readonly=False):
 def execute(db, request):
     cursor = db.execute(request['sql'], request.get('args', []))
     columns = [item[0] for item in cursor.description] if cursor.description else []
+    if request.get('query') is False and cursor.description:
+        raise sqlite3.OperationalError('Queries can be performed using SQLiteDatabase query or rawQuery methods only.')
     rows = cursor.fetchall() if cursor.description else []
     return {'columns': columns, 'rows': rows}
 
@@ -102,15 +104,17 @@ import org.json.JSONObject
 import org.json.JSONArray
 import java.io.*
 import java.util.concurrent.TimeUnit
-class SQLiteException(message:String):RuntimeException(message)
+open class SQLiteException(message:String):RuntimeException(message)
+class SQLiteDatabaseCorruptException(message:String):SQLiteException(message)
+class SQLiteDatabaseLockedException(message:String):SQLiteException(message)
 object HostSql {lateinit var script:String;var fault=""}
 class SQLiteDatabase private constructor(path:String):Closeable{
  private val process=ProcessBuilder("python","-u",HostSql.script,path).apply{environment()["PYTHONUTF8"]="1"}.start()
  private val writer=process.outputStream.bufferedWriter(Charsets.UTF_8)
  private val reader=process.inputStream.bufferedReader(Charsets.UTF_8)
  private var success=false
- private fun send(sql:String,args:List<Any?> = emptyList()):JSONObject{
-  writer.write(JSONObject().put("sql",sql).put("args",JSONArray(args)).toString());writer.newLine();writer.flush()
+ private fun send(sql:String,args:List<Any?> = emptyList(),query:Boolean=false):JSONObject{
+  writer.write(JSONObject().put("sql",sql).put("args",JSONArray(args)).put("query",query).toString());writer.newLine();writer.flush()
   val text=reader.readLine()?:throw SQLiteException("SQLite boundary EOF: "+process.errorStream.bufferedReader().readText())
   val result=JSONObject(text)
   if(result.has("error"))throw SQLiteException(result.getString("error"))
@@ -120,7 +124,7 @@ class SQLiteDatabase private constructor(path:String):Closeable{
  fun execSQL(sql:String,args:Array<out Any?>){send(sql,args.toList())}
  fun rawQuery(sql:String,args:Array<String>?):Cursor{
   if(HostSql.fault=="query-error" && sql.startsWith("SELECT key,json FROM native_core_reading"))throw SQLiteException("injected source page read failure")
-  val result=send(sql,args?.toList()?:emptyList())
+  val result=send(sql,args?.toList()?:emptyList(),true)
   val columns=result.getJSONArray("columns").data.map{it.toString()}.toTypedArray()
   @Suppress("UNCHECKED_CAST") val rows=result.getJSONArray("rows").data as List<List<Any?>>
   return Cursor(columns,rows)
@@ -134,9 +138,15 @@ class SQLiteDatabase private constructor(path:String):Closeable{
   if(success && fault=="commit-before-ack")throw SQLiteException("injected committed COMMIT acknowledgement loss")
  }
  override fun close(){writer.close();if(!process.waitFor(3,TimeUnit.SECONDS)){process.destroyForcibly();throw SQLiteException("SQLite child did not close")};if(process.exitValue()!=0)throw SQLiteException("SQLite child failed: "+process.errorStream.bufferedReader().readText())}
- companion object {fun openOrCreateDatabase(path:String,factory:Any?)=SQLiteDatabase(path)}
+ companion object {
+  const val OPEN_READONLY=1; const val OPEN_READWRITE=0; const val NO_LOCALIZED_COLLATORS=16; const val ENABLE_WRITE_AHEAD_LOGGING=0x20000000; const val CREATE_IF_NECESSARY=0x10000000
+  fun openOrCreateDatabase(path:String,factory:Any?)=SQLiteDatabase(path)
+  fun openDatabase(path:String,factory:Any?,flags:Int,handler:android.database.DatabaseErrorHandler)=SQLiteDatabase(path)
+ }
 }
 `)
+  put('DatabaseErrorHandler.kt', 'package android.database\nfun interface DatabaseErrorHandler { fun onCorruption(db:android.database.sqlite.SQLiteDatabase) }\n')
+  put('SqlBridgeOutsideScope.kt', 'package io.pagewise.reader\nclass NativeSqlDatabase(context:android.content.Context,root:String?):java.io.Closeable { fun command(action:String,payload:org.json.JSONObject):org.json.JSONObject=throw UnsupportedOperationException("SQL adapter is exercised by the real API32 harness, not this state-only host"); override fun close(){} }\n')
   put('App.kt', 'package android.app\nclass Activity(dataDir:java.io.File):android.content.Context(dataDir)\n')
   put('Annotations.kt', 'package app.tauri.annotation\nannotation class Command\nannotation class TauriPlugin\n')
   put('Plugin.kt', `package app.tauri.plugin

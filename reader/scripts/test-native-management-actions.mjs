@@ -87,8 +87,23 @@ const payload = (draft, extra = {}) => ({ bookId: 'b1', sessionToken: draft.sess
 
 test('stable action set: no invented export or second provider selector', () => {
   assert.deepEqual(Object.keys(fixture().actions()).sort(), ['importBooks', 'selectFolder', 'recheckFolder', 'fileJobStatus', 'relinkBook', 'relinkBookCommit',
-    'backupExport', 'backupImport', 'classificationGet', 'aiClassify', 'classificationSave', 'noteDraftList', 'noteDraftGet', 'noteDraftSave', 'noteDraftDiscard'].sort())
+    'backupExport', 'backupImport', 'bookIntroductionGenerate', 'bookIntroductionSave', 'bookIntroductionCancel', 'recommendationsGet', 'recommendationsAi', 'recommendationsCancel', 'recommendationsFeedback', 'recommendationsClearFeedback', 'recommendationsWanted', 'classificationGet', 'aiClassify', 'classificationSave', 'noteDraftList', 'noteDraftGet', 'noteDraftSave', 'noteDraftDiscard'].sort())
 })
+test('selection draft discard is explicit, book-scoped and preserves legacy annotation drafts', async () => {
+  const f = fixture(), a = f.actions()
+  const ctx = { bookId: 'b1', contextId: 'sel:synthetic-token', quote: 'quote', sourceLoc: 'epubcfi(/6/2)' }
+  saveNoteDraft(ctx, 'first draft', f.deps.draftEnv)
+  saveNoteDraft({ ...ctx, bookId: 'b2' }, 'other book', f.deps.draftEnv)
+  saveNoteDraft({ ...ctx, contextId: 'anno:a1' }, 'legacy draft', f.deps.draftEnv)
+  assert.equal((await a.noteDraftDiscard({ bookId: 'b1', contextId: ctx.contextId })).code, 'confirmation_required')
+  assert.equal((await a.noteDraftDiscard({ bookId: 'b1', contextId: 'anno:a1', confirmDiscard: true })).code, 'invalid_payload')
+  assert.equal((await a.noteDraftDiscard({ bookId: 'b1', contextId: ctx.contextId, confirmDiscard: true })).code, 'draft_discarded')
+  assert.equal(loadNoteDraft(ctx, f.deps.draftEnv).success, false)
+  assert.equal(loadNoteDraft({ ...ctx, bookId: 'b2' }, f.deps.draftEnv).success, true)
+  assert.equal(loadNoteDraft({ ...ctx, contextId: 'anno:a1' }, f.deps.draftEnv).success, true)
+  assert.equal(f.writes.length, 0, 'discard must never change committed annotations')
+})
+
 test('settings recovery blocks dependent IO, discloses paths/count, never keys or empty success', async () => {
   const f = fixture(), a = f.actions({ settingsReady: async () => ({ unsavedPaths: [['reader', 'fontSize']], failedCommits: [{ aiApiKey: 'PRIVATE_KEY' }] }) })
   const result = await a.importBooks({})

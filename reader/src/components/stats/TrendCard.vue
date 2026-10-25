@@ -331,7 +331,7 @@ const visibleRows = computed(() => (showAllBooks.value ? bookRows.value : bookRo
               :class="{ current: bar.current, future: bar.future, active: active === i }"
             >
               <button
-                v-if="!bar.future"
+                v-if="!bar.future && kind !== 'month'"
                 type="button"
                 class="bar-hit"
                 :tabindex="i === rovingIndex ? 0 : -1"
@@ -345,12 +345,36 @@ const visibleRows = computed(() => (showAllBooks.value ? bookRows.value : bookRo
               >
                 <span class="bar" :class="{ zero: bar.seconds <= 0 }" :style="{ height: bar.seconds > 0 ? `${barPct(bar.seconds)}%` : undefined }" />
               </button>
+              <span v-else class="bar-hit" aria-hidden="true"><span class="bar" :class="{ zero: bar.seconds <= 0 }" :style="{ height: bar.seconds > 0 ? `${barPct(bar.seconds)}%` : undefined }" /></span>
             </div>
           </div>
         </div>
       </div>
       <div class="x-axis" aria-hidden="true">
         <span v-for="(bar, i) in bars" :key="bar.key" :class="{ current: bar.current, odd: i % 2 === 1 }">{{ bar.label }}</span>
+      </div>
+    </div>
+
+    <!-- 针对月视图密集柱状图，提供大触控目标 (>=48px) 的无障碍日期选择列表 -->
+    <div v-if="kind === 'month'" class="month-day-list" role="region" :aria-label="t('stats.calendarTitle')">
+      <div class="month-day-head">
+        <span class="month-day-title">{{ t('stats.calendarTitle') }}</span>
+        <span class="month-day-hint">{{ t('stats.readoutHint') }}</span>
+      </div>
+      <div class="month-day-grid">
+        <button
+          v-for="(bar, i) in bars"
+          :key="`m-day-${bar.key}`"
+          type="button"
+          class="month-day-btn"
+          :class="{ active: active === i, current: bar.current, read: bar.seconds > 0 }"
+          :disabled="bar.future"
+          :aria-label="bar.aria"
+          @click="act(i, $event.currentTarget as HTMLElement)"
+        >
+          <span class="num">{{ Number(bar.day.slice(8)) }}</span>
+          <span v-if="bar.seconds > 0" class="dur">{{ fmtDuration(bar.seconds) }}</span>
+        </button>
       </div>
     </div>
 
@@ -372,6 +396,75 @@ const visibleRows = computed(() => (showAllBooks.value ? bookRows.value : bookRo
 </template>
 
 <style scoped>
+.month-day-list {
+  margin-top: 16px;
+  padding: 12px;
+  border: 1px solid var(--border, #555555);
+  border-radius: 2px;
+  background: var(--surface-2, #F5F5F5);
+}
+:root[data-theme='dark'] .month-day-list {
+  background: #1E1E1E;
+}
+.month-day-head {
+  display: flex;
+  justify-content: space-between;
+  align-items: baseline;
+  margin-bottom: 8px;
+}
+.month-day-title {
+  font-size: 14px;
+  font-weight: 500;
+  color: var(--text, #000000);
+}
+.month-day-hint {
+  font-size: 12px;
+  color: var(--text-3, #555555);
+}
+.month-day-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(48px, 1fr));
+  gap: 6px;
+}
+.month-day-btn {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  min-height: 48px;
+  min-width: 48px;
+  padding: 4px;
+  border: 1px solid var(--border, #555555);
+  border-radius: 2px;
+  background: var(--bg, #FFFFFF);
+  color: var(--text, #000000);
+  cursor: pointer;
+}
+.month-day-btn:disabled {
+  opacity: 0.4;
+  cursor: default;
+}
+.month-day-btn.read {
+  border-color: var(--border-strong, #000000);
+  font-weight: 500;
+}
+.month-day-btn.current {
+  outline: 2px solid var(--text, #000000);
+}
+.month-day-btn.active {
+  background: var(--eink-selected-surface, #DDDDDD) !important;
+}
+:root[data-theme='dark'] .month-day-btn.active {
+  background: var(--eink-selected-surface, #2A2A2A) !important;
+}
+.month-day-btn .num {
+  font-size: 14px;
+}
+.month-day-btn .dur {
+  font-size: 11px;
+  color: var(--text-3, #555555);
+  white-space: nowrap;
+}
 .trend {
   padding: 20px 24px 16px;
   container-type: inline-size;

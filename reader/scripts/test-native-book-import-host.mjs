@@ -40,6 +40,8 @@ for line in sys.stdin:
  try:
   req=json.loads(line);sql=req['sql'];args=req.get('args',[])
   cursor=conn.execute(sql,args)
+  if req['op']!='query' and cursor.description:
+   raise sqlite3.OperationalError('Queries can be performed using SQLiteDatabase query or rawQuery methods only.')
   if req['op']=='query': result={'columns':[d[0] for d in cursor.description],'rows':[list(r) for r in cursor.fetchall()]}
   else: result={}
   print(json.dumps(result,ensure_ascii=True),flush=True)
@@ -131,7 +133,9 @@ import org.json.JSONObject
 import org.json.JSONArray
 import java.io.*
 import java.util.concurrent.CountDownLatch
-class SQLiteException(message:String):RuntimeException(message)
+open class SQLiteException(message:String):RuntimeException(message)
+class SQLiteDatabaseCorruptException(message:String):SQLiteException(message)
+class SQLiteDatabaseLockedException(message:String):SQLiteException(message)
 object HostSql{
  lateinit var script:String
  @Volatile var failRecord=false
@@ -177,8 +181,9 @@ class SQLiteDatabase private constructor(path:String,flags:Int):Closeable{
  }
  override fun close(){writer.close();process.waitFor(3,java.util.concurrent.TimeUnit.SECONDS);if(process.isAlive)process.destroyForcibly()}
  companion object{
-  const val OPEN_READONLY=1;const val OPEN_READWRITE=0;const val NO_LOCALIZED_COLLATORS=16;const val ENABLE_WRITE_AHEAD_LOGGING=0x20000000
+  const val OPEN_READONLY=1;const val OPEN_READWRITE=0;const val NO_LOCALIZED_COLLATORS=16;const val ENABLE_WRITE_AHEAD_LOGGING=0x20000000;const val CREATE_IF_NECESSARY=0x10000000
   fun openDatabase(path:String,factory:Any?,flags:Int)=SQLiteDatabase(path,flags)
+  fun openDatabase(path:String,factory:Any?,flags:Int,handler:android.database.DatabaseErrorHandler)=SQLiteDatabase(path,flags)
  }
 }
 `)
@@ -401,7 +406,8 @@ fun main(args:Array<String>){
   assert.equal(productionJobs.split(settlementSeam).length, 2, 'one scheduling-only commit-settlement seam')
   const scheduledJobs = emit(out, 'ProductionNativeFileJobs.kt', productionJobs.replace(settlementSeam,
     '                NativeCommitProbe.beforeSettlement?.invoke()\n' + settlementSeam))
-  const kotlin = ['NativeBookMetadata.kt', 'NativeMobiLocales.kt', 'NativeBookImporter.kt', 'NativeImportDatabase.kt'].map(n => join(root, 'src-tauri/android', n))
+  put('DatabaseErrorHandler.kt', 'package android.database\nfun interface DatabaseErrorHandler { fun onCorruption(db:android.database.sqlite.SQLiteDatabase) }\n')
+  const kotlin = ['NativeBookMetadata.kt', 'NativeMobiLocales.kt', 'NativeBookImporter.kt', 'NativeImportDatabase.kt', 'CanonicalDatabase.kt'].map(n => join(root, 'src-tauri/android', n))
   kotlin.push(scheduledJobs)
   const cp = compile(out, [...sources, ...kotlin], [artifact('org.commonmark', 'commonmark', '0.21.0'), artifact('net.sf.kxml', 'kxml2', '2.3.0'), ...groovy()])
   const output = runJvm(out, 'run', ['-Xmx128m', '-cp', cp, 'io.pagewise.reader.NativeImportHostKt', fixture, py], 60000)

@@ -12,8 +12,9 @@ export async function decodeText(blob: Blob): Promise<string> {
   const buf = await blob.arrayBuffer()
   try {
     return new TextDecoder('utf-8', { fatal: true }).decode(buf)
-  } catch {
-    return new TextDecoder('gb18030').decode(buf)
+  } catch (error) {
+    if (!(error instanceof TypeError)) throw error
+    return new TextDecoder('gb18030', { fatal: true }).decode(buf)
   }
 }
 
@@ -144,6 +145,7 @@ export async function convertToEpubLocal(
   if (format !== 'txt' && format !== 'md') throw new Error('Unsupported text format')
   const baseName = fileName.replace(/\.[^.]+$/, '')
   const text = await decodeText(blob)
+  if (!text.trim()) throw new Error('Text file is empty')
 
   let chapters: Chapter[]
   let title = baseName
@@ -171,7 +173,7 @@ export async function convertToEpubLocal(
   <metadata xmlns:dc="http://purl.org/dc/elements/1.1/">
     <dc:identifier id="uid">urn:lights:${encodeURIComponent(baseName)}</dc:identifier>
     <dc:title>${escapeXml(title)}</dc:title>
-    <dc:language>zh</dc:language>
+    <dc:language>und</dc:language>
     <meta property="dcterms:modified">1970-01-01T00:00:00Z</meta>
   </metadata>
   <manifest>

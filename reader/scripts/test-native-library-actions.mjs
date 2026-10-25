@@ -32,12 +32,51 @@ function fixture(initial) {
   const actions = createNativeLibraryActions({ storage: async () => storage, session: () => structuredClone(session), saveSession: p => { calls.push(['session']); session = { ...session, ...structuredClone(p) } }, settingsReady: async () => {}, now: () => now, token: () => 'token-' + ++token })
   return { actions, calls, flags, storage, get books() { return books }, replace: value => { books = value }, setSession: value => { session = { ...session, ...value } }, advance: () => { now += 300001 } }
 }
+
+test('opening one book resolves its full navigation order in one session command', async () => {
+  const f = fixture(Array.from({ length: 2243 }, (_, i) => book(String(i))))
+  const page = await f.actions.libraryPage({ mode: 'library', session: { sortBy: 'title', page: 1, pageSize: 12 } })
+  const expected = []
+  for (let offset = 0; offset < 2243; offset += 500) expected.push(...(await f.actions.librarySelectionPage({ token: page.selectionToken, offset, limit: 500 })).ids)
+  const id = page.items[0].id
+  const saved = await f.actions.librarySessionSave({ selectionToken: page.selectionToken, session: { lastViewedBookId: id, returnedFromReader: true, orderedBookIds: [] } })
+  assert.deepEqual(saved.session.orderedBookIds, expected)
+  assert.equal(saved.session.lastViewedBookId, id)
+  assert.equal(f.calls.filter(c => c[0] === 'session').length, 1)
+})
+
+test('stale or foreign selection cannot save a partial/new navigation order', async () => {
+  const f = fixture()
+  const page = await f.actions.libraryPage({ mode: 'library' })
+  await assert.rejects(() => f.actions.librarySessionSave({ selectionToken: page.selectionToken, session: { lastViewedBookId: 'foreign' } }), e => e.code === 'book_not_found')
+  f.advance()
+  await assert.rejects(() => f.actions.librarySessionSave({ selectionToken: page.selectionToken, session: { lastViewedBookId: page.items[0].id } }), e => e.code === 'stale_library_selection')
+  assert.equal(f.calls.filter(c => c[0] === 'session').length, 0)
+})
 test('book detail uses the canonical status/format policy without inferring completion from progress', async () => {
   const f = fixture([book('legacy', { progress: 1 }), book('history', { lastReadAt: 10 })])
   assert.equal((await f.actions.libraryBookInfo({ bookId: 'legacy' })).effectiveReadingStatus, 'unmarked')
   assert.equal((await f.actions.libraryBookInfo({ bookId: 'history' })).effectiveReadingStatus, 'reading')
   await assert.rejects(f.actions.libraryBookInfo({ bookId: 'missing' }), /book_not_found/)
 })
+test('library page placeholders carry publisher and publication date without changing canonical metadata', async () => {
+  const original = book('meta', { publisher: 'Synthetic Publisher', publicationDate: '2021-03-04', readingStatus: 'reading', lastReadAt: 10 })
+  const f = fixture([original])
+  for (const mode of ['library', 'reading']) {
+    const page = await f.actions.libraryPage({ mode, tab: 'reading', session: { page: 1 } })
+    assert.equal(page.items[0].publisher, 'Synthetic Publisher')
+    assert.equal(page.items[0].publicationDate, '2021-03-04')
+    assert.equal(page.items[0].id, 'meta')
+  }
+  assert.equal(f.books[0].publisher, original.publisher)
+  assert.equal(f.books[0].publicationDate, original.publicationDate)
+  assert.equal(f.calls.filter(call => call[0] === 'session' || call[0] === 'write').length, 0, 'Display metadata must not save session or books')
+  const missing = fixture([book('missing')])
+  const result = await missing.actions.libraryPage({ mode: 'library', session: {} })
+  assert.equal(result.items[0].publisher, '')
+  assert.equal(result.items[0].publicationDate, '')
+})
+
 test('global canonical query sort/filter precede pagination; no second Kotlin interpretation', async () => {
   const f = fixture(), r = await f.actions.libraryPage({ mode: 'library', session: { keyword: 'Book', formatFilter: 'epub', languageFilter: 'en', sortBy: 'title', page: 2, pageSize: 12 } })
   const oracle = queryLibraryBooks(f.books, { search: 'Book', formats: ['epub'], languages: ['en'], sortBy: 'title', pinnedFirst: true, page: 2, pageSize: 12 })

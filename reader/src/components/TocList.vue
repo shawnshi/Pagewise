@@ -24,6 +24,7 @@ defineEmits<{
       <button
         class="toc-item"
         :class="{ active: item.href && item.href === currentHref, disabled: !item.href }"
+        :disabled="!item.href"
         :aria-current="item.href && item.href === currentHref ? 'location' : undefined"
         @click="item.href && $emit('navigate', item.href)"
       >
@@ -46,9 +47,13 @@ defineEmits<{
 }
 .toc-item {
   display: block;
+  min-height: 48px;
+  min-width: 48px;
+  overflow-wrap: anywhere;
   width: 100%;
   text-align: left;
   border: none;
+  border-inline-start: 3px solid transparent;
   background: none;
   padding: 7px 10px;
   border-radius: 6px;
@@ -61,6 +66,8 @@ defineEmits<{
   color: var(--text);
 }
 .toc-item.active {
+  font-weight: 700;
+  border-inline-start-color: currentColor;
   background: var(--brand-light);
   color: var(--brand);
 }

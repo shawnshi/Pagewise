@@ -370,25 +370,32 @@ const continueProgress = computed(() => props.continueBook?.progress == null ? n
   display: inline-flex;
   align-items: center;
   gap: 5px;
-  height: 30px;
+  min-height: 48px;
   padding: 0 12px 0 10px;
-  border-radius: var(--radius-pill);
-  font-size: 13px;
+  border-radius: 2px;
+  font-size: 14px;
   font-weight: 500;
   white-space: nowrap;
   font-variant-numeric: tabular-nums;
+  border: 1px solid var(--border, #555555);
 }
 .streak-chip {
-  background: var(--warning-soft);
-  color: var(--warning);
-  font-weight: 600;
+  background: var(--surface-2, #F5F5F5);
+  color: var(--text, #000000);
+  font-weight: 500;
+}
+:root[data-theme='dark'] .streak-chip {
+  background: #1E1E1E;
+  color: #FFFFFF;
 }
 .goal-pill {
-  border: 1px solid var(--border);
-  background: var(--card);
-  color: var(--text-2);
-  padding-right: 8px;
-  transition: background var(--dur-fast) var(--ease), border-color var(--dur-fast) var(--ease);
+  border: 1px solid var(--border, #555555);
+  background: var(--bg, #FFFFFF);
+  color: var(--text, #000000);
+  padding: 0 12px;
+  min-height: 48px;
+  border-radius: 2px;
+  cursor: pointer;
 }
 @media (hover: hover) {
   .goal-pill:hover {
@@ -398,13 +405,16 @@ const continueProgress = computed(() => props.continueBook?.progress == null ? n
   }
 }
 .goal-pill:focus-visible {
-  outline: none;
-  box-shadow: var(--ring);
-  border-color: var(--brand);
+  outline: 2px solid var(--text, #000000);
+  border-color: var(--text, #000000);
 }
 .goal-pill[aria-expanded='true'] {
-  border-color: var(--brand);
-  color: var(--brand);
+  border-color: var(--text, #000000);
+  background: var(--eink-selected-surface, #DDDDDD);
+}
+:root[data-theme='dark'] .goal-pill[aria-expanded='true'] {
+  border-color: #FFFFFF;
+  background: var(--eink-selected-surface, #2A2A2A);
 }
 .chev {
   transition: transform var(--dur) var(--ease);
@@ -433,17 +443,17 @@ const continueProgress = computed(() => props.continueBook?.progress == null ? n
   gap: 6px;
 }
 .goal-opt {
-  min-width: 44px;
-  height: 32px;
-  padding: 0 10px;
-  border: 1px solid var(--border);
-  border-radius: var(--radius-sm);
-  background: var(--card);
-  color: var(--text-2);
-  font-size: 13px;
+  min-width: 48px;
+  min-height: 48px;
+  padding: 0 12px;
+  border: 1px solid var(--border, #555555);
+  border-radius: 2px;
+  background: var(--bg, #FFFFFF);
+  color: var(--text, #000000);
+  font-size: 14px;
   font-weight: 500;
   font-variant-numeric: tabular-nums;
-  transition: background var(--dur-fast) var(--ease), border-color var(--dur-fast) var(--ease), color var(--dur-fast) var(--ease);
+  cursor: pointer;
 }
 @media (hover: hover) {
   .goal-opt:hover {
@@ -452,10 +462,21 @@ const continueProgress = computed(() => props.continueBook?.progress == null ? n
   }
 }
 .goal-opt.active {
-  border-color: var(--brand);
-  background: var(--brand-soft);
-  color: var(--brand);
-  font-weight: 600;
+  border-color: var(--text, #000000);
+  background: var(--eink-selected-surface, #DDDDDD);
+  color: var(--text, #000000);
+  font-weight: 500;
+}
+:root[data-theme='dark'] .goal-opt.active {
+  border-color: #FFFFFF;
+  background: var(--eink-selected-surface, #2A2A2A);
+  color: #FFFFFF;
+}
+.continue-btn {
+  min-height: 56px;
+  padding: 0 20px;
+  border-radius: 2px;
+  font-weight: 500;
 }
 .goal-opt:focus-visible {
   outline: none;

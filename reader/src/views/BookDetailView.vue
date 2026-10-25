@@ -12,6 +12,8 @@ import { useNativeBack } from '../composables/useNativeBack'
 import AppIcon from '../components/AppIcon.vue'
 import BookClassificationPanel from '../components/BookClassificationPanel.vue'
 import BookRelinkDialog from '../components/BookRelinkDialog.vue'
+import BookIntroductionDialog from '../components/BookIntroductionDialog.vue'
+import BookRecommendationsPanel from '../components/BookRecommendationsPanel.vue'
 import { bookFileProblem } from '../services/bookAvailability'
 import { useFolderLibrary } from '../services/folderLibrary'
 import { toast } from '../services/toast'
@@ -33,6 +35,8 @@ const book = computed<BookMeta | null>(() => {
 const readable = computed(() => book.value ? isSupportedBookFormat(book.value.format) : false)
 const fileProblem = computed(() => book.value ? bookFileProblem(book.value) : undefined)
 const showRelink = ref(false)
+const showIntroduction = ref(false)
+const introductionDialog = ref<{ requestClose(): void; isSaving(): boolean } | null>(null)
 
 const progress = computed(() => {
   if (!book.value || book.value.progress == null) return null
@@ -144,6 +148,7 @@ function goBack() {
 
 // Android 返回键: 先关重关联对话框，再走页面返回。
 useNativeBack(() => {
+  if (showIntroduction.value) { introductionDialog.value?.requestClose(); return true }
   if (showRelink.value) { showRelink.value = false; return true }
   return false
 })
@@ -193,6 +198,13 @@ async function togglePin() {
   toast(t(nextPinned ? 'library.pinned' : 'library.unpinned'), 'success')
 }
 
+function onIntroductionSaved(id: string, description: string) {
+  if (id !== bookId.value || book.value?.id !== id) return
+  book.value.description = description
+  if (rawBook.value?.id === id) rawBook.value.description = description
+  void library.refresh().catch(() => { toast(t('bookIntroduction.refreshAfterSave'), 'info') })
+}
+
 async function onClassificationUpdated() {
   await library.refresh().catch(() => {})
   if (bookId.value) {
@@ -214,7 +226,9 @@ async function removeBook() {
   }
 }
 
-const activeTab = ref<'overview' | 'toc' | 'records'>('overview')
+const activeTab = ref<'overview' | 'toc' | 'records' | 'recommendations'>('overview')
+const recommendationWriting = ref(false)
+const recommendationCount = ref<number | null>(null)
 </script>
 
 <template>
@@ -308,6 +322,7 @@ const activeTab = ref<'overview' | 'toc' | 'records'>('overview')
         <RouterLink class="btn" to="/settings?section=folder">{{ t('library.folderSettings') }}</RouterLink>
       </section>
       <BookRelinkDialog v-if="showRelink && book" :book="book" @close="showRelink = false" @recovered="onFileRecovered" />
+      <BookIntroductionDialog ref="introductionDialog" v-model="showIntroduction" :book-id="bookId" :book="book?.id === bookId ? book : null" @saved="onIntroductionSaved" />
 
       <!-- 选项卡导航 -->
       <nav class="tabs-nav" role="tablist">
@@ -315,6 +330,7 @@ const activeTab = ref<'overview' | 'toc' | 'records'>('overview')
           type="button"
           class="tab-btn"
           :class="{ active: activeTab === 'overview' }"
+          :disabled="recommendationWriting"
           role="tab"
           :aria-selected="activeTab === 'overview'"
           @click="activeTab = 'overview'"
@@ -325,6 +341,7 @@ const activeTab = ref<'overview' | 'toc' | 'records'>('overview')
           type="button"
           class="tab-btn"
           :class="{ active: activeTab === 'toc' }"
+          :disabled="recommendationWriting"
           role="tab"
           :aria-selected="activeTab === 'toc'"
           @click="activeTab = 'toc'; loadToc()"
@@ -335,12 +352,14 @@ const activeTab = ref<'overview' | 'toc' | 'records'>('overview')
           type="button"
           class="tab-btn"
           :class="{ active: activeTab === 'records' }"
+          :disabled="recommendationWriting"
           role="tab"
           :aria-selected="activeTab === 'records'"
           @click="activeTab = 'records'"
         >
           {{ t("uiV02.copy.阅读记录 (") }}{{ annotations.length }})
         </button>
+        <button type="button" class="tab-btn" :class="{ active: activeTab === 'recommendations' }" :disabled="recommendationWriting || book.id !== bookId" role="tab" :aria-selected="activeTab === 'recommendations'" @click="activeTab = 'recommendations'">{{ t('recommendations.detailTab') }}<template v-if="recommendationCount != null"> ({{ recommendationCount }})</template></button>
       </nav>
 
       <!-- 概览面板 -->
@@ -399,9 +418,10 @@ const activeTab = ref<'overview' | 'toc' | 'records'>('overview')
               <span v-else class="tag-placeholder">{{ t('book.noTags') }}</span>
             </dd>
           </div>
-          <div v-if="book.description" class="meta-item full-width">
+          <div class="meta-item full-width">
             <dt>{{ t("uiV02.copy.书籍简介：") }}</dt>
-            <dd class="description-text">{{ book.description }}</dd>
+            <dd class="description-text">{{ book.description || t('bookIntroduction.empty') }}</dd>
+            <dd><button type="button" class="btn btn-ghost" :disabled="book.id !== bookId" @click="showIntroduction = true">{{ t('bookIntroduction.generate') }}</button></dd>
           </div>
         </dl>
 
@@ -435,6 +455,9 @@ const activeTab = ref<'overview' | 'toc' | 'records'>('overview')
             <p v-if="ann.note" class="annotation-note">{{ t("uiV02.copy.想法：") }}{{ ann.note }}</p>
           </li>
         </ul>
+      </section>
+      <section v-else-if="activeTab === 'recommendations' && book.id === bookId" class="tab-panel card" role="tabpanel">
+        <BookRecommendationsPanel mode="detail" :reference-id="bookId" @writing="recommendationWriting = $event" @count="recommendationCount = $event" @navigate="id => router.push(`/book/${encodeURIComponent(id)}`)" />
       </section>
     </div>
   </div>

@@ -1,20 +1,24 @@
 /**
  * Android 本地存储实现 (Tauri 2):
  *  - 书籍与封面以原始文件形式存放在应用数据目录 books/ covers/ 下
- *  - 元数据用 SQLite 索引 (tauri-plugin-sql)
+ *  - 元数据与原生设置/导入共用 Android SQLite, 不再混用 bundled sqlx
  */
 import type {
-  AnnotationRec, BookClassificationUpdate, LegacyBookTagsUpdate, BooklistRec, BooklistWantedRec, BookMeta, CatalogSourceRec, LibraryStorage, LocalFileRef, NewBookMeta,
+  AnnotationRec, BookClassificationUpdate, BookDescriptionSnapshot, BookReadingStatusSnapshot, ReadingStatus, LegacyBookTagsUpdate, BooklistRec, BooklistWantedRec, BookMeta, CatalogSourceRec, LibraryStorage, LocalFileRef, NewBookMeta,
 } from './types'
 import { BUILTIN_SOURCES, getLibraryRoot, newId } from './types'
+import { RecommendationError, RecommendationStatusConflictError, validateRecommendationStatusUpdate } from '../services/bookRecommendations.ts'
+import { BookDescriptionConflictError, validateBookDescriptionUpdate } from '../services/bookDescription.ts'
 import { isReadingStatus, normalizeReadingStatus } from '../services/readingStatus'
 import { prepareClassificationUpdates, rejectClassificationPatch, validatedBookClassification } from '../services/bookTagActions'
 import { parseClassification } from '../services/bookClassification'
 import { readReferencedFile, validateSourceRef, validateAvailability } from './sourceFile'
+import { openNativeSqlDatabase } from '../services/nativeSqlDatabase'
 
 type SqlDatabase = {
   execute(sql: string, values?: unknown[]): Promise<{ rowsAffected: number }>
   select<T>(sql: string, values?: unknown[]): Promise<T>
+  classify(updates: readonly unknown[]): Promise<{ rowsAffected: number }>
 }
 
 import { blobChunks } from './blobStream'
@@ -111,16 +115,9 @@ export class TauriStorage implements LibraryStorage {
   }
 
   async init() {
-    const [{ default: Database }, fs] = await Promise.all([
-      import('@tauri-apps/plugin-sql'),
-      import('@tauri-apps/plugin-fs'),
-    ])
-    this.fs = fs
+    this.fs = await import('@tauri-apps/plugin-fs')
     this.root = getLibraryRoot().replace(/\/+$/, '')
-    this.db = await Database.load(
-      this.root ? `sqlite:${this.root}/lightread.db` : 'sqlite:lightread.db')
-
-    await this.db.execute(`
+    this.db = await openNativeSqlDatabase(this.root, `
       CREATE TABLE IF NOT EXISTS books (
         id TEXT PRIMARY KEY,
         title TEXT NOT NULL,
@@ -218,9 +215,6 @@ export class TauriStorage implements LibraryStorage {
       }
     }
 
-    // Classification commits require JSON1 on the actual connected SQLite engine.
-    await this.db.select("SELECT json_extract('{\"version\":1}', '$.version') AS json1")
-
     // 内置书源与代码中的清单同步 (处理内置源的增删调整)
     const builtinUrls = BUILTIN_SOURCES.map(s => s.url)
     const rows = await this.db.select<Array<{ id: string; url: string; builtin: number }>>(
@@ -252,6 +246,24 @@ export class TauriStorage implements LibraryStorage {
     const rows = await this.db.select<BookRow[]>(
       'SELECT * FROM books ORDER BY added_at DESC')
     return rows.map(rowToMeta)
+  }
+
+  async listRecommendationBooks(): Promise<BookMeta[]> {
+    const books:BookMeta[]=[]
+    let after:string|null=null
+    for (;;) {
+      const rows:BookRow[]=await this.db.select<BookRow[]>(
+        `SELECT id,title,author,format,file_name,substr(description,1,2048) AS description,language,tags,classification,
+         added_at,last_read_at,progress,reading_status,has_cover,kind,reading_seconds,publisher,publication_date,file_availability,
+         NULL AS location,NULL AS source_ref,NULL AS source,NULL AS pinned_at
+         FROM books WHERE $1 IS NULL OR id > $1 ORDER BY id LIMIT 128`,[after])
+      books.push(...rows.map(rowToMeta))
+      if(books.length>10_000)throw new RecommendationError('library_limit')
+      if(rows.length<128)return books
+      const last:string=rows.at(-1)!.id
+      if(last===after)throw new RecommendationError('invalid_library')
+      after=last
+    }
   }
 
   async getBook(id: string) {
@@ -322,6 +334,29 @@ export class TauriStorage implements LibraryStorage {
     return id
   }
 
+  async updateBookDescription(id: string, expected: BookDescriptionSnapshot, description: string): Promise<void> {
+    validateBookDescriptionUpdate(id, expected, description)
+    // Single statement: a concurrent metadata/description edit must yield zero writes, not a stale overwrite.
+    const result = await this.db.execute(
+      `UPDATE books SET description = $1 WHERE id = $2 AND title = $3 AND author = $4
+       AND COALESCE(publisher, '') = $5 AND COALESCE(publication_date, '') = $6 AND COALESCE(description, '') = $7`,
+      [description, id, expected.title, expected.author, expected.publisher, expected.publicationDate, expected.description],
+    )
+    if (result.rowsAffected === 0) throw new BookDescriptionConflictError()
+    if (result.rowsAffected !== 1) throw new Error('Unexpected description update result')
+  }
+
+  async updateBookReadingStatus(id:string,expected:BookReadingStatusSnapshot,status:ReadingStatus):Promise<void> {
+    validateRecommendationStatusUpdate(id,expected,status)
+    const result=await this.db.execute(
+      `UPDATE books SET reading_status=$1 WHERE id=$2
+       AND (CASE WHEN reading_status='unread' THEN 'unmarked' ELSE reading_status END) IS $3
+       AND last_read_at IS $4 AND progress IS $5`,
+      [status,id,expected.readingStatus,expected.lastReadAt,expected.progress])
+    if(result.rowsAffected===0)throw new RecommendationStatusConflictError()
+    if(result.rowsAffected!==1)throw new RecommendationError('commit_outcome_unknown')
+  }
+
   async updateBook(id: string, patch: Partial<Omit<BookMeta, 'id'>>) {
     rejectClassificationPatch(patch)
     const hasTags = Object.prototype.hasOwnProperty.call(patch, 'tags')
@@ -386,30 +421,8 @@ export class TauriStorage implements LibraryStorage {
   async updateBookClassifications(updates: readonly BookClassificationUpdate[], legacyUpdates: readonly LegacyBookTagsUpdate[] = []) {
     const prepared = prepareClassificationUpdates(updates, legacyUpdates)
     if (!prepared.length) return
-    // MATERIALIZED freezes the full gate before any row changes; one pooled execute is atomic.
-    const result = await this.db.execute(`
-      WITH changes AS MATERIALIZED (SELECT value AS item FROM json_each($1)),
-      eligible AS MATERIALIZED (
-        SELECT b.id FROM books b JOIN changes c ON b.id = json_extract(c.item, '$.id')
-        WHERE (json_type(c.item, '$.classification') = 'null'
-            OR coalesce(json_extract(b.classification, '$.revision'), 0) = json_extract(c.item, '$.expectedRevision'))
-          AND (json_type(c.item, '$.expectedTags') IS NULL OR (
-            b.classification IS NULL AND json(b.tags) = json_extract(c.item, '$.expectedTags')
-          ))
-          AND (json_type(c.item, '$.expectedMetadata') IS NULL OR (
-            b.title IS json_extract(c.item, '$.expectedMetadata.title')
-            AND b.author IS json_extract(c.item, '$.expectedMetadata.author')
-            AND b.publisher IS json_extract(c.item, '$.expectedMetadata.publisher')
-            AND b.publication_date IS json_extract(c.item, '$.expectedMetadata.publicationDate')
-            AND b.description IS json_extract(c.item, '$.expectedMetadata.description')
-          ))
-      )
-      UPDATE books SET
-        classification = (SELECT json_extract(item, '$.classification') FROM changes WHERE json_extract(item, '$.id') = books.id),
-        tags = (SELECT json_extract(item, '$.tags') FROM changes WHERE json_extract(item, '$.id') = books.id)
-      WHERE id IN (SELECT id FROM eligible)
-        AND (SELECT count(*) FROM eligible) = (SELECT count(*) FROM changes)
-    `, [JSON.stringify(prepared)])
+    // Native transaction checks every CAS gate before updating any row, including API24/32 engines without MATERIALIZED.
+    const result = await this.db.classify(prepared)
     if (result.rowsAffected !== prepared.length) throw new Error('Book classification conflict')
   }
 

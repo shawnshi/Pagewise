@@ -124,6 +124,19 @@ test('Onyx hardware profile parses DeviceUtils/FrontLightController/EpdControlle
   }
 })
 
+test('reading checkpoint preserves the injected Java bridge receiver and existing argument clamps', () => {
+  const calls = []
+  const bridge = {
+    stageReadingCheckpoint(...args) {
+      assert.equal(this, bridge, 'Java bridge methods require their injected receiver')
+      calls.push(args)
+      return true
+    },
+  }
+  assert.equal(onyxNativeAccelerator.stageReadingCheckpoint('book', 'cfi', 2, -4, { LightReadInsets: bridge }), true)
+  assert.deepEqual(calls, [['book', 'cfi', 1, 0]])
+})
+
 test('Stage 1–4 Onyx native accelerator handles hardware page-turn keys, cover-sleep checkpoints, content:// staging, ZipFile EPUB search and PdfRenderer', () => {
   onyxNativeAccelerator.resetForTest()
   const calls = []

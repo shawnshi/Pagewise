@@ -12,7 +12,7 @@ const rulerDocument = '<!doctype html><html data-pw-calibration style="font-size
 function refreshFrameMetrics() {
   dpr.value = globalThis.devicePixelRatio ?? 1
   const doc = rulerFrame.value?.contentDocument
-  textScale.value = doc?.documentElement.hasAttribute('data-pw-calibration') ? measureTextScale(doc, 18) : null
+  textScale.value = doc?.documentElement?.hasAttribute('data-pw-calibration') ? measureTextScale(doc, 18) : null
 }
 onMounted(() => { window.addEventListener('resize', refreshFrameMetrics); refreshFrameMetrics() })
 onBeforeUnmount(() => window.removeEventListener('resize', refreshFrameMetrics))

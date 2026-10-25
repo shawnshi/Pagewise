@@ -77,7 +77,7 @@ test('actual NativeStateStore and NativeStatePlugin compile; real SQLite state c
   mkdirSync(out, { recursive: true })
   const initialHashes = { store: digest(readFileSync(store)), plugin: digest(readFileSync(plugin)) }
   const { python, sources } = platformSources(out)
-  const classpath = compile(out, [...sources, store, plugin], groovy())
+  const classpath = compile(out, [...sources, store, plugin, join(root, 'src-tauri/android/CanonicalDatabase.kt')], groovy())
   let host = hostProcess(classpath, python, out)
   let restartIndex = 0
   async function restart() {

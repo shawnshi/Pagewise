@@ -11,13 +11,14 @@ export function assertNativeStatsRecoveryBindings(base = fileURLToPath(new URL('
   assert.match(draw, /recoveryEntry\(\)/, 'successful repaint must retain the recovery entry')
   assert.match(stats, /private fun recoveryEntry\(\)[\s\S]*?button\([\s\S]*?recoverSettings\(\)/)
   const goal = stats.split('private fun editGoal(')[1] ?? ''
-  assert.match(goal, /setNeutralButton\(tr\("核对恢复", "Recovery"\), null\)/)
+  assert.match(goal, /NativeStatsSettingsDialog\([\s\S]*?AlertDialog\.BUTTON_NEUTRAL to tr\("核对恢复", "Recovery"\)/)
   assert.match(goal, /getButton\(AlertDialog\.BUTTON_NEUTRAL\)\.setOnClickListener \{ if \(!saving\) recoverSettings\(\) \}/)
   assert.match(controller, /NativeStatsPanel\([\s\S]*?::showSettingsRecovery/)
-  assert.match(controller, /toolbar\.addView\(button\("核对恢复", ::showSettingsRecovery\)\)/, 'shared native toolbar must also reach recovery without routing')
+  const frame = controller.split('private fun frame() {')[1]?.split('private fun pathFor(')[0] ?? ''
+  assert.match(frame, /NativeUi\.iconButton\([\s\S]*?label\("核对恢复"\)[\s\S]*?::showSettingsRecovery/, 'shared native toolbar must also reach recovery without routing')
   assert.doesNotMatch(controller.split('private fun showSettingsRecovery() {')[1]?.split('private inner class DailyBars')[0] ?? '', /page != "stats"/, 'shared entry must not restrict recovery to Statistics')
   const entry = controller.split('private fun showSettingsRecovery() {')[1]?.split('private inner class DailyBars')[0] ?? ''
-  assert.match(entry, /settingsPanel \?: NativeSettingsPanel\(/)
+  assert.match(entry, /settingsPanel\s*\?:\s*NativeSettingsPanel\(/)
   assert.match(entry, /panel\.showRecovery\(\)/)
   assert.doesNotMatch(entry, /navigate\(|recover\(|reloadNativeSettings|flushNativeSettings/, 'opening recovery cannot depend on the failed navigation/action barrier')
   assert.match(settings, /fun showRecovery\(\)[\s\S]*?if \(closed \|\| busy \|\| dialog\?\.isShowing == true\) return[\s\S]*?recovery\(\)/)

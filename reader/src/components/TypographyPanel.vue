@@ -494,6 +494,8 @@ let systemFontsLoading = false
       {{ profileName }} · {{ t('reader.typographySource.' + initialResolved.source) }} ·
       {{ initialResolved.calibration === 'calibrated' ? t('reader.typographyCalibrated') : t('reader.typographyUncalibrated') }}
     </p>
+    <details class="tp-explanations">
+      <summary>{{ t('reader.typographyDetails') }}</summary>
     <label v-if="bookId && !fixedLayout && !context?.protectedLayout" class="set-row tp-publication-baseline">
       <span class="tp-label">{{ t('reader.publicationBaseline') }}</span>
       <input v-model="draft.publicationBaseline" type="checkbox" :aria-label="t('reader.publicationBaseline')" />
@@ -501,6 +503,7 @@ let systemFontsLoading = false
     <p v-if="bookId && !fixedLayout && !context?.protectedLayout" class="set-note">{{ t('reader.publicationBaselineHelp') }}</p>
     <p v-if="draft.displayMode === 'optimized' && !context?.protectedLayout" class="set-note">{{ t('reader.typographyPageEdges') }}</p>
     <p v-if="draft.profile === 'mixed' || (draft.profile === 'auto' && context?.profile === 'mixed')" class="set-note">{{ t('reader.typographyMixedHint') }}</p>
+    </details>
     <p v-if="context?.warnings.length" class="set-note" role="note">{{ t('reader.typographyLanguageWarning') }}</p>
     <p v-if="fixedLayout || context?.protectedLayout" class="set-note">{{ t('reader.typographyLayoutProtected') }}</p>
     <label class="set-row">
@@ -1057,16 +1060,31 @@ let systemFontsLoading = false
 }
 .set-row {
   display: flex;
+  flex-wrap: wrap;
   align-items: center;
   gap: 8px;
   min-width: 0;
   font-size: 13px;
 }
 .tp-label {
-  width: 44px;
-  flex-shrink: 0;
+  flex-basis: 100%;
   color: var(--text-2);
-  overflow-wrap: anywhere;
+  overflow-wrap: normal;
+}
+.settings-pop button,
+.settings-pop select,
+.settings-pop input[type='range'] {
+  min-height: 48px;
+}
+.settings-pop button {
+  min-width: 48px;
+}
+.tp-explanations summary {
+  display: flex;
+  align-items: center;
+  min-height: 48px;
+  cursor: pointer;
+  color: var(--text-2);
 }
 .set-row input[type='range'] {
   flex: 1;
@@ -1085,10 +1103,10 @@ let systemFontsLoading = false
 .set-row select.input {
   flex: 1;
   min-width: 0;
-  height: 32px;
+  height: 48px;
 }
 .set-note {
-  margin: -4px 0 0 52px;
+  margin: 0;
   font-size: 12px;
   line-height: 1.4;
   color: var(--text-3);
@@ -1137,8 +1155,9 @@ let systemFontsLoading = false
 }
 .seg button {
   flex: 1;
-  min-width: 0;
-  height: 30px;
+  min-width: 48px;
+  min-height: 48px;
+  height: auto;
   padding: 0 4px;
   border: none;
   background: var(--card);

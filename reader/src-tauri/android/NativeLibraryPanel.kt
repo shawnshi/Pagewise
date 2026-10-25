@@ -5,8 +5,11 @@ import android.app.AlertDialog
 import android.graphics.Rect
 import android.os.Handler
 import android.os.Looper
+import android.text.Editable
 import android.text.InputType
+import android.text.TextWatcher
 import android.view.View
+import android.view.ViewGroup
 import android.view.inputmethod.EditorInfo
 import android.widget.Button
 import android.widget.CheckBox
@@ -16,6 +19,49 @@ import android.widget.ScrollView
 import android.widget.TextView
 import org.json.JSONArray
 import org.json.JSONObject
+
+internal fun nativeLibraryCanAct(
+    closed: Boolean,
+    failed: Boolean,
+    loading: Boolean,
+    mutating: Boolean,
+    navigating: Boolean,
+    fatalDatabase: Boolean,
+) = !closed && !failed && !loading && !mutating && !navigating && !fatalDatabase
+
+internal class NativeLibrarySearch {
+    private var desired: String? = null
+    private var inFlight = false
+    private var closed = false
+    val hasPending: Boolean get() = desired != null
+    val canLeave: Boolean get() = desired == null && !inFlight
+
+    fun edit(value: String) {
+        if (!closed) desired = value
+    }
+
+    fun take(
+        current: String,
+        busy: Boolean,
+    ): String? {
+        if (closed || busy || inFlight) return null
+        val value = desired ?: return null
+        desired = null
+        if (value == current) return null
+        inFlight = true
+        return value
+    }
+
+    fun settled() {
+        inFlight = false
+    }
+
+    fun close() {
+        closed = true
+        desired = null
+        inFlight = false
+    }
+}
 
 /** UI selection/filter state only. Existing services/SQLite remain the sole persistent owners. */
 internal class NativeLibraryUiState {
@@ -42,13 +88,54 @@ internal class NativeLibraryPanel(
     private val openDetails: (JSONObject) -> Unit,
     private val userAction: (String) -> Unit,
     private val repaint: () -> Unit,
+    private val onFailure: () -> Unit = {},
+    private val onSummary: (String?) -> Unit = {},
 ) {
     private val main = Handler(Looper.getMainLooper())
     private val root = column()
+    private val pageRoot = column()
+    private var keywordInput: EditText? = null
+    private val keywordSearch = NativeLibrarySearch()
+    private val searchCommit = Runnable { commitSearch() }
     private val status = text("")
     private val dialogs = linkedSetOf<AlertDialog>()
     private var closed = false
     private var loading = false
+    private var failed = false
+    private var fatalDatabase = false
+    private val retry by lazy {
+        makeButton(tr("重新加载", "Reload")) {
+            if (!closed && !loading && !mutating && !navigating && !fatalDatabase) load()
+        }.apply { visibility = View.GONE }
+    }
+    val notice: View by lazy {
+        column().apply {
+            addView(status)
+            addView(retry)
+            status.addTextChangedListener(
+                object : TextWatcher {
+                    override fun beforeTextChanged(
+                        s: CharSequence?,
+                        start: Int,
+                        count: Int,
+                        after: Int,
+                    ) = Unit
+
+                    override fun onTextChanged(
+                        s: CharSequence?,
+                        start: Int,
+                        before: Int,
+                        count: Int,
+                    ) {
+                        visibility =
+                            if (s.isNullOrEmpty()) View.GONE else View.VISIBLE
+                    }
+
+                    override fun afterTextChanged(s: Editable?) = Unit
+                },
+            )
+        }
+    }
     private var mutating = false
     private var navigating = false
     private var epoch = 0L
@@ -68,20 +155,22 @@ internal class NativeLibraryPanel(
     private fun text(
         value: String,
         size: Float = 16f,
+        bold: Boolean = false,
     ) = TextView(activity).apply {
         this.text = value
         textSize = size
         setTextColor(ink)
         setPadding(4, 10, 4, 10)
+        if (bold) setTypeface(null, android.graphics.Typeface.BOLD)
     }
+
+    private fun canAct() = nativeLibraryCanAct(closed, failed, loading, mutating, navigating, fatalDatabase)
 
     private fun button(
         value: String,
         action: () -> Unit,
     ) = makeButton(value) {
-        if (!closed && !mutating && !loading &&
-            !navigating
-        ) {
+        if (canAct()) {
             action()
         }
     }
@@ -90,12 +179,61 @@ internal class NativeLibraryPanel(
         parent: LinearLayout,
         values: List<Pair<String, () -> Unit>>,
     ) {
-        val row = LinearLayout(activity)
+        val row = NativeActionFlow(activity)
         values.forEach { row.addView(button(it.first, it.second)) }
-        parent.addView(android.widget.HorizontalScrollView(activity).apply { addView(row) })
+        parent.addView(row)
+    }
+
+    private fun tabs(
+        parent: LinearLayout,
+        values: List<Pair<String, () -> Unit>>,
+        selected: Int = 0,
+    ) {
+        val row = LinearLayout(activity)
+        values.forEachIndexed { index, (title, action) ->
+            row.addView(
+                button(title, action).apply {
+                    isSelected = index == selected
+                    if (isSelected) {
+                        setTypeface(null, android.graphics.Typeface.BOLD)
+                        background =
+                            NativeUi.shape(
+                                activity,
+                                if (ink ==
+                                    android.graphics.Color.BLACK
+                                ) {
+                                    android.graphics.Color.BLACK
+                                } else {
+                                    android.graphics.Color.WHITE
+                                },
+                            )
+                        setTextColor(
+                            if (ink ==
+                                android.graphics.Color.BLACK
+                            ) {
+                                android.graphics.Color.WHITE
+                            } else {
+                                android.graphics.Color.BLACK
+                            },
+                        )
+                    }
+                },
+                LinearLayout.LayoutParams(-2, -2).apply {
+                    marginEnd =
+                        NativeUi.dp(activity, 6)
+                },
+            )
+        }
+        parent.addView(
+            android.widget.HorizontalScrollView(activity).apply {
+                isHorizontalScrollBarEnabled = false
+                addView(row)
+            },
+        )
     }
 
     private fun track(dialog: AlertDialog): AlertDialog {
+        if (closed || failed) return dialog
         dialogs.add(dialog)
         dialog.setOnDismissListener { dialogs.remove(dialog) }
         dialog.show()
@@ -124,22 +262,151 @@ internal class NativeLibraryPanel(
         settled(action, payload) { result, error ->
             if (!closed) {
                 reply(result, error)
+                if (unsafeDatabase(error)) showFailure(error!!)
                 repaint()
             }
         }
     }
 
+    private fun installSearch() {
+        if (reading || keywordInput != null) return
+        val input =
+            EditText(activity).apply {
+                setText(session.optString("keyword"))
+                setTextColor(ink)
+                setHintTextColor(ink)
+                hint = tr("搜索书名、作者、标签", "Search title, author, tags")
+                isSingleLine = true
+                imeOptions = EditorInfo.IME_ACTION_SEARCH
+            }
+        keywordInput = input
+        val row = LinearLayout(activity).apply { gravity = android.view.Gravity.CENTER_VERTICAL }
+        row.addView(input, LinearLayout.LayoutParams(0, -2, 1f))
+        val clear =
+            NativeUi.iconButton(
+                activity,
+                tr("清除搜索", "Clear search"),
+                "close",
+                ink,
+                if (ink ==
+                    android.graphics.Color.BLACK
+                ) {
+                    android.graphics.Color.WHITE
+                } else {
+                    android.graphics.Color.BLACK
+                },
+            ) { input.setText("") }
+        clear.visibility = if (input.text.isEmpty()) View.GONE else View.VISIBLE
+        row.addView(clear)
+        input.addTextChangedListener(
+            object : TextWatcher {
+                override fun beforeTextChanged(
+                    s: CharSequence?,
+                    start: Int,
+                    count: Int,
+                    after: Int,
+                ) = Unit
+
+                override fun onTextChanged(
+                    s: CharSequence?,
+                    start: Int,
+                    before: Int,
+                    count: Int,
+                ) {
+                    if (closed) return
+                    clear.visibility = if (s.isNullOrEmpty()) View.GONE else View.VISIBLE
+                    keywordSearch.edit(s?.toString() ?: "")
+                    main.removeCallbacks(searchCommit)
+                    main.postDelayed(searchCommit, 250)
+                }
+
+                override fun afterTextChanged(s: Editable?) = Unit
+            },
+        )
+        input.setOnEditorActionListener { _, action, _ ->
+            if (action ==
+                EditorInfo.IME_ACTION_SEARCH
+            ) {
+                main.removeCallbacks(searchCommit)
+                keywordSearch.edit(input.text.toString())
+                commitSearch()
+                true
+            } else {
+                false
+            }
+        }
+        pageRoot.addView(row, 0)
+    }
+
+    private fun disableOldResult(view: View = root) {
+        view.isEnabled = false
+        if (view is ViewGroup) for (i in 0 until view.childCount) disableOldResult(view.getChildAt(i))
+    }
+
+    private fun unsafeDatabase(code: String?) =
+        code in
+            setOf(
+                "library_database_corrupt",
+                "library_database_missing",
+                "library_schema_mismatch",
+                "canonical_state_missing",
+                "native_state_schema_mismatch",
+            )
+
+    private fun showFailure(code: String) {
+        epoch++
+        failed = true
+        loading = false
+        keywordSearch.settled()
+        fatalDatabase = fatalDatabase || unsafeDatabase(code)
+        status.text = if (fatalDatabase) {
+            tr(
+                "书库数据异常，已停止本页写入。请先保留备份，勿清数据或反复重试。",
+                "Library data is unsafe. Writes on this page are blocked. Preserve a backup; do not clear data or repeatedly retry.",
+            )
+        } else {
+            tr("加载未成功；下面是上次结果，不能继续操作。请重新加载。", "Load failed; the previous results below are inactive. Reload to continue.")
+        } + " [$code]"
+        notice.visibility = View.VISIBLE
+        status.accessibilityLiveRegion = View.ACCESSIBILITY_LIVE_REGION_ASSERTIVE
+        retry.visibility = if (fatalDatabase) View.GONE else View.VISIBLE
+        keywordInput?.isEnabled = false
+        disableOldResult()
+        dialogs.forEach { dialog ->
+            dialog.getButton(AlertDialog.BUTTON_POSITIVE)?.isEnabled = false
+            dialog.getButton(AlertDialog.BUTTON_NEUTRAL)?.isEnabled = false
+            dialog.listView?.isEnabled = false
+        }
+        onSummary(null)
+        onFailure()
+    }
+
+    private fun commitSearch() {
+        if (closed || loading || mutating || navigating || failed) return
+        val value = keywordSearch.take(session.optString("keyword"), loading || mutating || navigating) ?: return
+        session.put("keyword", value)
+        filtersChanged()
+    }
+
+    private fun resumeSearchWhenIdle() {
+        if (!closed && !loading && !mutating && !navigating && !failed && keywordSearch.hasPending) {
+            main.removeCallbacks(searchCommit)
+            main.post(searchCommit)
+        }
+    }
+
     fun render(): View {
+        onSummary(null)
+        pageRoot.addView(root)
         val mode = if (reading) "reading" else "library"
         if (state.mode != mode) {
             state.mode = mode
             state.manage = false
             state.selected.clear()
         }
-        root.addView(status)
         ask("action.librarySessionGet") { result, error ->
             if (error != null || result == null) {
-                status.text = error ?: "invalid_response"
+                showFailure(error ?: "invalid_response")
                 return@ask
             }
             defaults = JSONObject(result.getJSONObject("defaults").toString())
@@ -150,18 +417,25 @@ internal class NativeLibraryPanel(
             ) {
                 state.returnToId = saved.getString("lastViewedBookId")
             }
+            installSearch()
             load(restore = state.returnToId.isNotEmpty())
         }
-        return root
+        return pageRoot
     }
 
     private fun load(
         persist: Boolean = false,
         restore: Boolean = false,
     ) {
-        if (closed) return
+        if (closed || fatalDatabase) return
         val token = ++epoch
+        onSummary(null)
         loading = true
+        failed = false
+        notice.visibility = View.VISIBLE
+        retry.visibility = View.GONE
+        keywordInput?.isEnabled = true
+        disableOldResult()
         status.text = tr("正在检索书库…", "Querying library…")
 
         fun query() {
@@ -177,19 +451,32 @@ internal class NativeLibraryPanel(
             ) { result, error ->
                 if (token != epoch) return@ask
                 loading = false
+                keywordSearch.settled()
                 if (error != null || result == null || !result.optBoolean("ok")) {
-                    status.text = error ?: "invalid_response"
+                    showFailure(error ?: "invalid_response")
                     return@ask
                 }
-                try {
-                    current = result
-                    val next = JSONObject(result.getJSONObject("session").toString()).apply { remove("unavailableReturn") }
-                    if (reading) state.reading = next else state.library = next
-                    draw(result, token)
-                } catch (_: org.json.JSONException) {
-                    status.text = "invalid_response"
+
+                fun present(value: JSONObject) {
+                    if (closed || token != epoch) return
+                    loading = false
+                    try {
+                        current = value
+                        val next = JSONObject(value.getJSONObject("session").toString()).apply { remove("unavailableReturn") }
+                        if (reading) state.reading = next else state.library = next
+                        draw(value, token)
+                    } catch (_: org.json.JSONException) {
+                        showFailure("invalid_response")
+                    }
+                    resumeSearchWhenIdle()
+                    repaint()
                 }
-                repaint()
+                try {
+                    if (reading && result.optInt("page", 1) > 1) collectReadingPages(result, token, ::present) else present(result)
+                } catch (_: org.json.JSONException) {
+                    showFailure("invalid_response")
+                    resumeSearchWhenIdle()
+                }
             }
         }
         if (persist && !reading) {
@@ -197,7 +484,8 @@ internal class NativeLibraryPanel(
                 if (token != epoch) return@ask
                 if (error != null) {
                     loading = false
-                    status.text = error
+                    keywordSearch.settled()
+                    showFailure(error)
                     return@ask
                 }
                 query()
@@ -205,6 +493,80 @@ internal class NativeLibraryPanel(
         } else {
             query()
         }
+    }
+
+    private fun collectReadingPages(
+        last: JSONObject,
+        token: Long,
+        present: (JSONObject) -> Unit,
+    ) {
+        loading = true
+        val all = linkedMapOf<String, JSONObject>()
+        val lastPage = last.getInt("page")
+        val prefixSession = JSONObject(last.getJSONObject("session").toString())
+        var selectionToken = last.getString("selectionToken")
+        var page = 1
+
+        fun fail(code: String) {
+            showFailure(code)
+            repaint()
+        }
+
+        fun next() {
+            if (closed || epoch != token) return
+            if (page == lastPage) {
+                try {
+                    val tail = last.getJSONArray("items")
+                    for (i in 0 until tail.length()) {
+                        val item = tail.getJSONObject(i)
+                        all[item.getString("id")] = item
+                    }
+                    val expected = minOf(last.getLong("total"), lastPage.toLong() * last.getInt("pageSize"))
+                    if (all.size.toLong() != expected) {
+                        fail("reading_catalog_changed_refresh_required")
+                        return
+                    }
+                    present(JSONObject(last.toString()).put("items", JSONArray(all.values.toList())).put("selectionToken", selectionToken))
+                } catch (_: org.json.JSONException) {
+                    fail("invalid_response")
+                }
+                return
+            }
+            status.text = tr("正在加载此前页面：", "Loading preceding pages: ") + "$page / $lastPage"
+            ask(
+                "action.libraryPage",
+                JSONObject()
+                    .put(
+                        "mode",
+                        "reading",
+                    ).put("tab", state.tab)
+                    .put("session", JSONObject(prefixSession.toString()).put("page", page))
+                    .put("restore", false),
+            ) { value, error ->
+                if (closed || token != epoch) return@ask
+                if (error != null || value?.optBoolean("ok") != true) {
+                    fail(error ?: "invalid_response")
+                    return@ask
+                }
+                try {
+                    if (value.getInt("total") != last.getInt("total")) {
+                        fail("reading_catalog_changed_refresh_required")
+                        return@ask
+                    }
+                    val items = value.getJSONArray("items")
+                    for (i in 0 until items.length()) {
+                        val item = items.getJSONObject(i)
+                        all[item.getString("id")] = item
+                    }
+                    selectionToken = value.getString("selectionToken")
+                    page++
+                    main.post { next() }
+                } catch (_: org.json.JSONException) {
+                    fail("invalid_response")
+                }
+            }
+        }
+        next()
     }
 
     private fun filtersChanged() {
@@ -221,7 +583,8 @@ internal class NativeLibraryPanel(
         values: List<Pair<String, String>>,
         action: (String) -> Unit,
     ) {
-        if (values.isEmpty()) return
+        if (values.isEmpty() || !canAct()) return
+        val owner = epoch
         track(
             AlertDialog
                 .Builder(activity)
@@ -231,10 +594,68 @@ internal class NativeLibraryPanel(
                         .map {
                             it.second
                         }.toTypedArray(),
-                ) { _, index -> action(values[index].first) }
+                ) { _, index -> if (owner == epoch && canAct()) action(values[index].first) }
                 .setNegativeButton(tr("取消", "Cancel"), null)
                 .create(),
         )
+    }
+
+    fun menuActions(): List<Pair<String, () -> Unit>> {
+        if (!canAct()) return emptyList()
+        val facets = current.optJSONObject("facets") ?: return emptyList()
+        val owner = epoch
+        val commands =
+            listOf<Pair<String, () -> Unit>>(
+                tr("排序", "Sort") to {
+                    choose(
+                        tr("排序", "Sort"),
+                        listOf(
+                            "added" to tr("加入时间", "Added"),
+                            "recent" to tr("最近阅读", "Last read"),
+                            "published" to tr("出版时间", "Publication"),
+                            "title" to tr("书名", "Title"),
+                            "author" to tr("作者", "Author"),
+                            "progress" to tr("进度", "Progress"),
+                        ),
+                    ) {
+                        session.put("sortBy", it)
+                        filtersChanged()
+                    }
+                },
+                tr("筛选", "Filters") to { advanced(facets) },
+                tr("显示数量", "Page size") to {
+                    choose(tr("每页数量", "Page size"), listOf("12" to "12", "24" to "24")) {
+                        session.put("pageSize", it.toInt())
+                        filtersChanged()
+                    }
+                },
+                tr("管理 / 多选", "Manage / select") to {
+                    state.manage = !state.manage
+                    state.selected.clear()
+                    load()
+                },
+            )
+        val management =
+            commands.drop(2) +
+                listOf(
+                    tr("导入", "Import") to { userAction("importBooks") },
+                    tr("文件夹", "Folder") to { userAction("selectFolder") },
+                    tr("重新扫描", "Rescan") to { userAction("recheckFolder") },
+                )
+        val actions =
+            if (reading) {
+                commands.drop(1)
+            } else {
+                commands.take(2) +
+                    listOf(
+                        tr("管理", "Manage") to {
+                            choose(tr("管理", "Manage"), management.mapIndexed { index, entry -> index.toString() to entry.first }) {
+                                management[it.toInt()].second()
+                            }
+                        },
+                    )
+            }
+        return actions.map { action -> action.first to { if (owner == epoch && canAct()) action.second() } }
     }
 
     private fun draw(
@@ -242,6 +663,10 @@ internal class NativeLibraryPanel(
         token: Long,
     ) {
         root.removeAllViews()
+        root.isEnabled = true
+        failed = false
+        keywordInput?.isEnabled = true
+        retry.visibility = View.GONE
         status.text =
             if (state.outcomeUnknown) {
                 tr(
@@ -251,16 +676,18 @@ internal class NativeLibraryPanel(
             } else {
                 ""
             }
-        root.addView(status)
-        root.addView(
-            text(
+        notice.visibility = if (status.text.isEmpty()) View.GONE else View.VISIBLE
+        onSummary(
+            if (reading) {
+                null
+            } else {
                 "${result.getInt("allCount")} " + tr("本/篇", "books/papers") + " · " + tr("累计阅读", "Cumulative reading") +
-                    " ${(result.getDouble("readingSeconds") / 60).toInt()} min",
-            ),
+                    " ${(result.getDouble("readingSeconds") / 60).toInt()} min"
+            },
         )
         if (reading) {
             val counts = result.getJSONObject("tabCounts")
-            controls(
+            tabs(
                 root,
                 listOf(
                     "reading" to tr("在读", "Reading"),
@@ -270,7 +697,7 @@ internal class NativeLibraryPanel(
                     "finished" to tr("已读", "Finished"),
                     "abandoned" to tr("弃读", "Abandoned"),
                 ).map { (id, label) ->
-                    "$label (${counts.getInt(id)})" to
+                    (if (id == "recent") tr("最近阅读", "Recent reading") else "$label (${counts.getInt(id)})") to
                         {
                             state.tab = id
                             session.put("page", 1)
@@ -278,109 +705,62 @@ internal class NativeLibraryPanel(
                             load()
                         }
                 },
+                listOf("reading", "recent", "wanted", "paused", "finished", "abandoned").indexOf(state.tab),
             )
         }
-        val search =
-            EditText(activity).apply {
-                setText(session.optString("keyword"))
-                setTextColor(ink)
-                hint =
-                    tr("书名、作者、标签", "Title, author, tags")
-                isSingleLine = true
-                imeOptions = EditorInfo.IME_ACTION_SEARCH
-            }
-        val searchRow = LinearLayout(activity)
-        searchRow.addView(search, LinearLayout.LayoutParams(0, -2, 1f))
-        searchRow.addView(
-            button(tr("搜索", "Search")) {
-                session.put("keyword", search.text.toString())
-                filtersChanged()
-            },
-        )
-        root.addView(searchRow)
-        search.setOnEditorActionListener { _, action, _ ->
-            if (action ==
-                EditorInfo.IME_ACTION_SEARCH
-            ) {
-                session.put("keyword", search.text.toString())
-                filtersChanged()
-                true
-            } else {
-                false
-            }
-        }
-        val commands =
-            mutableListOf<Pair<String, () -> Unit>>(
-                tr("筛选", "Filters") to { advanced(result.getJSONObject("facets")) },
-                tr("显示数量", "Page size") to
-                    {
-                        choose(tr("每页数量", "Page size"), listOf("12" to "12", "24" to "24")) {
-                            session.put("pageSize", it.toInt())
+        if (!reading) {
+            val values = result.getJSONObject("facets").getJSONArray("categoryFilter")
+            val categories =
+                (0 until values.length()).map { values.getJSONObject(it) }.filter {
+                    val count = it.getInt("count")
+                    if (count < 0) throw org.json.JSONException("invalid_category_count")
+                    count > 0
+                }
+            if (categories.isNotEmpty()) {
+                root.addView(text(tr("类别（全库数量）", "Categories (library totals)"), 13f))
+                tabs(
+                    root,
+                    listOf(
+                        (tr("全部", "All") + " (${result.getInt("allCount")})") to {
+                            session.put("categoryFilter", "")
                             filtersChanged()
-                        }
-                    },
-                tr("管理 / 多选", "Manage / select") to {
-                    state.manage = !state.manage
-                    state.selected.clear()
-                    load()
-                },
-            )
-        if (!reading) {
-            commands.add(
-                0,
-                tr("排序", "Sort") to
-                    {
-                        choose(
-                            tr("排序", "Sort"),
-                            listOf(
-                                "added" to tr("加入时间", "Added"),
-                                "recent" to tr("最近阅读", "Last read"),
-                                "published" to tr("出版时间", "Publication"),
-                                "title" to tr("书名", "Title"),
-                                "author" to tr("作者", "Author"),
-                                "progress" to tr("进度", "Progress"),
-                            ),
-                        ) {
-                            session.put("sortBy", it)
-                            filtersChanged()
-                        }
-                    },
-            )
-        }
-        controls(root, commands)
-        if (!reading) {
-            controls(
-                root,
-                listOf(
-                    tr("导入", "Import") to { userAction("importBooks") },
-                    tr("文件夹", "Folder") to { userAction("selectFolder") },
-                    tr("重新扫描", "Rescan") to { userAction("recheckFolder") },
-                ),
-            )
-        }
-        if (!reading) {
-            val categories = result.getJSONObject("facets").getJSONArray("categoryFilter")
-            controls(
-                root,
-                listOf(
-                    (tr("全部", "All") + " (${result.getInt("allCount")})") to {
-                        session.put("categoryFilter", "")
-                        filtersChanged()
-                    },
-                ) +
-                    (0 until categories.length()).map { i ->
-                        val c = categories.getJSONObject(i)
-                        "${c.getString("label")} (${c.getInt("count")})" to
-                            {
-                                session.put("categoryFilter", c.getString("value"))
+                        },
+                    ) +
+                        categories.map { category ->
+                            "${category.getString("label")} (${category.getInt("count")})" to {
+                                session.put("categoryFilter", category.getString("value"))
                                 filtersChanged()
                             }
+                        },
+                    if (session.optString("categoryFilter").isEmpty()) {
+                        0
+                    } else {
+                        1 +
+                            categories.indexOfFirst {
+                                it.getString("value") == session.optString("categoryFilter")
+                            }
                     },
-            )
+                )
+            }
         }
         val items = result.getJSONArray("items")
         if (state.manage) management(result, items)
-        if (items.length() == 0) root.addView(text(tr("没有匹配记录。", "No matching records.")))
+        if (items.length() == 0) {
+            val emptyLibrary = result.getInt("allCount") == 0
+            root.addView(text(if (emptyLibrary) tr("还没有藏书", "Your library is empty") else tr("没有匹配记录。", "No matching records."), 18f, true))
+            root.addView(
+                text(
+                    if (emptyLibrary) {
+                        tr(
+                            "从管理菜单导入书籍，或添加监控文件夹。",
+                            "Import books or add a monitored folder from Manage.",
+                        )
+                    } else {
+                        tr("试试其他关键词、筛选条件或阅读状态。", "Try another search, filter or reading status.")
+                    },
+                ),
+            )
+        }
         val metadataQueue = java.util.ArrayDeque<() -> Unit>()
         val advance: () -> Unit = { if (!closed && token == epoch && metadataQueue.isNotEmpty()) metadataQueue.removeFirst().invoke() }
         for (i in 0 until items.length()) {
@@ -393,17 +773,23 @@ internal class NativeLibraryPanel(
                     setTextColor(ink)
                     isChecked =
                         id in state.selected
-                    visibility = if (state.manage) View.VISIBLE else View.GONE
+                    visibility = View.GONE
                     setOnCheckedChangeListener {
                         _,
                         checked,
                         ->
+                        if (!canAct()) return@setOnCheckedChangeListener
                         if (checked) state.selected.add(id) else state.selected.remove(id)
                         selectionStatus.text = tr("已选择", "Selected") + " ${state.selected.size}"
+                        wrapper.getChildAt(wrapper.childCount - 1)?.isSelected = checked
                     }
                 }
             wrapper.addView(check)
-            val placeholder = text(view.getString("title") + "\n" + view.optString("author"))
+            val metadata =
+                listOf(view.optString("author"), view.optString("publisher"), view.optString("publicationDate"))
+                    .filter { it.isNotBlank() && it != "null" }
+                    .joinToString(" · ")
+            val placeholder = text(view.getString("title") + if (metadata.isEmpty()) "" else "\n$metadata")
             wrapper.addView(placeholder)
             root.addView(wrapper)
             metadataQueue.add {
@@ -453,6 +839,19 @@ internal class NativeLibraryPanel(
         main.post { advance() }
         val page = result.getInt("page")
         val pages = result.getInt("totalPages")
+        if (reading) {
+            root.addView(text("${items.length()} / ${result.getInt("total")} " + tr("项", "items")))
+            if (page < pages) {
+                root.addView(
+                    button(tr("显示更多", "Load more")) {
+                        session.put("page", page + 1)
+                        load()
+                    },
+                )
+            }
+            return
+        }
+        if (result.getInt("total") == 0) return
         root.addView(text("$page / $pages · ${result.getInt("total")} " + tr("项", "items")))
         val pager = LinearLayout(activity)
         pager.addView(
@@ -470,7 +869,48 @@ internal class NativeLibraryPanel(
         root.addView(pager)
     }
 
+    private fun filterTitle(key: String) =
+        when (key) {
+            "statusFilter" -> tr("阅读状态", "Reading status")
+            "availabilityFilter" -> tr("文件状态", "File availability")
+            "classificationStatusFilter" -> tr("分类状态", "Classification status")
+            "textbookFilter" -> tr("教材", "Textbook")
+            "ancientTextFilter" -> tr("古籍", "Ancient text")
+            else -> key
+        }
+
+    private fun filterSummary(value: String) =
+        when (value) {
+            "", "all" -> tr("全部", "All")
+            "unmarked" -> tr("未标记", "Unmarked")
+            "wanted" -> tr("想读", "Want to read")
+            "reading" -> tr("在读", "Reading")
+            "paused" -> tr("暂缓", "Paused")
+            "finished" -> tr("已读", "Finished")
+            "abandoned" -> tr("弃读", "Abandoned")
+            "available" -> tr("可用", "Available")
+            "unavailable" -> tr("不可用", "Unavailable")
+            "missing" -> tr("缺失", "Missing")
+            "permission-denied" -> tr("未授权", "Permission denied")
+            "complete" -> tr("已分类", "Complete")
+            "incomplete" -> tr("待完善", "Incomplete")
+            "unclassified" -> tr("未分类", "Unclassified")
+            "true" -> tr("是", "Yes")
+            "false" -> tr("否", "No")
+            "unknown" -> tr("未知", "Unknown")
+            else -> value
+        }
+
     private fun advanced(facets: JSONObject) {
+        if (!canAct()) return
+        val owner = epoch
+
+        fun ownsDraft() = owner == epoch && canAct()
+
+        fun filterButton(
+            value: String,
+            action: () -> Unit,
+        ) = button(value) { if (ownsDraft()) action() }
         val session = JSONObject(this.session.toString()) // Cancel never applies a partially edited filter draft.
         val form = column()
         val options =
@@ -483,7 +923,7 @@ internal class NativeLibraryPanel(
             )
         for ((key, title) in options) {
             form.addView(
-                button("$title: ${session.optString(key)}") {
+                filterButton("$title: ${session.optString(key).ifEmpty { tr("全部", "All") }}") {
                     val values = facets.getJSONArray(key)
                     choose(
                         title,
@@ -505,19 +945,16 @@ internal class NativeLibraryPanel(
             "ancientTextFilter" to listOf("", "true", "false", "unknown"),
         )) {
             form.addView(
-                button("$key: ${session.optString(key)}") {
+                filterButton("${filterTitle(key)}: ${filterSummary(session.optString(key))}") {
                     choose(
-                        key,
-                        values.map {
-                            it to
-                                it.ifEmpty { tr("全部", "All") }
-                        },
+                        filterTitle(key),
+                        values.map { it to filterSummary(it) },
                     ) { session.put(key, it) }
                 },
             )
         }
         form.addView(
-            button(tr("主题 / 特征 / 旧标签筛选", "Topic / feature / legacy tag filter")) {
+            filterButton(tr("主题 / 特征 / 旧标签筛选", "Topic / feature / legacy tag filter")) {
                 val tags = facets.getJSONArray("tagFilter")
                 val selected =
                     session.optJSONArray("tagFilter") ?: JSONArray()
@@ -534,6 +971,7 @@ internal class NativeLibraryPanel(
                                     chosen
                             },
                         ) { _, i, checked ->
+                            if (!ownsDraft()) return@setMultiChoiceItems
                             if (checked) {
                                 chosen.add(
                                     names[i],
@@ -546,6 +984,7 @@ internal class NativeLibraryPanel(
                         }.setPositiveButton(
                             tr("采用", "Apply"),
                         ) { _, _ ->
+                            if (!ownsDraft()) return@setPositiveButton
                             session.put(
                                 "tagFilter",
                                 JSONArray(chosen.toList()),
@@ -556,7 +995,7 @@ internal class NativeLibraryPanel(
             },
         )
         form.addView(
-            button(tr("标签条件：", "Tag mode: ") + session.optString("tagMode", "and")) {
+            filterButton(tr("标签条件：", "Tag mode: ") + session.optString("tagMode", "and")) {
                 choose(
                     tr("标签条件", "Tag mode"),
                     listOf("and" to "AND", "or" to "OR"),
@@ -574,9 +1013,11 @@ internal class NativeLibraryPanel(
                 ).setPositiveButton(
                     tr("应用筛选", "Apply filters"),
                 ) { _, _ ->
+                    if (!ownsDraft()) return@setPositiveButton
                     if (reading) state.reading = session else state.library = session
                     filtersChanged()
                 }.setNeutralButton(tr("清除筛选", "Clear filters")) { _, _ ->
+                    if (!ownsDraft()) return@setNeutralButton
                     val reset =
                         JSONObject(
                             defaults.toString(),
@@ -587,7 +1028,8 @@ internal class NativeLibraryPanel(
                             .put("lastViewedBookId", "")
                             .put("returnedFromReader", false)
                     if (reading) state.reading = reset else state.library = reset
-                    ; state.selected.clear()
+                    keywordInput?.setText(this.session.optString("keyword"))
+                    state.selected.clear()
                     load(persist = true)
                 }.setNegativeButton(tr("取消", "Cancel"), null)
                 .create(),
@@ -619,31 +1061,27 @@ internal class NativeLibraryPanel(
         id: String,
         next: () -> Unit,
     ) {
-        if (navigating || mutating) return
+        if (navigating || failed || !canLeave()) return
+        val token = epoch
         navigating = true
-        ids(current.getString("selectionToken"), 10000) { ordered, error ->
-            if (error != null || ordered == null) {
-                navigating = false
-                status.text = error
-                return@ids
+        val p =
+            JSONObject(
+                session.toString(),
+            ).put("orderedBookIds", JSONArray()).put("lastViewedBookId", id).put("returnedFromReader", true)
+        val payload = JSONObject().put("session", p).put("selectionToken", current.getString("selectionToken"))
+        ask("action.librarySessionSave", payload) { _, failure ->
+            navigating = false
+            if (token != epoch || !canAct()) return@ask
+            if (failure != null) {
+                showFailure(failure)
+            } else if (!keywordSearch.hasPending) {
+                state.returnToId = id
+                state.manage = false
+                state.selected.clear()
+                next()
             }
-            val p =
-                JSONObject(
-                    session.toString(),
-                ).put("orderedBookIds", JSONArray(ordered)).put("lastViewedBookId", id).put("returnedFromReader", true)
-            ask("action.librarySessionSave", JSONObject().put("session", p)) { _, failure ->
-                navigating = false
-                if (failure !=
-                    null
-                ) {
-                    status.text = failure
-                } else {
-                    state.returnToId = id
-                    state.manage = false
-                    state.selected.clear()
-                    next()
-                }
-            }
+            // New typing is a newer stay/search intent; do not navigate with the old open intent.
+            resumeSearchWhenIdle()
         }
     }
 
@@ -674,6 +1112,7 @@ internal class NativeLibraryPanel(
                                 state.selected.addAll(selected)
                                 load()
                             }
+                            resumeSearchWhenIdle()
                         }
                     },
                 tr("清空选择", "Clear selection") to {
@@ -727,7 +1166,7 @@ internal class NativeLibraryPanel(
         operation: String,
         value: String,
     ) {
-        if (state.selected.isEmpty() || mutating || state.outcomeUnknown) return
+        if (!canAct() || state.selected.isEmpty() || state.outcomeUnknown) return
         val selected = state.selected.toList()
         val stamp = System.currentTimeMillis()
         mutating = true
@@ -837,7 +1276,7 @@ internal class NativeLibraryPanel(
     }
 
     private fun tagDialog(clear: Boolean) {
-        if (state.selected.isEmpty()) return
+        if (!canAct() || state.selected.isEmpty()) return
         val form = column()
         val input =
             EditText(activity).apply {
@@ -865,6 +1304,7 @@ internal class NativeLibraryPanel(
                 .create()
         alert.setOnShowListener {
             alert.getButton(AlertDialog.BUTTON_POSITIVE).setOnClickListener {
+                if (!canAct()) return@setOnClickListener
                 val tags =
                     input.text
                         .toString()
@@ -888,7 +1328,7 @@ internal class NativeLibraryPanel(
         clear: Boolean,
         tags: List<String>,
     ) {
-        if (mutating || state.outcomeUnknown) return
+        if (!canAct() || state.outcomeUnknown) return
         val selected = state.selected.toList()
         mutating = true
         var succeeded = 0
@@ -977,12 +1417,16 @@ internal class NativeLibraryPanel(
         chunk()
     }
 
-    fun canLeave() = !mutating
+    fun canOperate() = canAct()
 
-    fun isEditing() = mutating || dialogs.any { it.isShowing }
+    fun canMutate() = canAct() && !state.outcomeUnknown
+
+    fun canLeave() = !mutating && (failed || keywordSearch.canLeave)
+
+    fun isEditing() = mutating || (!failed && !keywordSearch.canLeave) || dialogs.any { it.isShowing }
 
     fun handleBack(): Boolean {
-        if (mutating) return true
+        if (!canLeave()) return true
         if (dialogs.none { it.isShowing } && state.manage) {
             state.manage = false
             state.selected.clear()
@@ -997,6 +1441,8 @@ internal class NativeLibraryPanel(
 
     fun close() {
         closed = true
+        main.removeCallbacks(searchCommit)
+        keywordSearch.close()
         if (!mutating) {
             state.manage = false
             state.selected.clear()

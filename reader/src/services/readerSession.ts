@@ -25,7 +25,7 @@ export function readerBackTarget(state: {
 /** Structural checks also work for elements from foliate's separate document realm. */
 export function isReaderInteractive(target: unknown): boolean {
   const element = target as { closest?: (selector: string) => unknown } | null
-  return !!element?.closest?.('a[href],button,input,textarea,select,label,[contenteditable="true"],[role="button"],img,svg,video,audio')
+  return !!element?.closest?.('a[href],a[*|href],button,input,textarea,select,label,[contenteditable="true"],[role="button"],img[usemap],video,audio')
 }
 
 export function blocksReaderTurn(state: {

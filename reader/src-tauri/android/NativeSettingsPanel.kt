@@ -32,6 +32,9 @@ internal class NativeSettingsPanel(
     private var dialog: AlertDialog? = null
     private var recoveryParent: AlertDialog? = null
     private var providers = JSONArray()
+    private val ui = NativeStatsSettingsUi(activity, ink, background)
+    private var pageLayout: NativeSettingsPageLayout? = null
+    private var pageUiState: NativeSettingsUiState? = null
     private val english = preferences.optString("language") == "en"
 
     private fun tr(
@@ -47,29 +50,15 @@ internal class NativeSettingsPanel(
             setPadding(dp(8), dp(4), dp(8), dp(4))
         }
 
-    private fun text(value: String) =
-        TextView(activity).apply {
-            this.text = value
-            textSize = 16f
-            setTextColor(ink)
-            setPadding(dp(4), dp(10), dp(4), dp(8))
-        }
+    private fun text(
+        value: String,
+        size: Float = 14f,
+    ) = ui.text(value, size)
 
     private fun button(
         title: String,
         action: () -> Unit,
-    ) = Button(activity).apply {
-        text = title
-        isAllCaps = false
-        minHeight = dp(48)
-        setTextColor(ink)
-        background =
-            GradientDrawable().apply {
-                setColor(this@NativeSettingsPanel.background)
-                setStroke(dp(1).coerceAtLeast(1), ink)
-            }
-        setOnClickListener { if (!busy && !closed) action() }
-    }
+    ) = ui.button(title) { if (!busy && !closed) action() }
 
     private fun perform(
         action: String,
@@ -107,7 +96,10 @@ internal class NativeSettingsPanel(
         }
     }
 
-    fun render(): View {
+    fun render(
+        extraSections: Map<String, View> = emptyMap(),
+        onSection: (String, View) -> Unit = { _, _ -> },
+    ): View {
         val root = column()
         val status = text(tr("正在加载设置定义…", "Loading settings schema…"))
         root.addView(status)
@@ -119,14 +111,35 @@ internal class NativeSettingsPanel(
             val fields = schema.getJSONArray("fields")
             for ((group, title) in listOf(
                 "general" to tr("通用", "General"),
+                "folder" to tr("监控文件夹", "Monitored folder"),
+                "library" to tr("藏书显示", "Library display"),
                 "reading" to tr("阅读与声音", "Reading and speech"),
                 "ai" to tr("AI 服务", "AI service"),
                 "network" to tr("网络", "Network"),
+                "data" to tr("数据", "Data"),
+                "about" to tr("关于", "About"),
             )) {
-                root.addView(text(title).apply { textSize = 21f })
+                if (group in listOf("folder", "data", "about") && !extraSections.containsKey(group)) continue
+                val section = ui.card()
+                root.addView(section)
+                onSection(group, section)
+                section.addView(ui.heading(title))
+                extraSections[group]?.let { section.addView(it) }
+                if (extraSections.containsKey(group)) continue
                 if (group == "ai") {
-                    root.addView(button(tr("服务商：", "Provider: ") + preferences.optString("aiProvider")) { selectProvider() })
-                    root.addView(
+                    section.addView(
+                        ui.settingRow(
+                            tr("服务商", "Provider"),
+                            provider()?.optString("label").orEmpty().ifEmpty { preferences.optString("aiProvider") },
+                        ) {
+                            if (!busy &&
+                                !closed
+                            ) {
+                                selectProvider()
+                            }
+                        },
+                    )
+                    section.addView(
                         text(
                             tr(
                                 "只使用自有密钥；切换服务不复制密钥或新增伴读授权。",
@@ -150,11 +163,20 @@ internal class NativeSettingsPanel(
                         } else {
                             value.toString().take(100)
                         }
-                    root.addView(button("$label: $summary") { edit(rule, value) })
+                    val display = if (rule.optBoolean("secret")) summary else optionLabel(rule, value)
+                    section.addView(
+                        ui.settingRow(label, display) {
+                            if (!busy &&
+                                !closed
+                            ) {
+                                edit(rule, value)
+                            }
+                        },
+                    )
                 }
-                if (group == "general") root.addView(button(tr("藏书每页显示数量", "Library page size")) { libraryDisplay() })
+                if (group == "library") section.addView(button(tr("藏书每页显示数量", "Library page size")) { libraryDisplay() })
                 if (group == "reading") {
-                    root.addView(
+                    section.addView(
                         button(tr("恢复默认排版", "Reset reader typography")) {
                             confirmMutation(
                                 "settingsResetReader",
@@ -165,8 +187,8 @@ internal class NativeSettingsPanel(
                             )
                         },
                     )
-                    root.addView(button(tr("物理尺寸校准", "Physical display calibration")) { calibration() })
-                    root.addView(
+                    section.addView(button(tr("物理尺寸校准", "Physical display calibration")) { calibration() })
+                    section.addView(
                         button(tr("清除显示校准", "Clear display calibration")) {
                             confirmMutation(
                                 "settingsCalibrationClear",
@@ -176,12 +198,12 @@ internal class NativeSettingsPanel(
                     )
                 }
                 if (group == "ai") {
-                    root.addView(button(tr("测试 AI 连接（发送 OK 请求）", "Test AI connection (send OK request)")) { probe("settingsTestAi") })
+                    section.addView(button(tr("测试 AI 连接（发送 OK 请求）", "Test AI connection (send OK request)")) { probe("settingsTestAi") })
                     provider()?.optString("docsUrl")?.takeIf { it.isNotEmpty() }?.let { url ->
-                        root.addView(button(tr("服务商文档 / 获取密钥", "Provider documentation / keys")) { openLink(url, status) })
+                        section.addView(button(tr("服务商文档 / 获取密钥", "Provider documentation / keys")) { openLink(url, status) })
                     }
                 }
-                if (group == "network") root.addView(button(tr("测试代理连接", "Test proxy connection")) { probe("settingsTestProxy") })
+                if (group == "network") section.addView(button(tr("测试代理连接", "Test proxy connection")) { probe("settingsTestProxy") })
             }
             root.addView(
                 text(
@@ -196,6 +218,111 @@ internal class NativeSettingsPanel(
             repaint()
         }, { code -> status.text = tr("设置定义加载失败：", "Schema load failed: ") + code })
         return root
+    }
+
+    fun renderPage(
+        extraSections: Map<String, View>,
+        requested: String?,
+        state: NativeSettingsUiState,
+    ): View {
+        val sections = linkedMapOf<String, View>()
+        val captions =
+            listOf(
+                "general" to tr("通用", "General"),
+                "folder" to tr("文件夹与扫描", "Folders and scans"),
+                "library" to tr("书库显示", "Library display"),
+                "reading" to tr("阅读与声音", "Reading and speech"),
+                "ai" to tr("AI 服务", "AI service"),
+                "network" to tr("网络", "Network"),
+                "data" to tr("文件与数据", "Files and data"),
+                "about" to tr("关于与帮助", "About and help"),
+            )
+        val incoming = if (requested == "library-display") "library" else requested
+        if (incoming != null && captions.any { it.first == incoming }) {
+            state.group = incoming
+            state.directory = false
+        }
+        if (captions.none { it.first == state.group }) state.group = "general"
+        val nav =
+            ui.column().apply {
+                setPadding(ui.dp(4), 0, ui.dp(4), ui.dp(16))
+                addView(ui.heading(tr("设置目录", "Settings directory")))
+            }
+        val content = ui.column()
+        val initialPosition = state.positions[state.group] ?: 0
+        var restoring = true
+        val contentScroll =
+            ScrollView(activity).apply {
+                isFillViewport = false
+                addView(content)
+                setOnScrollChangeListener { _, _, y, _, _ -> if (!restoring) state.positions[state.group] = y }
+            }
+        val navScroll = ScrollView(activity).apply { addView(nav) }
+        val layout = NativeSettingsPageLayout(activity, navScroll, contentScroll).apply { directory = state.directory }
+        pageLayout = layout
+        pageUiState = state
+        val buttons = linkedMapOf<String, Button>()
+
+        fun select(group: String) {
+            if (closed || busy) return
+            val position = state.positions[group] ?: 0
+            state.positions[state.group] = contentScroll.scrollY
+            restoring = true
+            state.group = group
+            state.directory = false
+            layout.directory = false
+            sections.forEach { (id, view) -> view.visibility = if (id == group) View.VISIBLE else View.GONE }
+            buttons.forEach { (id, button) -> ui.decorate(button, selected = id == group) }
+            content.post {
+                if (!closed && state.group == group) contentScroll.scrollTo(0, position)
+                restoring = false
+            }
+        }
+        content.addView(
+            button(tr("返回设置目录", "Settings directory")) {
+                if (!closed && !busy) {
+                    state.directory = true
+                    layout.directory = true
+                    navScroll.requestFocus()
+                }
+            },
+        )
+        for ((id, caption) in captions) {
+            val action = ui.button(caption, selected = state.group == id) { select(id) }
+            action.contentDescription = tr("设置分类：", "Settings category: ") + caption
+            buttons[id] = action
+            nav.addView(action, LinearLayout.LayoutParams(-1, -2).apply { bottomMargin = ui.dp(8) })
+        }
+        content.addView(
+            render(extraSections) { id, view ->
+                sections[id] = view
+                view.visibility = if (id == state.group) View.VISIBLE else View.GONE
+                if (id == state.group) {
+                    content.post {
+                        if (!closed) contentScroll.scrollTo(0, initialPosition)
+                        restoring = false
+                    }
+                }
+            },
+        )
+        return layout
+    }
+
+    private fun optionLabel(
+        rule: JSONObject,
+        value: Any,
+    ): String {
+        val options = if (rule.optString("kind") == "boolean") JSONArray().put(false).put(true) else rule.optJSONArray("options")
+        val index = options?.let { (0 until it.length()).firstOrNull { i -> it.get(i).toString() == value.toString() } }
+        val labels = rule.optJSONArray(if (english) "optionLabelsEn" else "optionLabels")
+        if (index != null && labels != null && index < labels.length()) return labels.getString(index)
+        return when (value.toString()) {
+            "true" -> tr("开启", "On")
+            "false" -> tr("关闭", "Off")
+            "zh" -> "中文"
+            "en" -> "English"
+            else -> value.toString().take(100)
+        }
     }
 
     private fun parentOf(path: JSONArray): JSONObject? {
@@ -216,20 +343,23 @@ internal class NativeSettingsPanel(
         save: (AlertDialog) -> Unit,
     ): AlertDialog {
         dialog?.dismiss()
-        val alert =
-            AlertDialog
-                .Builder(
-                    activity,
-                ).setTitle(title)
-                .setView(content)
-                .setNegativeButton(tr("关闭（不撤销已提交操作）", "Close (does not cancel submitted work)"), null)
-                .setNeutralButton(tr("核对恢复", "Recovery"), null)
-                .setPositiveButton(tr("保存", "Save"), null)
-                .create()
+        val alert: AlertDialog =
+            NativeStatsSettingsDialog(
+                activity,
+                title,
+                content,
+                ui,
+                listOf(
+                    AlertDialog.BUTTON_NEGATIVE to tr("关闭（不撤销已提交操作）", "Close (does not cancel submitted work)"),
+                    AlertDialog.BUTTON_NEUTRAL to tr("核对恢复", "Recovery"),
+                    AlertDialog.BUTTON_POSITIVE to tr("保存", "Save"),
+                ),
+            )
         dialog = alert
         alert.setCanceledOnTouchOutside(false)
         alert.setOnDismissListener { if (dialog === alert) dialog = null }
         alert.setOnShowListener {
+            alert.getButton(AlertDialog.BUTTON_NEGATIVE).setOnClickListener { if (!busy) alert.dismiss() }
             alert.getButton(AlertDialog.BUTTON_POSITIVE).setOnClickListener { if (!busy) save(alert) }
             alert.getButton(AlertDialog.BUTTON_NEUTRAL).setOnClickListener { if (!busy) recovery() }
         }
@@ -253,12 +383,13 @@ internal class NativeSettingsPanel(
         var retryable = false
         var resolved = false
         val alert =
-            AlertDialog
-                .Builder(activity)
-                .setTitle(tr("设置恢复", "Settings recovery"))
-                .setView(ScrollView(activity).apply { addView(form) })
-                .setNegativeButton(tr("返回原输入", "Return to input"), null)
-                .create()
+            NativeStatsSettingsDialog(
+                activity,
+                tr("设置恢复", "Settings recovery"),
+                form,
+                ui,
+                listOf(AlertDialog.BUTTON_NEGATIVE to tr("返回原输入", "Return to input")),
+            )
         recoveryParent = parent
         dialog = alert
         alert.setCanceledOnTouchOutside(false)
@@ -360,8 +491,7 @@ internal class NativeSettingsPanel(
         val form = column()
         val error = text("")
         val input =
-            EditText(activity).apply {
-                setTextColor(ink)
+            ui.field().apply {
                 setText(before.toString())
                 isSingleLine = true
                 inputType =
@@ -402,22 +532,32 @@ internal class NativeSettingsPanel(
         }
         val options = if (rule.getString("kind") == "boolean") JSONArray().put(false).put(true) else rule.optJSONArray("options")
         if (options != null) {
-            input.isEnabled = false
-            form.addView(
-                button(tr("选择值", "Choose value")) {
-                    AlertDialog
-                        .Builder(activity)
-                        .setTitle(label)
-                        .setItems(
-                            Array(options.length()) {
-                                options.get(it).toString()
-                            },
-                        ) { _, index -> input.setText(options.get(index).toString()) }
-                        .show()
-                },
-            )
+            input.visibility = View.GONE
+            val choices = android.widget.RadioGroup(activity)
+            for (i in 0 until options.length()) {
+                choices.addView(
+                    android.widget.RadioButton(activity).apply {
+                        id = View.generateViewId()
+                        tag = i
+                        text = optionLabel(rule, options.get(i))
+                        textSize = 16f
+                        setTextColor(ui.body)
+                        minimumHeight = dp(56)
+                        minimumWidth = dp(48)
+                        buttonTintList =
+                            android.content.res.ColorStateList
+                                .valueOf(ui.primary)
+                        isChecked = options.get(i).toString() == before.toString()
+                    },
+                )
+            }
+            choices.setOnCheckedChangeListener { group, id ->
+                val selected = group.findViewById<android.widget.RadioButton>(id)?.tag as? Int
+                if (selected != null) input.setText(options.get(selected).toString())
+            }
+            form.addView(choices)
         }
-        modal(label, ScrollView(activity).apply { addView(form) }) { alert ->
+        modal(label, form) { alert ->
             val raw = input.text.toString()
             val value: Any =
                 when (rule.getString("kind")) {
@@ -573,8 +713,7 @@ internal class NativeSettingsPanel(
         val form = column()
         val error = text("")
         val input =
-            EditText(activity).apply {
-                setTextColor(ink)
+            ui.field().apply {
                 hint =
                     tr("实测毫米数", "Measured millimetres")
                 inputType = InputType.TYPE_CLASS_NUMBER or InputType.TYPE_NUMBER_FLAG_DECIMAL
@@ -704,9 +843,23 @@ internal class NativeSettingsPanel(
 
     fun handleBack(): Boolean {
         if (busy) return true
-        val current = dialog ?: return false
-        current.dismiss()
-        return true
+        dialog?.let {
+            it.dismiss()
+            return true
+        }
+        val layout = pageLayout
+        val state = pageUiState
+        if (layout != null && state != null && !layout.wide && !state.directory) {
+            state.directory = true
+            layout.directory = true
+            return true
+        }
+        return false
+    }
+
+    fun pageScroll(direction: Int): Boolean {
+        if (busy || dialog?.isShowing == true) return false
+        return pageLayout?.scrollActive(direction) == true
     }
 
     fun close() {

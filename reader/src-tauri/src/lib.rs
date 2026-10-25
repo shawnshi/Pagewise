@@ -165,7 +165,6 @@ pub fn run() {
             system_tts::system_tts_speak_batch,
             fonts::list_system_fonts
         ])
-        .plugin(tauri_plugin_sql::Builder::new().build())
         .plugin(tauri_plugin_fs::init())
         .plugin(monitored_folder::init())
         .plugin(native_pages::init())

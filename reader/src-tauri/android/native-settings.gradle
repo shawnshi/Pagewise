@@ -1,7 +1,13 @@
-// Override only build scripts. Android sources/resources stay in their original, read-only Cargo locations.
+// Tauri 2.11.5 uses a pinned project-local lifecycle overlay; no Cargo cache files are written.
+// Other plugin sources/resources remain in their original, read-only Cargo locations.
 ['tauri-android', 'tauri-plugin-dialog', 'tauri-plugin-fs', 'tauri-plugin-opener'].each { name ->
     def module = findProject(':' + name)
     if (module == null) throw new GradleException('Missing expected native module: ' + name)
+    if (name == 'tauri-android') {
+        def overlay = new File(settingsDir, 'native-sdk/tauri-android')
+        if (!new File(overlay, 'pagewise-provenance.json').isFile()) throw new GradleException('Missing pinned Tauri lifecycle overlay')
+        module.projectDir = overlay
+    }
     def adapter = new File(settingsDir, 'native-gradle/' + name + '.gradle.kts')
     if (!adapter.isFile()) throw new GradleException('Missing project-local Kotlin adapter: ' + name)
     module.buildFileName = module.projectDir.toPath().relativize(adapter.toPath()).toString()

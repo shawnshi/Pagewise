@@ -1,0 +1,53 @@
+{
+  "tauriVersion": "2.11.5",
+  "moduleFiles": {
+    "build.gradle.kts": "aab1b0ecb929ea70b33ad42d7df55c185a3485f9609ec998047232b45df76a4d",
+    "proguard-rules.pro": "07ae2ffe37f0f484c46401f510ef003e1bbe9f708d1d2597546c729eb9956cca",
+    "src/androidTest/java/app/tauri/ExampleInstrumentedTest.kt": "1e7c0c6f613431962750a2f80dcf8a0c231c4b5fb2f569bfd55b5fa0e80f2e7d",
+    "src/main/AndroidManifest.xml": "8ef94a6aec2218c5fd02408d018f6d52602c0ef4473dd1c115c5c6964f1e63e1",
+    "src/main/java/app/tauri/annotation/ActivityCallback.kt": "aec0ebccfe66d7b857606a9244e717d5aa3b02324f50fbdfe4b4ee1a67ad8637",
+    "src/main/java/app/tauri/annotation/InvokeArg.kt": "6b747509a75a7c8f1c31c03a23a80b4f83cd226f87033a318db1782505b2aeab",
+    "src/main/java/app/tauri/annotation/Permission.kt": "bca04adb46a3de1c36da755fb62a5efb40481a7a529dd0f727eadd95466ecbd7",
+    "src/main/java/app/tauri/annotation/PermissionCallback.kt": "d0a63179ca048629d37e9efe696d2c6554095b7de64bbbc1450a8f07d3888d8e",
+    "src/main/java/app/tauri/annotation/PluginMethod.kt": "aee7aef7a3f59ad67ca3a2cfbcb2a2c2cacfa28bddf4b2f565ed6e930f92c8c1",
+    "src/main/java/app/tauri/annotation/TauriPlugin.kt": "361783a7baf30a33192c22f922f50fb2c97d8a7d9ae9dc774d8b637f9eeea04a",
+    "src/main/java/app/tauri/AppPlugin.kt": "931d4a7636b75c81e7daed48e1822fa8bf02d2993d620592ed7febca94702555",
+    "src/main/java/app/tauri/FsUtils.kt": "217851c9539c6171c46354fb24c8af9501babd045a122e239f01009794d122c9",
+    "src/main/java/app/tauri/JniMethod.kt": "ece2f2b7179edeb9cf0a62acb116390f53c23a32e51520b6e4c2d7601a581a88",
+    "src/main/java/app/tauri/Logger.kt": "771fa4822dec7cc95aab726ee1c176c17970c4ffee737ad53959fea1fa26ef7d",
+    "src/main/java/app/tauri/PathPlugin.kt": "2c256a75511aa4509629e55400b7969cbcb3b42079dd8955afe7e78ed7f3f256",
+    "src/main/java/app/tauri/PermissionHelper.kt": "5c53545d51386be33505084f56145dd364d57fb6623815d50cca83139f8687c1",
+    "src/main/java/app/tauri/PermissionState.kt": "c38e1f200db71faf05f8d7acf643b2f1d6dd8970b8ae51a6a7c842743a596be2",
+    "src/main/java/app/tauri/plugin/Channel.kt": "f6f5c2dcc442b9e81165f55f80d363129bc91b130586abb8489cd3006af00011",
+    "src/main/java/app/tauri/plugin/InvalidPluginMethodException.kt": "90d2dddfb918447ed8fd35c44be7f00e41b89fcd586eeca995e0ead56c38b6c4",
+    "src/main/java/app/tauri/plugin/Invoke.kt": "05cadb94907dbd3979d8c7eaad7bd8f540c38cc9d988a5513777eadd18330028",
+    "src/main/java/app/tauri/plugin/JSArray.kt": "fca8b72a6bf357b6cc57aa21ac787dbe3d69fca27f927b0c3f598567dc17f52f",
+    "src/main/java/app/tauri/plugin/JSObject.kt": "234a9afa4da858b3dbd8d5a688209a640984166482e040ab908b34ed577726b5",
+    "src/main/java/app/tauri/plugin/Plugin.kt": "f7a9a1d170177d8c32e729f867ba2adcfb9923cb4e2a38efa312dccfcd506127",
+    "src/main/java/app/tauri/plugin/PluginHandle.kt": "284b3209e2c415b8af9db372f92081b7b4c874a8d921136363cd6d7426b7579f",
+    "src/main/java/app/tauri/plugin/PluginManager.kt": "2b0ef3b8cc92182858456f4b504330d61d23a3fe62a2e4e08c8f5c09cbdb4312",
+    "src/main/java/app/tauri/plugin/PluginMethodData.kt": "c3024eb23b038fdd1566e69db725c8c5d39fb66909baf45d258ccfe8449daedf",
+    "src/main/java/app/tauri/plugin/PluginResult.kt": "437f44a6ccf5354a5ec1a3a3c894609f6df90999f397e52dfaafb6e74d30c006",
+    "src/test/java/app/tauri/ExampleUnitTest.kt": "c0b0b313769a0e3f519c203bf0862f35bd6128a6eeef67ca4965c12b4ef0ac4b"
+  },
+  "replacements": [
+    "src/main/java/app/tauri/plugin/PluginManager.kt",
+    "src/main/java/app/tauri/plugin/PluginHandle.kt"
+  ],
+  "extraSources": [
+    "src/main/java/app/tauri/plugin/ActivityResultFence.kt"
+  ],
+  "inlineEdits": {
+    "src/main/java/app/tauri/plugin/Plugin.kt": [
+      {
+        "old": "abstract class Plugin(private val activity: Activity) {",
+        "new": "abstract class Plugin(private val activity: Activity) {\n  internal fun ownerActivity(): Activity = activity"
+      },
+      {
+        "old": "  fun startActivityForResult(invoke: Invoke, intent: Intent, callbackName: String) {\n    handle!!.startActivityForResult(invoke, intent, callbackName)\n  }",
+        "new": "  fun startActivityForResult(invoke: Invoke, intent: Intent, callbackName: String) {\n    handle!!.startActivityForResult(invoke, intent, callbackName)\n  }\n\n  fun startActivityForResult(invoke: Invoke, intent: Intent, callbackName: String, onFailure: (String) -> Unit) {\n    handle!!.startActivityForResult(invoke, intent, callbackName, onFailure)\n  }"
+      }
+    ]
+  },
+  "scope": "Project-local source overlay only; global Cargo/SDK immutable; public SDK signatures retained"
+}

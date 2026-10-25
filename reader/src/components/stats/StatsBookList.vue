@@ -74,11 +74,11 @@ function progressOf(book?: BookMeta): number | null {
   align-items: center;
   gap: 12px;
   width: calc(100% + 16px);
-  min-height: var(--tap-min);
+  min-height: 48px;
   margin: 0 -8px;
   padding: 8px;
   border: 0;
-  border-radius: var(--radius);
+  border-radius: 2px;
   background: transparent;
   color: var(--text);
   font: inherit;

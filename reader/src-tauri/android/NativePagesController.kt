@@ -12,6 +12,7 @@ import android.graphics.Typeface
 import android.graphics.drawable.GradientDrawable
 import android.net.Uri
 import android.text.InputType
+import android.text.TextUtils
 import android.view.Gravity
 import android.view.KeyEvent
 import android.view.View
@@ -69,11 +70,18 @@ internal class NativePagesController(
 
     private val overlay = FrameLayout(activity)
     private val shell = LinearLayout(activity).apply { orientation = LinearLayout.VERTICAL }
-    private val body = LinearLayout(activity).apply { orientation = LinearLayout.VERTICAL }
+    private val body = NativeContentColumn(activity)
     private val scroll =
         ScrollView(activity).apply {
             isFillViewport = true
-            addView(body)
+            addView(
+                body,
+                FrameLayout.LayoutParams(
+                    ViewGroup.LayoutParams.MATCH_PARENT,
+                    ViewGroup.LayoutParams.WRAP_CONTENT,
+                    Gravity.TOP or Gravity.CENTER_HORIZONTAL,
+                ),
+            )
         }
     private var mounted = false
     private var disposed = false
@@ -95,13 +103,22 @@ internal class NativePagesController(
     private var manual = "README.md"
     private var manualAnchor = ""
     private val statisticsState = NativeStatsUiState()
+    private val settingsUiState = NativeSettingsUiState()
     private var statsPanel: NativeStatsPanel? = null
     private val libraryState = NativeLibraryUiState()
     private var libraryPanel: NativeLibraryPanel? = null
+    private var recommendationPanel: NativeBookRecommendationsPanel? = null
+    private var readingRecommendations = false
+    private var libraryNoticeHost: NativeContentColumn? = null
     private var currentDialog: AlertDialog? = null
     private var errorDialog: AlertDialog? = null
     private var noteEditor: NativeNoteEditor? = null
+    private var introductionEditor: NativeBookIntroductionEditor? = null
     private var settingsPanel: NativeSettingsPanel? = null
+    private val obscuredAccessibility = linkedMapOf<View, Int>()
+    private var pageTitle: TextView? = null
+    private var sectionScrollListener: android.view.ViewTreeObserver.OnScrollChangedListener? = null
+    private var sectionNavHost: NativeContentColumn? = null
 
     private fun dp(n: Int) = (n * activity.resources.displayMetrics.density).toInt()
 
@@ -117,6 +134,60 @@ internal class NativePagesController(
             "书籍详情" to "Book details",
             "目录" to "Table of contents",
             "菜单" to "Menu",
+            "更多" to "More",
+            "更多操作" to "More actions",
+            "选择" to "Select",
+            "继续阅读" to "Continue reading",
+            "重新关联文件" to "Relink file",
+            "重新授权" to "Reauthorize",
+            "重新扫描" to "Rescan",
+            "移除书目" to "Remove from library",
+            "源文件由监控文件夹管理" to "Source file is managed by its monitored folder",
+            "未知作者" to "Unknown author",
+            "未知出版社" to "Unknown publisher",
+            "日期未知" to "Unknown date",
+            "未标记" to "Unmarked",
+            "在读" to "Reading",
+            "想读" to "Want to read",
+            "暂缓" to "Paused",
+            "已读" to "Finished",
+            "弃读" to "Abandoned",
+            "文件丢失" to "File missing",
+            "需要文件权限" to "File permission required",
+            "上次读过" to "Last read",
+            "累计" to "Total",
+            "阅读进度" to "Reading progress",
+            "概览信息" to "Overview",
+            "书目" to "Books",
+            "推荐" to "Recommendations",
+            "相关与拓展" to "Related & extended",
+            "目录结构" to "Table of contents",
+            "阅读记录" to "Reading records",
+            "暂无笔记与高亮标注" to "No notes or highlights",
+            "暂无标签" to "No tags",
+            "分类" to "Classification",
+            "未分类" to "Unclassified",
+            "想法" to "Thoughts",
+            "标注" to "Highlights",
+            "书签" to "Bookmarks",
+            "本书笔记" to "Book notes",
+            "选择章节" to "Choose chapter",
+            "通用" to "General",
+            "监控文件夹" to "Monitored folder",
+            "藏书显示" to "Library display",
+            "阅读与声音" to "Reading and speech",
+            "AI 服务" to "AI services",
+            "网络" to "Network",
+            "数据" to "Data",
+            "关于" to "About",
+            "选择/重新授权" to "Choose / reauthorize",
+            "书库位置" to "Library location",
+            "应用私有目录" to "Private app directory",
+            "本页按书籍分组，点击查看该书全部记录" to "Grouped by book within this page; open a book for all its records",
+            "已移除的书籍" to "Removed book",
+            "本页" to "This page",
+            "查看记录" to "View records",
+            "标注记录总数" to "Annotation record count",
             "返回" to "Back",
             "刷新" to "Refresh",
             "核对恢复" to "Recovery",
@@ -143,17 +214,39 @@ internal class NativePagesController(
             "源相对路径" to "Source-relative path",
             "标签" to "Tags",
             "阅读状态" to "Reading status",
+            "生成简介" to "Generate introduction",
+            "暂无简介，可按书目信息生成。" to "No introduction yet. Generate one from the book metadata.",
             "置顶" to "Pin",
             "取消置顶" to "Unpin",
             "全部" to "All",
             "没有匹配记录" to "No matching records",
+            "笔记与标注" to "Notes and highlights",
+            "尚无阅读进度" to "No reading progress yet",
+            "还没有笔记" to "No notes yet",
+            "本书还没有笔记" to "No notes in this book yet",
+            "在阅读器中选中文字，即可划线或写下想法。" to "Select text in the reader to highlight it or write a note.",
+            "前往藏书" to "Go to Library",
+            "文件信息" to "File information",
+            "收起文件信息" to "Hide file information",
+            "可用" to "Available",
+            "格式" to "Format",
+            "阅读时长" to "Reading time",
+            "加入时间" to "Added",
+            "编辑书目信息" to "Edit book details",
+            "AI 分类" to "AI classification",
+            "秒" to "seconds",
+            "分钟" to "minutes",
+            "小时" to "hours",
+            "需要权限" to "Permission required",
+            "页面加载失败，未将读取错误当作空数据。" to "This page could not be loaded. A read error is not an empty result.",
+            "目录加载失败，请重试或返回阅读器。" to "The table of contents could not be loaded. Retry or return to the reader.",
         )[zh]
             ?: zh
     }
 
     private fun text(
         value: String,
-        size: Float = 17f,
+        size: Float = 15f,
         bold: Boolean = false,
     ) = TextView(activity).apply {
         this.text = value
@@ -177,45 +270,15 @@ internal class NativePagesController(
     private fun button(
         title: String,
         onClick: () -> Unit,
-    ) = Button(activity).apply {
-        text = label(title)
-        textSize = 15f
-        isAllCaps = false
-        minHeight = dp(48)
-        minimumHeight = dp(48)
-        setTextColor(this@NativePagesController.foreground)
-        background =
-            GradientDrawable().apply {
-                setColor(this@NativePagesController.background)
-                setStroke(dp(1).coerceAtLeast(1), this@NativePagesController.foreground)
-                cornerRadius =
-                    dp(5).toFloat()
-            }
-        setPadding(dp(13), dp(5), dp(13), dp(5))
-        contentDescription = text
-        setOnClickListener { onClick() }
-        layoutParams =
-            LinearLayout.LayoutParams(ViewGroup.LayoutParams.WRAP_CONTENT, ViewGroup.LayoutParams.WRAP_CONTENT).apply {
-                setMargins(dp(3), dp(3), dp(3), dp(3))
-            }
-    }
+    ) = NativeUi.button(activity, label(title), foreground, background, onClick)
 
     private fun actions(
         parent: LinearLayout,
         items: List<Pair<String, () -> Unit>>,
     ) {
-        val row =
-            LinearLayout(activity).apply {
-                orientation = LinearLayout.HORIZONTAL
-                gravity = Gravity.CENTER_VERTICAL
-            }
+        val row = NativeActionFlow(activity)
         items.forEach { (title, action) -> row.addView(button(title, action)) }
-        parent.addView(
-            HorizontalScrollView(activity).apply {
-                isHorizontalScrollBarEnabled = true
-                addView(row)
-            },
-        )
+        parent.addView(row)
     }
 
     private fun input(
@@ -244,7 +307,9 @@ internal class NativePagesController(
     }
 
     fun prepareLeave(reply: (String?) -> Unit) {
-        if (settingsPanel?.canLeave() == false || statsPanel?.canLeave() == false || libraryPanel?.canLeave() == false) {
+        if (settingsPanel?.canLeave() == false || statsPanel?.canLeave() == false || libraryPanel?.canLeave() == false ||
+            introductionEditor?.canLeave() == false || recommendationPanel?.canLeave() == false
+        ) {
             reply("native_operation_pending")
             return
         }
@@ -253,8 +318,11 @@ internal class NativePagesController(
     }
 
     private fun closeEditorsAfterLeave(closeSettings: Boolean = true) {
+        if (introductionEditor?.closeForLeave() == false) throw NativeStateFailure("native_operation_pending")
         if (noteEditor?.closeConfirmed() == false) throw NativeStateFailure("draft_unconfirmed")
         if (closeSettings) {
+            recommendationPanel?.close()
+            recommendationPanel = null
             settingsPanel?.close()
             settingsPanel = null
             statsPanel?.close()
@@ -395,12 +463,14 @@ internal class NativePagesController(
             query = ""
             noteFilter = "all"
             draftPager.reset()
+            if (page == "settings") settingsUiState.requested = params.optString("section").takeIf { it.isNotEmpty() }
         }
         this.page = page
         this.params = JSONObject(params.toString())
         if (!mounted) {
             overlay.addView(shell, FrameLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.MATCH_PARENT))
             overlay.isFocusableInTouchMode = true
+            overlay.isClickable = true
             overlay.setOnApplyWindowInsetsListener {
                 view,
                 insets,
@@ -420,6 +490,15 @@ internal class NativePagesController(
             mounted = true
         }
         overlay.visibility = View.VISIBLE
+        (overlay.parent as? ViewGroup)?.let { parent ->
+            for (index in 0 until parent.childCount) {
+                val sibling = parent.getChildAt(index)
+                if (sibling !== overlay) {
+                    obscuredAccessibility.putIfAbsent(sibling, sibling.importantForAccessibility)
+                    sibling.importantForAccessibility = View.IMPORTANT_FOR_ACCESSIBILITY_NO_HIDE_DESCENDANTS
+                }
+            }
+        }
         overlay.requestApplyInsets()
         overlay.requestFocus()
         refresh()
@@ -429,6 +508,8 @@ internal class NativePagesController(
         if (!force) {
             closeEditorsAfterLeave()
         } else {
+            recommendationPanel?.close()
+            recommendationPanel = null
             settingsPanel?.close()
             settingsPanel = null
             statsPanel?.close()
@@ -443,17 +524,28 @@ internal class NativePagesController(
         errorDialog = null
         currentDialog?.dismiss()
         currentDialog = null
+        clearSectionScrollListener()
         overlay.visibility = View.GONE
+        obscuredAccessibility.forEach { (view, original) -> view.importantForAccessibility = original }
+        obscuredAccessibility.clear()
     }
 
     fun handleBack(): Boolean {
         if (disposed || !mounted || overlay.visibility != View.VISIBLE) return false
-        if (settingsPanel?.handleBack() == true || statsPanel?.handleBack() == true || libraryPanel?.handleBack() == true) return true
+        if (settingsPanel?.handleBack() == true || statsPanel?.handleBack() == true || libraryPanel?.handleBack() == true ||
+            recommendationPanel?.handleBack() == true
+        ) {
+            return true
+        }
         if (errorDialog?.isShowing == true) {
             errorDialog?.dismiss()
             return true
         }
         if (currentDialog?.isShowing == true) {
+            if (introductionEditor != null) {
+                introductionEditor?.requestClose()
+                return true
+            }
             if (noteEditor != null) {
                 noteEditor?.requestClose()
                 return true
@@ -483,13 +575,16 @@ internal class NativePagesController(
                 KeyEvent.KEYCODE_PAGE_UP -> View.FOCUS_UP
                 else -> return false
             }
-        if (event.action == KeyEvent.ACTION_DOWN) scroll.pageScroll(direction)
+        if (event.action == KeyEvent.ACTION_DOWN) {
+            if (page == "settings") settingsPanel?.pageScroll(direction) else scroll.pageScroll(direction)
+        }
         return true
     }
 
     fun dispose() {
         if (disposed) return
         disposed = true
+        introductionEditor?.dispose()
         hide(force = true)
         body.removeAllViews()
         shell.removeAllViews()
@@ -543,27 +638,31 @@ internal class NativePagesController(
     }
 
     private fun frame() {
+        clearSectionScrollListener()
         shell.removeAllViews()
         body.removeAllViews()
         overlay.setBackgroundColor(background)
         shell.setBackgroundColor(background)
+        val rootPage = page in nativeBottomPages
+        val contentWidth =
+            when (page) {
+                "reading", "book" -> 960
+                "settings" -> 1200
+                "stats" -> 1160
+                else -> 1200
+            }
+        val sidePadding = if (page == "manual") 20 else 24
+        body.maxContentDp = contentWidth
         val toolbar =
             LinearLayout(activity).apply {
-                orientation = LinearLayout.HORIZONTAL
                 gravity = Gravity.CENTER_VERTICAL
-                setPadding(dp(8), dp(4), dp(8), dp(4))
+                setPadding(dp(sidePadding), dp(12), dp(sidePadding), dp(8))
             }
-        toolbar.addView(
-            button(if (page == "library") "菜单" else "返回") {
-                if (page ==
-                    "library"
-                ) {
-                    choose("菜单", pages.values.map(::label)) { navigate(pathFor(pages.keys.toList()[it])) }
-                } else {
-                    navigate("/library")
-                }
-            },
-        )
+        if (!rootPage) {
+            toolbar.addView(
+                NativeUi.iconTextButton(activity, label("返回"), "back", foreground, background) { navigate("@back") },
+            )
+        }
         toolbar.addView(
             text(
                 label(
@@ -575,18 +674,90 @@ internal class NativePagesController(
                         pages.getValue(page)
                     },
                 ),
-                22f,
+                when (page) {
+                    "book" -> 16f
+                    "manual" -> 20f
+                    "stats", "settings" -> 26f
+                    else -> 22f
+                },
                 true,
-            ),
+            ).apply {
+                pageTitle = this
+                maxLines = if (page in listOf("library", "stats", "settings")) Int.MAX_VALUE else 1
+                if (page in listOf("stats", "settings")) setTypeface(Typeface.SERIF, Typeface.NORMAL)
+                ellipsize = TextUtils.TruncateAt.END
+                setPadding(if (rootPage) 0 else dp(12), 0, dp(8), 0)
+            },
             LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f),
         )
-        if (page != "settings") toolbar.addView(button("核对恢复", ::showSettingsRecovery))
-        toolbar.addView(button("刷新") { refresh() })
-        shell.addView(toolbar)
-        shell.addView(line())
-        body.setPadding(dp(12), dp(8), dp(12), dp(32))
+        if (page !=
+            "settings"
+        ) {
+            toolbar.addView(NativeUi.iconButton(activity, label("核对恢复"), "recovery", foreground, background, ::showSettingsRecovery))
+        }
+        toolbar.addView(
+            NativeUi.iconButton(activity, label("更多操作"), "more", foreground, background) {
+                val owner = generation
+                val actions =
+                    (if (page in listOf("library", "reading")) libraryPanel?.menuActions().orEmpty() else emptyList()) +
+                        listOf(label("刷新") to { refresh() }) +
+                        pages.map { (key, title) -> label(title) to { navigate(pathFor(key)) } }
+                choose(label("菜单"), actions.map { it.first }) { index ->
+                    if (!disposed && owner == generation) actions.getOrNull(index)?.second?.invoke()
+                }
+            },
+        )
+        val header = FrameLayout(activity)
+        header.addView(
+            NativeContentColumn(activity).apply {
+                orientation = LinearLayout.VERTICAL
+                maxContentDp = contentWidth
+                addView(toolbar)
+            },
+            FrameLayout.LayoutParams(-1, -2, Gravity.CENTER_HORIZONTAL),
+        )
+        shell.addView(header)
+        sectionNavHost = null
+        libraryNoticeHost = null
+        if (page == "library" || page == "reading") {
+            val pinned =
+                NativeContentColumn(activity).apply {
+                    maxContentDp = contentWidth
+                    setPadding(dp(sidePadding), 0, dp(sidePadding), 0)
+                }
+            libraryNoticeHost = pinned
+            shell.addView(FrameLayout(activity).apply { addView(pinned, FrameLayout.LayoutParams(-1, -2, Gravity.CENTER_HORIZONTAL)) })
+        }
+        body.setPadding(dp(sidePadding), dp(8), dp(sidePadding), dp(32))
         (scroll.parent as? ViewGroup)?.removeView(scroll)
-        shell.addView(scroll, LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, 0, 1f))
+        if (page == "settings") {
+            (body.parent as? ViewGroup)?.removeView(body)
+            val host = FrameLayout(activity).apply { addView(body, FrameLayout.LayoutParams(-1, -1, Gravity.CENTER_HORIZONTAL)) }
+            shell.addView(host, LinearLayout.LayoutParams(-1, 0, 1f))
+        } else {
+            if (body.parent !== scroll) {
+                (body.parent as? ViewGroup)?.removeView(body)
+                scroll.addView(body, FrameLayout.LayoutParams(-1, -2, Gravity.TOP or Gravity.CENTER_HORIZONTAL))
+            }
+            shell.addView(scroll, LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, 0, 1f))
+        }
+        shell.addView(line())
+        val selected =
+            when (page) {
+                "book" -> "library"
+                "manual" -> "settings"
+                else -> page
+            }
+        val bottom = LinearLayout(activity).apply { setPadding(dp(8), dp(4), dp(8), dp(4)) }
+        for (key in nativeBottomPages) {
+            bottom.addView(
+                NativeUi.navigationItem(activity, label(pages.getValue(key)), key, key == selected, foreground, background) {
+                    if (key != page) navigate(pathFor(key))
+                },
+                LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f),
+            )
+        }
+        shell.addView(bottom)
     }
 
     private fun pathFor(page: String) =
@@ -725,7 +896,63 @@ internal class NativePagesController(
         }
     }
 
+    private fun updateLibrarySummary(
+        owner: Long,
+        detail: String?,
+    ) {
+        if (disposed || owner != generation || page != "library") return
+        val title = pageTitle ?: return
+        val caption = label("藏书")
+        val value = if (detail.isNullOrBlank()) caption else "$caption  $detail"
+        val styled = android.text.SpannableString(value)
+        styled.setSpan(android.text.style.StyleSpan(Typeface.BOLD), 0, caption.length, android.text.Spanned.SPAN_EXCLUSIVE_EXCLUSIVE)
+        if (value.length > caption.length) {
+            styled.setSpan(
+                android.text.style.RelativeSizeSpan(0.7f),
+                caption.length,
+                value.length,
+                android.text.Spanned.SPAN_EXCLUSIVE_EXCLUSIVE,
+            )
+            styled.setSpan(
+                android.text.style.ForegroundColorSpan(NativeUi.secondary(background)),
+                caption.length,
+                value.length,
+                android.text.Spanned.SPAN_EXCLUSIVE_EXCLUSIVE,
+            )
+        }
+        title.setTypeface(null, Typeface.NORMAL)
+        title.text = styled
+    }
+
     private fun books() {
+        val owner = generation
+        if (page == "reading") {
+            val modes = NativeActionFlow(activity)
+            for ((recommended, title) in listOf(false to "书目", true to "推荐")) {
+                modes.addView(
+                    button(title) {
+                        if (!disposed && owner == generation && readingRecommendations != recommended) {
+                            readingRecommendations = recommended
+                            refresh()
+                        }
+                    }.apply {
+                        NativeUi.styleTab(
+                            this,
+                            readingRecommendations == recommended,
+                            this@NativePagesController.foreground,
+                            this@NativePagesController.background,
+                        )
+                    },
+                )
+            }
+            body.addView(modes)
+            if (readingRecommendations) {
+                val target = column()
+                body.addView(target)
+                renderRecommendations(target, "reading", null)
+                return
+            }
+        }
         val panel =
             NativeLibraryPanel(
                 activity,
@@ -740,9 +967,50 @@ internal class NativePagesController(
                 { navigate("/book/${Uri.encode(it.getString("id"))}") },
                 { name -> userAction(name) },
                 repaint,
+                ::disableLibraryDialogOperations,
+                { detail -> updateLibrarySummary(owner, detail) },
             )
         libraryPanel = panel
+        libraryNoticeHost?.addView(panel.notice)
         body.addView(panel.render())
+    }
+
+    private fun renderRecommendations(
+        target: LinearLayout,
+        mode: String,
+        referenceId: String?,
+        onCount: (Int?) -> Unit = {},
+    ) {
+        recommendationPanel?.close()
+        val owner = generation
+        val ownerPage = page
+        lateinit var panel: NativeBookRecommendationsPanel
+        panel =
+            NativeBookRecommendationsPanel(
+                activity,
+                foreground,
+                background,
+                preferences.optString("language") == "en",
+                mode,
+                referenceId,
+                request,
+                { !disposed && owner == generation && page == ownerPage && recommendationPanel === panel },
+                { id -> if (!disposed && owner == generation && recommendationPanel === panel) navigate("/book/${Uri.encode(id)}") },
+                { image, id ->
+                    request("library.book", JSONObject().put("id", id)) { value, failure ->
+                        activity.runOnUiThread {
+                            if (!disposed && owner == generation && recommendationPanel === panel && failure == null) {
+                                val path = value?.optJSONObject("book")?.optString("coverPath").orEmpty()
+                                if (path.isNotBlank() && path != "null") loadCover(image, path)
+                            }
+                        }
+                    }
+                },
+                { count -> if (!disposed && owner == generation && recommendationPanel === panel) onCount(count) },
+            )
+        recommendationPanel = panel
+        target.removeAllViews()
+        target.addView(panel.render())
     }
 
     private fun bookRow(
@@ -750,57 +1018,232 @@ internal class NativePagesController(
         read: (() -> Unit)? = null,
         details: (() -> Unit)? = null,
     ): View {
+        val reading = page == "reading"
         val row =
+            object : LinearLayout(activity) {
+                override fun onMeasure(
+                    widthMeasureSpec: Int,
+                    heightMeasureSpec: Int,
+                ) {
+                    val available = (View.MeasureSpec.getSize(widthMeasureSpec) - paddingLeft - paddingRight).coerceAtLeast(0)
+                    val stacked = nativeStackForWidth(available, resources.displayMetrics.density, resources.configuration.fontScale, 480)
+                    orientation = if (stacked) VERTICAL else HORIZONTAL
+                    if (childCount == 2) {
+                        (getChildAt(0).layoutParams as LayoutParams).apply {
+                            width = if (stacked) ViewGroup.LayoutParams.MATCH_PARENT else 0
+                            weight = if (stacked) 0f else 1f
+                        }
+                        (getChildAt(1).layoutParams as LayoutParams).apply {
+                            width = if (stacked) ViewGroup.LayoutParams.MATCH_PARENT else ViewGroup.LayoutParams.WRAP_CONTENT
+                            topMargin = if (stacked) dp(8) else 0
+                        }
+                    }
+                    super.onMeasure(widthMeasureSpec, heightMeasureSpec)
+                }
+            }.apply {
+                orientation = LinearLayout.HORIZONTAL
+                gravity = Gravity.CENTER_VERTICAL
+                setPadding(dp(if (reading) 16 else 4), dp(12), dp(if (reading) 16 else 4), dp(12))
+                background = NativeUi.bookRowBackground(activity, this@NativePagesController.background, reading)
+                layoutParams =
+                    LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT).apply {
+                        bottomMargin =
+                            if (reading) dp(12) else 0
+                    }
+                isFocusable = true
+                isSelected = book.optString("id") in libraryState.selected
+                contentDescription = label(if (libraryState.manage) "选择" else "书籍详情") + ": " + book.optString("title")
+                accessibilityDelegate =
+                    object : View.AccessibilityDelegate() {
+                        override fun onInitializeAccessibilityNodeInfo(
+                            host: View,
+                            info: android.view.accessibility.AccessibilityNodeInfo,
+                        ) {
+                            super.onInitializeAccessibilityNodeInfo(host, info)
+                            info.className = if (libraryState.manage) android.widget.CheckBox::class.java.name else Button::class.java.name
+                            info.isCheckable = libraryState.manage
+                            info.isChecked = host.isSelected
+                        }
+                    }
+            }
+        val coverWidth = if (reading) 72 else 58
+        val coverHeight = if (reading) 101 else 78
+        val coverBox =
+            FrameLayout(activity).apply {
+                background =
+                    NativeUi.shape(activity, this@NativePagesController.background).apply {
+                        cornerRadius = 0f
+                        setStroke(dp(1), this@NativePagesController.foreground)
+                    }
+                clipToOutline = true
+                importantForAccessibility = View.IMPORTANT_FOR_ACCESSIBILITY_NO_HIDE_DESCENDANTS
+            }
+        coverBox.addView(
+            text(book.optString("title"), if (reading) 11f else 12f).apply {
+                setPadding(dp(4), dp(8), dp(4), dp(4))
+                if (reading) gravity = Gravity.CENTER
+                maxLines = 5
+            },
+            FrameLayout.LayoutParams(-1, -1),
+        )
+        val cover = ImageView(activity).apply { scaleType = ImageView.ScaleType.CENTER_CROP }
+        coverBox.addView(cover, FrameLayout.LayoutParams(-1, -1))
+        if (reading) {
+            coverBox.addView(
+                text(book.optString("format").uppercase(), 9f).apply {
+                    setTextColor(Color.WHITE)
+                    setBackgroundColor(Color.argb(180, 0, 0, 0))
+                    setPadding(dp(3), 0, dp(3), 0)
+                },
+                FrameLayout.LayoutParams(-2, -2, Gravity.TOP or Gravity.START).apply { setMargins(dp(4), dp(4), dp(4), 0) },
+            )
+        }
+        val selectionMark =
+            if (libraryState.manage) {
+                text(if (row.isSelected) "✓" else "□", 24f, true).apply {
+                    gravity = Gravity.CENTER
+                    setBackgroundColor(NativeUi.surface(this@NativePagesController.background))
+                    setPadding(0, 0, 0, 0)
+                }
+            } else {
+                null
+            }
+        selectionMark?.let { coverBox.addView(it, FrameLayout.LayoutParams(dp(30), dp(30), Gravity.TOP or Gravity.START)) }
+        val content =
             LinearLayout(activity).apply {
                 orientation = LinearLayout.HORIZONTAL
                 gravity = Gravity.CENTER_VERTICAL
-                setPadding(0, dp(7), 0, dp(7))
             }
-        val cover =
-            ImageView(activity).apply {
-                contentDescription = "${book.optString("title")} 封面"
-                scaleType =
-                    ImageView.ScaleType.FIT_CENTER
-            }
-        row.addView(cover, LinearLayout.LayoutParams(dp(54), dp(78)))
+        content.addView(coverBox, LinearLayout.LayoutParams(dp(coverWidth), dp(coverHeight)))
         loadCover(cover, book.optString("coverPath"))
         val info = column()
-        info.addView(text(book.optString("title"), 18f, true))
-        info.addView(text(book.optString("author").ifEmpty { "未知作者" }, 14f))
-        val progress =
-            if (book.has("progress") &&
-                !book.isNull("progress")
-            ) {
-                " · ${(book.optDouble("progress") * 100).coerceIn(0.0, 100.0).toInt()}%"
-            } else {
-                ""
+        val statusName = label(statuses[book.optString("effectiveReadingStatus")] ?: "未标记")
+        val hasProgress = !book.isNull("progress") && book.optDouble("progress").isFinite()
+        val percent = if (hasProgress) (book.optDouble("progress").coerceIn(0.0, 1.0) * 100).toInt() else 0
+        val problem =
+            when (book.optString("fileAvailability")) {
+                "missing" -> label("文件丢失")
+                "permission-denied" -> label("需要文件权限")
+                else -> ""
             }
-        info.addView(
-            text(
-                "${statuses[
-                    book.optString(
-                        "effectiveReadingStatus",
-                        book.optString("readingStatus"),
+        val tags = book.optJSONArray("tags") ?: JSONArray()
+        val tagLabels = (0 until minOf(tags.length(), 3)).map { tags.optString(it) }.filter { it.isNotBlank() }
+        val heading = NativeBookHeading(activity)
+        heading.addView(
+            text(book.optString("title"), if (reading) 16f else 18f, true).apply {
+                maxLines = if (reading) 1 else 2
+                ellipsize =
+                    TextUtils.TruncateAt.END
+            },
+        )
+        if (!reading || tagLabels.isNotEmpty()) {
+            heading.addView(
+                text(
+                    if (reading) {
+                        tagLabels.joinToString(" · ")
+                    } else {
+                        listOf(problem, statusName, if (hasProgress) "$percent%" else "")
+                            .filter { it.isNotEmpty() }
+                            .joinToString(" · ")
+                    },
+                    if (reading) 12f else 14f,
+                ).apply {
+                    if (reading) {
+                        maxEms = 12
+                        setTextColor(NativeUi.secondary(this@NativePagesController.background))
+                    }
+                },
+            )
+        }
+        info.addView(heading)
+        val author = book.optString("author").takeUnless { it.isBlank() || it == "null" } ?: label("未知作者")
+        val byline =
+            listOf(author, book.optString("publisher"), publicationDate(book.optString("publicationDate")))
+                .filter { it.isNotBlank() && it != "null" }
+                .joinToString(" · ")
+        info.addView(text(byline, 14f).apply { setTextColor(NativeUi.secondary(this@NativePagesController.background)) })
+        if (!reading) {
+            info.addView(text(listOf(book.optString("format").uppercase()).plus(tagLabels).joinToString(" · "), 12f))
+        }
+        if (reading) {
+            val metadata = mutableListOf<String>()
+            if (book.optLong("lastReadAt") >
+                0
+            ) {
+                metadata.add(label("上次读过") + ": " + dateTime(book.optLong("lastReadAt")).substringBefore(' '))
+            }
+            val seconds = book.optDouble("readingSeconds", Double.NaN)
+            if (!book.isNull("readingSeconds") && seconds.isFinite() && seconds >= 0) {
+                val elapsed =
+                    if (seconds > 0 && seconds < 60) {
+                        if (preferences.optString("language") == "en") "less than 1 min" else "不足1 min"
+                    } else {
+                        duration(seconds)
+                    }
+                metadata.add(label("累计") + ": " + elapsed)
+            }
+            metadata.add(if (hasProgress) label("阅读进度") + ": $percent%" else label("尚无阅读进度"))
+            info.addView(
+                text(metadata.joinToString(" · "), 12f).apply {
+                    setTextColor(NativeUi.secondary(this@NativePagesController.background))
+                },
+            )
+            if (problem.isNotEmpty()) info.addView(text(problem, 13f, true))
+        }
+        content.addView(
+            info,
+            LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f).apply { setMargins(dp(16), 0, dp(12), 0) },
+        )
+        row.addView(content, LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f))
+        val tools = NativeBookActions(activity)
+        val readable = !book.has("supported") || book.optBoolean("supported")
+        if (readable) {
+            tools.addView(
+                NativeUi.primaryButton(
+                    activity,
+                    label(
+                        if (problem.isNotEmpty()) {
+                            if (book.optString("fileAvailability") == "permission-denied") "重新授权" else "重新关联文件"
+                        } else if (reading ||
+                            percent > 0
+                        ) {
+                            "继续阅读"
+                        } else {
+                            "阅读"
+                        },
                     ),
-                ] ?: "未标记"} · ${book.optString("format").uppercase(Locale.ROOT)}$progress",
-                13f,
-            ),
-        )
-        row.addView(info, LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f))
-        row.addView(
-            button("阅读") {
-                if (read !=
-                    null
-                ) {
-                    read()
-                } else {
-                    openReader(book)
-                }
-            }.apply { isEnabled = !book.has("supported") || book.optBoolean("supported") },
-        )
-        row.setOnClickListener { if (details != null) details() else navigate("/book/${Uri.encode(book.getString("id"))}") }
+                    foreground,
+                    background,
+                ) { bookPrimary(book) { if (read != null) read() else openReader(book) } },
+            )
+        }
+        if (!reading) {
+            tools.addView(
+                NativeUi.iconTextButton(activity, label("更多"), "more", foreground, background) {
+                    if (libraryPanel?.canOperate() != false) bookMenu(book, read, details)
+                },
+            )
+        }
+        tools.visibility = if (libraryState.manage) View.GONE else View.VISIBLE
+        row.addView(tools)
+        row.setOnClickListener {
+            if (details != null) details() else navigate("/book/${Uri.encode(book.getString("id"))}")
+            if (libraryState.manage) {
+                row.isSelected = book.optString("id") in libraryState.selected
+                selectionMark?.text = if (row.isSelected) "✓" else "□"
+                row.sendAccessibilityEvent(android.view.accessibility.AccessibilityEvent.TYPE_WINDOW_CONTENT_CHANGED)
+            }
+        }
+        row.setOnKeyListener { _, keyCode, event ->
+            if (keyCode in listOf(KeyEvent.KEYCODE_ENTER, KeyEvent.KEYCODE_DPAD_CENTER, KeyEvent.KEYCODE_SPACE)) {
+                if (event.action == KeyEvent.ACTION_UP) row.performClick()
+                true
+            } else {
+                false
+            }
+        }
         row.setOnLongClickListener {
-            bookMenu(book, read, details)
+            if (libraryPanel?.canOperate() != false) bookMenu(book, read, details)
             true
         }
         return row
@@ -845,9 +1288,21 @@ internal class NativePagesController(
         }
     }
 
+    private fun bookPrimary(
+        book: JSONObject,
+        available: () -> Unit = { openReader(book) },
+    ) {
+        when (book.optString("fileAvailability")) {
+            "missing" -> userAction("relinkBook", JSONObject().put("bookId", book.getString("id")))
+            "permission-denied" -> navigate("/settings?section=folder")
+            else -> available()
+        }
+    }
+
     private fun openReader(
         book: JSONObject,
         cfi: String = "",
+        draftContextId: String = "",
     ) {
         if (book.has("supported") && !book.optBoolean("supported")) {
             showError("retired_format")
@@ -860,7 +1315,10 @@ internal class NativePagesController(
             return
         }
         val path = if (book.optString("format") == "pdf") "/read-pdf/" else "/read/"
-        navigate(path + Uri.encode(book.getString("id")) + if (cfi.isEmpty()) "" else "?loc=${Uri.encode(cfi)}")
+        val query = mutableListOf<String>()
+        if (cfi.isNotEmpty()) query.add("loc=${Uri.encode(cfi)}")
+        if (draftContextId.isNotEmpty() && book.optString("format") != "pdf") query.add("draft=${Uri.encode(draftContextId)}")
+        navigate(path + Uri.encode(book.getString("id")) + if (query.isEmpty()) "" else "?${query.joinToString("&")}")
     }
 
     private fun bookMenu(
@@ -868,43 +1326,82 @@ internal class NativePagesController(
         read: (() -> Unit)? = null,
         details: (() -> Unit)? = null,
     ) {
-        choose(book.optString("title"), listOf("阅读", "书籍详情", "阅读状态", if (book.isNull("pinnedAt")) "置顶" else "取消置顶", "移除书目")) { index ->
-            when (index) {
-                0 -> {
-                    if (read != null) read() else openReader(book)
-                }
-
-                1 -> {
-                    if (details != null) details() else navigate("/book/${Uri.encode(book.getString("id"))}")
-                }
-
-                2 -> {
-                    status(book)
-                }
-
-                3 -> {
-                    patchBook(
-                        book,
-                        JSONObject().put("pinnedAt", if (book.isNull("pinnedAt")) System.currentTimeMillis() else JSONObject.NULL),
-                    )
-                }
-
-                4 -> {
-                    removeBook(book)
-                }
+        if (libraryPanel?.canOperate() == false) return
+        val ownerGeneration = generation
+        val linked = !book.isNull("sourceRef")
+        val entries = mutableListOf<Pair<String, () -> Unit>>()
+        val icons = mutableListOf<String>()
+        if (linked) {
+            entries.add(label("重新扫描") to { userAction("recheckFolder") })
+            icons.add("refresh")
+        }
+        entries.add(
+            label(if (book.isNull("pinnedAt")) "置顶" else "取消置顶") to {
+                patchBook(book, JSONObject().put("pinnedAt", if (book.isNull("pinnedAt")) System.currentTimeMillis() else JSONObject.NULL))
+            },
+        )
+        icons.add("pin")
+        if (!linked) {
+            entries.add(label("移除书目") to { removeBook(book) })
+            icons.add("delete")
+        }
+        val adapter =
+            object : android.widget.ArrayAdapter<String>(activity, android.R.layout.simple_list_item_1, entries.map { it.first }) {
+                override fun getView(
+                    position: Int,
+                    convertView: View?,
+                    parent: ViewGroup,
+                ): View =
+                    (super.getView(position, convertView, parent) as TextView).apply {
+                        setTextColor(this@NativePagesController.foreground)
+                        setCompoundDrawablesRelative(
+                            NativeUi.glyph(activity, icons[position], this@NativePagesController.foreground),
+                            null,
+                            null,
+                            null,
+                        )
+                        compoundDrawablePadding = dp(12)
+                        minHeight = dp(48)
+                    }
             }
+        replaceDialog {
+            AlertDialog
+                .Builder(activity)
+                .setTitle(book.optString("title") + if (linked) "\n" + label("源文件由监控文件夹管理") else "")
+                .setAdapter(adapter) { _, index ->
+                    if (ownerGeneration == generation && libraryPanel?.canOperate() != false) entries[index].second()
+                }.setNegativeButton(label("取消"), null)
+                .create()
+                .apply {
+                    setOnDismissListener { if (currentDialog === this) currentDialog = null }
+                    show()
+                }
+        }
+    }
+
+    private fun disableLibraryDialogOperations() {
+        currentDialog?.let { dialog ->
+            dialog.getButton(AlertDialog.BUTTON_POSITIVE)?.isEnabled = false
+            dialog.getButton(AlertDialog.BUTTON_NEUTRAL)?.isEnabled = false
+            dialog.listView?.isEnabled = false
         }
     }
 
     private fun patchBook(
         book: JSONObject,
         patch: JSONObject,
-    ) = call("library.bookPatch", JSONObject().put("id", book.getString("id")).put("before", book).put("patch", patch)) {
-        if (patch.has("pinnedAt")) {
-            // Explicit pin/unpin requests a new order; ordinary reader return keeps its snapshot.
-            call("action.librarySessionSave", JSONObject().put("session", JSONObject().put("orderedBookIds", JSONArray()))) { refresh() }
-        } else {
-            refresh()
+    ) {
+        if (libraryPanel?.canMutate() == false) return
+        call("library.bookPatch", JSONObject().put("id", book.getString("id")).put("before", book).put("patch", patch)) {
+            if (patch.has("pinnedAt")) {
+                // Explicit pin/unpin requests a new order; ordinary reader return keeps its snapshot.
+                call(
+                    "action.librarySessionSave",
+                    JSONObject().put("session", JSONObject().put("orderedBookIds", JSONArray())),
+                ) { refresh() }
+            } else {
+                refresh()
+            }
         }
     }
 
@@ -914,11 +1411,14 @@ internal class NativePagesController(
         }
 
     private fun removeBook(book: JSONObject) {
+        if (libraryPanel?.canMutate() == false) return
+        val ownerGeneration = generation
         if (!book.isNull("sourceRef") && book.optString("sourceRef").isNotEmpty()) {
             showError("source_linked_book")
             return
         }
         confirm("删除", "移除《${book.optString("title")}》的书目及关联笔记；保留实际书籍文件和阅读统计。此操作不会删除监控文件夹源文件。") {
+            if (ownerGeneration != generation || libraryPanel?.canMutate() == false) return@confirm
             call("library.bookRemove", JSONObject().put("id", book.getString("id")).put("before", book)) {
                 if (page ==
                     "library"
@@ -942,80 +1442,326 @@ internal class NativePagesController(
     }
 
     private fun renderBook(book: JSONObject) {
-        if (book.optString("coverPath").isNotEmpty()) {
-            val image =
-                ImageView(activity).apply {
-                    contentDescription = book.optString("title") + " cover"
-                    scaleType =
-                        ImageView.ScaleType.FIT_CENTER
-                }
-            body.addView(image, LinearLayout.LayoutParams(dp(150), dp(200)))
-            loadCover(image, book.getString("coverPath"))
-        }
-        body.addView(text(book.optString("title"), 26f, true).apply { setTextIsSelectable(true) })
-        body.addView(text(book.optString("author")))
-        actions(
-            body,
-            listOf(
-                "阅读" to { openReader(book) },
-                "编辑" to { editBook(book) },
-                (if (book.isNull("pinnedAt")) "置顶" else "取消置顶") to {
-                    patchBook(
-                        book,
-                        JSONObject().put("pinnedAt", if (book.isNull("pinnedAt")) System.currentTimeMillis() else JSONObject.NULL),
-                    )
-                },
-                "阅读状态" to { status(book) },
-                "标签" to { editTags(book) },
-                "AI 分类" to { openClassification(book.getString("id"), true) },
-                "目录" to { bookToc(book.getString("id")) },
+        val epoch = generation
+        val bookId = book.getString("id")
+        pageTitle?.text = book.optString("title")
+        val hero =
+            NativeBookHero(activity).apply {
+                background = NativeUi.shape(activity, this@NativePagesController.background)
+                setPadding(dp(24), dp(24), dp(24), dp(24))
+                layoutParams = LinearLayout.LayoutParams(-1, -2).apply { bottomMargin = dp(20) }
+            }
+        val coverBox =
+            FrameLayout(activity).apply {
+                background = NativeUi.shape(activity, this@NativePagesController.background)
+                clipToOutline =
+                    true
+            }
+        coverBox.addView(
+            text(book.optString("title"), 13f, true).apply {
+                gravity = Gravity.CENTER
+                setPadding(dp(12), dp(12), dp(12), dp(12))
+            },
+            FrameLayout.LayoutParams(-1, -1),
+        )
+        val cover =
+            ImageView(activity).apply {
+                scaleType = ImageView.ScaleType.CENTER_CROP
+                contentDescription = book.optString("title")
+            }
+        coverBox.addView(cover, FrameLayout.LayoutParams(-1, -1))
+        loadCover(cover, book.optString("coverPath"))
+        coverBox.addView(
+            text(book.optString("format").uppercase(), 10f, true).apply {
+                setTextColor(Color.WHITE)
+                setBackgroundColor(Color.argb(190, 0, 0, 0))
+                setPadding(dp(6), dp(2), dp(6), dp(2))
+            },
+            FrameLayout
+                .LayoutParams(
+                    -2,
+                    -2,
+                    Gravity.TOP or Gravity.START,
+                ).apply { setMargins(dp(6), dp(6), 0, 0) },
+        )
+        hero.addView(coverBox, LinearLayout.LayoutParams(dp(140), dp(196)))
+        val identity = column()
+        identity.addView(
+            text(book.optString("title"), 22f, true).apply {
+                setTextIsSelectable(true)
+                setPadding(0, 0, 0, dp(12))
+            },
+        )
+        identity.addView(
+            text(
+                listOf("author", "publisher", "publicationDate")
+                    .map { if (it == "publicationDate") publicationDate(book.optString(it)) else book.optString(it) }
+                    .filter {
+                        it.isNotEmpty() &&
+                            it != "null"
+                    }.joinToString(" · "),
+                14f,
             ),
         )
+        identity.addView(button(label("阅读状态") + ": " + label(statuses[book.optString("effectiveReadingStatus")] ?: "未标记")) { status(book) })
+        if (!book.isNull("progress") && book.optDouble("progress").isFinite()) {
+            val p = (book.optDouble("progress").coerceIn(0.0, 1.0) * 100).toInt()
+            identity.addView(
+                android.widget.ProgressBar(activity, null, android.R.attr.progressBarStyleHorizontal).apply {
+                    max = 100
+                    progress =
+                        p
+                    progressTintList =
+                        android.content.res.ColorStateList
+                            .valueOf(this@NativePagesController.foreground)
+                    contentDescription =
+                        label("阅读进度") + " $p%"
+                },
+                LinearLayout.LayoutParams(-1, dp(6)).apply { topMargin = dp(12) },
+            )
+            identity.addView(text("$p%", 12f))
+        }
+        val mainActions = NativeActionFlow(activity)
+        mainActions.addView(
+            NativeUi
+                .primaryButton(
+                    activity,
+                    label(
+                        if (book.optString("fileAvailability") in
+                            setOf("missing", "permission-denied")
+                        ) {
+                            if (book.optString("fileAvailability") == "permission-denied") "重新授权" else "重新关联文件"
+                        } else if (book.optDouble("progress", 0.0) >
+                            0
+                        ) {
+                            "继续阅读"
+                        } else {
+                            "阅读"
+                        },
+                    ),
+                    foreground,
+                    background,
+                ) { bookPrimary(book) }
+                .apply {
+                    isEnabled =
+                        !book.has("supported") || book.optBoolean("supported")
+                },
+        )
+        mainActions.addView(
+            NativeUi.iconTextButton(
+                activity,
+                label(if (book.isNull("pinnedAt")) "置顶" else "取消置顶"),
+                "pin",
+                foreground,
+                background,
+            ) {
+                patchBook(book, JSONObject().put("pinnedAt", if (book.isNull("pinnedAt")) System.currentTimeMillis() else JSONObject.NULL))
+            },
+        )
+        if (book.isNull("sourceRef")) {
+            mainActions.addView(NativeUi.iconTextButton(activity, label("移除书目"), "delete", foreground, background) { removeBook(book) })
+        } else {
+            identity.addView(text(label("源文件由监控文件夹管理"), 13f))
+        }
+        identity.addView(mainActions)
+        hero.addView(identity, LinearLayout.LayoutParams(0, -2, 1f))
+        body.addView(hero)
+        if (book.optString("fileAvailability") in setOf("missing", "permission-denied")) {
+            val recovery = NativeUi.card(activity, background, 16)
+            recovery.addView(text(label(if (book.optString("fileAvailability") == "missing") "文件丢失" else "需要文件权限"), 15f, true))
+            actions(
+                recovery,
+                listOf(
+                    "重新扫描" to { userAction("recheckFolder") },
+                    "设置" to { navigate("/settings?section=folder") },
+                    "重新关联文件" to { userAction("relinkBook", JSONObject().put("bookId", bookId)) },
+                ),
+            )
+            body.addView(recovery)
+        }
+        val tabs = LinearLayout(activity)
+        val tabButtons = mutableListOf<Button>()
+        val panels =
+            listOf(
+                NativeUi.card(activity, background),
+                NativeUi.card(activity, background),
+                NativeUi.card(activity, background),
+                NativeUi.card(activity, background),
+            )
+        val overview = panels[0]
+        val toc = panels[1]
+        val records = panels[2]
+        val recommendations = panels[3]
+        var recommendationsStarted = false
+        var selected = 0
+        var recordsIntent = 0
+
+        fun recordPage(offset: Int) {
+            val intent = ++recordsIntent
+            records.removeAllViews()
+            records.addView(text(label("正在加载…")))
+            records.addView(button("重试") { recordPage(offset) })
+            call("library.annotations", JSONObject().put("bookId", bookId).put("offset", offset).put("limit", 20)) { value ->
+                if (generation != epoch || recordsIntent != intent) return@call
+                val items = value.getJSONArray("items")
+                val total = value.getInt("total")
+                tabButtons.getOrNull(2)?.apply {
+                    text = label("笔记与标注") + " ($total)"
+                    contentDescription = text
+                }
+                records.removeAllViews()
+                if (items.length() == 0) records.addView(text(label("暂无笔记与高亮标注"), 14f))
+                for (i in 0 until items.length()) {
+                    val note = items.getJSONObject(i)
+                    val row = column().apply { setPadding(0, dp(10), 0, dp(10)) }
+                    row.addView(
+                        text(
+                            label(if (note.optString("kind") == "bookmark") "书签" else "高亮") + " · " + dateTime(note.optLong("createdAt")),
+                            12f,
+                        ),
+                    )
+                    if (note
+                            .optString(
+                                "text",
+                            ).isNotEmpty()
+                    ) {
+                        row.addView(text("“${note.optString("text")}”", 14f).apply { setTextIsSelectable(true) })
+                    }
+                    if (!note.isNull("note") &&
+                        note.optString("note").isNotEmpty()
+                    ) {
+                        row.addView(text(label("想法") + ": " + note.optString("note"), 13f).apply { setTextIsSelectable(true) })
+                    }
+                    records.addView(row)
+                    records.addView(line())
+                }
+                if (total > 20) {
+                    val pager = LinearLayout(activity)
+                    pager.addView(button("上页") { recordPage((offset - 20).coerceAtLeast(0)) }.apply { isEnabled = offset > 0 })
+                    pager.addView(button("下页") { recordPage(offset + 20) }.apply { isEnabled = offset + items.length() < total })
+                    records.addView(pager)
+                }
+                actions(records, listOf("本书笔记" to { navigate("/notes?bookId=${Uri.encode(bookId)}") }))
+            }
+        }
+
+        fun select(index: Int) {
+            if (disposed || epoch != generation || recommendationPanel?.canLeave() == false) return
+            if (index != 3 && selected == 3) {
+                recommendationPanel?.close()
+                recommendationPanel = null
+                recommendationsStarted = false
+                recommendations.removeAllViews()
+            }
+            selected = index
+            panels.forEachIndexed { i, view -> view.visibility = if (i == index) View.VISIBLE else View.GONE }
+            tabButtons.forEachIndexed { i, view -> NativeUi.styleTab(view, i == index, foreground, background) }
+            if (index == 1) bookToc(bookId, toc) { selected == 1 && epoch == generation }
+            if (index == 2) recordPage(0)
+            if (index == 3 && !recommendationsStarted) {
+                recommendationsStarted = true
+                renderRecommendations(recommendations, "detail", bookId) { count ->
+                    tabButtons.getOrNull(3)?.apply {
+                        text = label("相关与拓展") + if (count == null) "" else " ($count)"
+                        contentDescription = text
+                    }
+                }
+            }
+        }
+        listOf("概览信息", "目录结构", "笔记与标注", "相关与拓展").forEachIndexed { index, title ->
+            val tab = button(title) { select(index) }
+            tabButtons.add(tab)
+            tabs.addView(tab)
+        }
+        body.addView(
+            android.widget.HorizontalScrollView(activity).apply {
+                isHorizontalScrollBarEnabled = false
+                addView(tabs)
+            },
+        )
+        body.addView(line())
+        panels.forEach { body.addView(it) }
         val details =
             listOf(
                 "格式" to book.optString("format"),
+                "作者" to book.optString("author"),
                 "出版社" to book.optString("publisher"),
-                "出版日期" to book.optString("publicationDate"),
-                "语言" to book.optString("language"),
-                "阅读状态" to (statuses[book.optString("effectiveReadingStatus")] ?: "未标记"),
+                "出版日期" to publicationDate(book.optString("publicationDate")),
+                "语言" to languageName(book.optString("language")),
+                "阅读状态" to label(statuses[book.optString("effectiveReadingStatus")] ?: "未标记"),
                 "阅读时长" to duration(book.optDouble("readingSeconds", 0.0)),
-                "阅读进度" to (if (book.isNull("progress")) "—" else "${(book.optDouble("progress") * 100).toInt()}%"),
                 "最近阅读" to dateTime(book.optLong("lastReadAt")),
                 "加入时间" to dateTime(book.optLong("addedAt")),
-                "文件状态" to book.optString("fileAvailability"),
+                "文件状态" to
+                    label(
+                        when (val value = book.optString("fileAvailability")) {
+                            "available" -> "可用"
+                            "missing" -> "文件丢失"
+                            "permission-denied" -> "需要权限"
+                            else -> value
+                        },
+                    ),
                 "来源" to book.optString("source"),
                 "文件名" to book.optString("fileName"),
                 "源相对路径" to (book.optJSONObject("sourceRef")?.optString("relativePath") ?: ""),
             )
-        details.filter { it.second.isNotEmpty() && it.second != "null" }.forEach {
-            body.addView(
-                text("${label(it.first)}：${it.second}", 15f),
+        val metadata = NativeMetadataGrid(activity)
+        val fileMetadata = NativeMetadataGrid(activity).apply { visibility = View.GONE }
+        val fileKeys = setOf("文件状态", "来源", "文件名", "源相对路径")
+        details.filter { it.second.isNotEmpty() && it.second != "null" }.forEach { (key, value) ->
+            (if (key in fileKeys) fileMetadata else metadata).addView(
+                text(label(key) + ": " + value, 14f).apply { setTextIsSelectable(true) },
             )
         }
+        overview.addView(metadata)
+        if (fileMetadata.childCount > 0) {
+            val toggle = button("文件信息") {}
+            toggle.setOnClickListener {
+                fileMetadata.visibility = if (fileMetadata.visibility == View.VISIBLE) View.GONE else View.VISIBLE
+                toggle.text = label(if (fileMetadata.visibility == View.VISIBLE) "收起文件信息" else "文件信息")
+                toggle.contentDescription = toggle.text
+            }
+            overview.addView(toggle)
+            overview.addView(fileMetadata)
+        }
+        val tags = book.optJSONArray("tags") ?: JSONArray()
+        overview.addView(
+            text(
+                label("标签") + ": " +
+                    if (tags.length() == 0) label("暂无标签") else (0 until tags.length()).joinToString(" · ") { tags.optString(it) },
+                14f,
+            ),
+        )
         val description = book.optString("description")
-        if (description.isNotEmpty() &&
-            description != "null"
-        ) {
-            body.addView(text(description))
-        }
-        val tags =
-            book.optJSONArray("tags") ?: JSONArray()
-        if (tags.length() >
-            0
-        ) {
-            body.addView(text("标签：${(0 until tags.length()).joinToString("、") { tags.optString(it) }}"))
-        }
-        if (book.has("classification") &&
-            !book.isNull("classification")
-        ) {
-            body.addView(text("分类", 19f, true))
-            val classification = book.getJSONObject("classification")
-            body.addView(text("主分类：" + (classification.optJSONObject("category")?.optString("value") ?: "未分类"), 15f))
+        overview.addView(text(label("简介"), 16f, true))
+        overview.addView(
+            text(
+                if (description.isNotEmpty() &&
+                    description != "null"
+                ) {
+                    description
+                } else {
+                    label("暂无简介，可按书目信息生成。")
+                },
+                14f,
+            ).apply { setTextIsSelectable(true) },
+        )
+        actions(overview, listOf("生成简介" to { openBookIntroduction(book) }))
+        val classification = book.optJSONObject("classification")
+        if (classification != null) {
+            overview.addView(text(label("分类"), 18f, true))
+            overview.addView(text(classification.optJSONObject("category")?.optString("value") ?: label("未分类"), 14f))
             val topics = classification.optJSONArray("topics") ?: JSONArray()
-            body.addView(text("主题：" + (0 until topics.length()).joinToString("、") { topics.getJSONObject(it).getString("value") }, 15f))
-            classification.optJSONObject("feature")?.let { body.addView(text("特征：" + it.getString("value"), 15f)) }
+            if (topics.length() >
+                0
+            ) {
+                overview.addView(
+                    text((0 until topics.length()).joinToString(" · ") { topics.getJSONObject(it).getString("value") }, 14f),
+                )
+            }
+            classification.optJSONObject("feature")?.let { overview.addView(text(it.optString("value"), 14f)) }
             classification.optJSONObject("facets")?.let { facets ->
-                body.addView(
+                overview.addView(
                     text(
                         facets
                             .keys()
@@ -1028,28 +1774,30 @@ internal class NativePagesController(
             }
         }
         actions(
-            body,
-            listOf(
-                "本书笔记" to { navigate("/notes?bookId=${Uri.encode(book.getString("id"))}") },
-                "重新关联文件" to { userAction("relinkBook", JSONObject().put("bookId", book.getString("id"))) },
-                "删除" to { removeBook(book) },
-            ),
+            overview,
+            listOf("编辑书目信息" to { editBook(book) }, "标签" to { editTags(book) }, "AI 分类" to { openClassification(bookId, true) }),
         )
-        body.addView(text("本书笔记", 20f, true))
-        call("library.annotations", JSONObject().put("bookId", book.getString("id")).put("offset", 0).put("limit", 10)) { notes ->
-            val items = notes.getJSONArray("items")
-            if (items.length() == 0) body.addView(text("没有笔记", 15f))
-            for (i in 0 until items.length()) noteRow(items.getJSONObject(i))
-        }
+        select(0)
+        recordPage(0)
     }
 
-    private fun bookToc(bookId: String) {
+    private fun bookToc(
+        bookId: String,
+        target: LinearLayout? = null,
+        isCurrent: () -> Boolean = { true },
+    ) {
         val epoch = generation
-        var intent = ++dialogIntent
+        var intent = if (target == null) ++dialogIntent else dialogIntent
+        val instance = Any()
+        target?.tag = instance
         var busy = false
         var context = ""
         var window: AlertDialog? = null
-        val form = column()
+        val form = target ?: column()
+        if (target != null) {
+            form.removeAllViews()
+            form.addView(text(label("正在加载…")))
+        }
 
         fun fetch(offset: Int) {
             if (busy) return
@@ -1059,13 +1807,21 @@ internal class NativePagesController(
             request("action.bookToc", payload) { result, error ->
                 activity.runOnUiThread {
                     busy = false
-                    if (disposed || epoch != generation || intent != dialogIntent ||
+                    if (disposed || epoch != generation || !isCurrent() ||
+                        (target != null && target.tag !== instance) ||
+                        (target == null && intent != dialogIntent) ||
                         (window != null && window?.isShowing != true)
                     ) {
                         return@runOnUiThread
                     }
                     if (error != null || result == null) {
-                        showError(error ?: "invalid_response")
+                        if (target == null) {
+                            showError(error ?: "invalid_response")
+                        } else {
+                            form.removeAllViews()
+                            form.addView(text(label("目录加载失败，请重试或返回阅读器。") + "\n" + (error ?: "invalid_response")))
+                            form.addView(button("重试") { fetch(offset) })
+                        }
                         return@runOnUiThread
                     }
                     form.removeAllViews()
@@ -1096,7 +1852,7 @@ internal class NativePagesController(
                         pager.addView(button("下页") { fetch(offset + 50) }.apply { isEnabled = offset + entries.length() < total })
                         form.addView(pager)
                     }
-                    if (window == null) {
+                    if (window == null && target == null) {
                         replaceDialog {
                             intent = dialogIntent
                             AlertDialog
@@ -1120,6 +1876,31 @@ internal class NativePagesController(
             }
         }
         fetch(0)
+    }
+
+    private fun openBookIntroduction(book: JSONObject) {
+        val owner = generation
+        val id = book.getString("id")
+        replaceDialog {
+            lateinit var editor: NativeBookIntroductionEditor
+            editor =
+                NativeBookIntroductionEditor(
+                    activity,
+                    book,
+                    foreground,
+                    background,
+                    preferences.optString("language") == "en",
+                    request,
+                    { !disposed && owner == generation && page == "book" && params.optString("id") == id && introductionEditor === editor },
+                    { if (!disposed && owner == generation && page == "book" && params.optString("id") == id) refresh() },
+                    { closedDialog ->
+                        if (introductionEditor === editor) introductionEditor = null
+                        if (currentDialog === closedDialog) currentDialog = null
+                    },
+                )
+            introductionEditor = editor
+            editor.show()
+        }
     }
 
     private fun editBook(book: JSONObject) {
@@ -1179,47 +1960,181 @@ internal class NativePagesController(
     }
 
     private fun notes() {
+        val bookId = params.optString("bookId")
+        if (bookId.isNotEmpty()) {
+            body.addView(
+                NativeUi.iconTextButton(activity, label("全部笔记"), "back", foreground, background) {
+                    navigate("/notes")
+                },
+            )
+        }
         showDrafts()
-        search(hint = "搜索选区原文、笔记或书名")
-        actions(
-            body,
-            listOf(
-                "筛选" to
-                    {
-                        choose(
-                            "笔记类型",
-                            listOf("全部", "想法", "标注", "书签"),
-                            listOf("all", "thoughts", "highlights", "bookmarks").indexOf(noteFilter),
-                        ) {
-                            noteFilter =
-                                listOf("all", "thoughts", "highlights", "bookmarks")[it]
-                            ; offset = 0
-                            refresh()
-                        }
-                    },
-            ),
+        val filterRow = LinearLayout(activity)
+        listOf("all" to "全部", "thoughts" to "想法", "highlights" to "标注", "bookmarks" to "书签").forEach { (id, title) ->
+            filterRow.addView(
+                button(title) {
+                    noteFilter = id
+                    offset = 0
+                    refresh()
+                }.apply {
+                    NativeUi.styleTab(
+                        this,
+                        noteFilter == id,
+                        this@NativePagesController.foreground,
+                        this@NativePagesController.background,
+                    )
+                },
+            )
+        }
+        body.addView(
+            android.widget.HorizontalScrollView(activity).apply {
+                isHorizontalScrollBarEnabled = false
+                addView(filterRow)
+            },
         )
+        search(hint = "搜索选区原文、想法或书名")
         val payload =
             JSONObject()
                 .put("query", query)
                 .put("filter", noteFilter)
                 .put("offset", offset)
                 .put("limit", PAGE_SIZE)
-        if (params.optString("bookId").isNotEmpty()) payload.put("bookId", params.getString("bookId"))
+        if (bookId.isNotEmpty()) payload.put("bookId", bookId)
         call("library.annotations", payload) { response ->
             val items = response.getJSONArray("items")
-            if (items.length() == 0) body.addView(text(label("没有匹配记录")))
-            for (i in 0 until items.length()) noteRow(items.getJSONObject(i))
-            pageControls(response.getInt("total"), items.length())
+            if (items.length() == 0) {
+                val unfiltered = query.isBlank() && noteFilter == "all"
+                body.addView(
+                    text(
+                        label(
+                            if (!unfiltered) {
+                                "没有匹配记录"
+                            } else if (bookId.isEmpty()) {
+                                "还没有笔记"
+                            } else {
+                                "本书还没有笔记"
+                            },
+                        ),
+                        18f,
+                        true,
+                    ),
+                )
+                if (unfiltered) {
+                    body.addView(text(label("在阅读器中选中文字，即可划线或写下想法。")))
+                    body.addView(button("前往藏书") { navigate("/library") })
+                }
+            }
+            if (bookId.isNotEmpty()) {
+                if (items.length() > 0) pageTitle?.text = items.getJSONObject(0).optString("bookTitle", label("全部笔记"))
+                for (i in 0 until items.length()) noteRow(items.getJSONObject(i))
+            } else {
+                // Native backend pages annotation records, not all books. Never present a page-local count as a global count.
+                if (items.length() > 0) body.addView(text(label("本页按书籍分组，点击查看该书全部记录"), 12f))
+                val groups = linkedMapOf<String, MutableList<JSONObject>>()
+                for (i in 0 until items.length()) {
+                    val note = items.getJSONObject(i)
+                    groups.getOrPut(note.optString("bookId")) { mutableListOf() }.add(note)
+                }
+                for ((id, records) in groups) {
+                    if (id.isEmpty()) {
+                        records.forEach(::noteRow)
+                        continue
+                    }
+                    val card = NativeUi.card(activity, background, 16)
+                    card.addView(text(records[0].optString("bookTitle", label("已移除的书籍")), 18f, true))
+                    val highlightCount = records.count { it.optString("kind") != "bookmark" }
+                    val thoughtCount = records.count { !it.isNull("note") && it.optString("note").isNotEmpty() }
+                    val bookmarkCount = records.count { it.optString("kind") == "bookmark" }
+                    card.addView(
+                        text(
+                            label("本页") + ": " + label("标注") + " $highlightCount · " + label("想法") + " $thoughtCount · " + label("书签") +
+                                " $bookmarkCount",
+                            13f,
+                        ),
+                    )
+                    card.addView(text(dateTime(records.maxOf { it.optLong("createdAt") }), 12f))
+                    val open = { navigate("/notes?bookId=${Uri.encode(id)}") }
+                    card.addView(NativeUi.iconTextButton(activity, label("查看记录"), "next", foreground, background, open))
+                    card.isFocusable = true
+                    card.contentDescription = records[0].optString("bookTitle") + ", " + label("查看记录")
+                    card.setOnClickListener { open() }
+                    body.addView(card)
+                }
+            }
+            body.addView(text(label("标注记录总数") + ": " + response.getInt("total"), 12f))
+            if (response.getInt("total") > PAGE_SIZE || offset > 0) pageControls(response.getInt("total"), items.length())
         }
     }
 
     private fun noteRow(note: JSONObject) {
-        val card = column().apply { setPadding(dp(4), dp(8), dp(4), dp(8)) }
-        card.addView(text(note.optString("bookTitle", "已移除的书籍"), 15f, true))
-        card.addView(text(note.optString("text"), 17f))
-        if (!note.isNull("note") && note.optString("note").isNotEmpty()) card.addView(text(note.getString("note"), 17f))
-        card.addView(text(dateTime(note.optLong("createdAt")), 12f))
+        val card =
+            column().apply {
+                setPadding(dp(16), dp(12), dp(16), dp(12))
+                background = NativeUi.shape(activity, this@NativePagesController.background)
+                layoutParams = LinearLayout.LayoutParams(-1, -2).apply { bottomMargin = dp(12) }
+            }
+        val header = LinearLayout(activity).apply { gravity = Gravity.CENTER_VERTICAL }
+        header.addView(
+            ImageView(activity).apply {
+                setImageDrawable(
+                    NativeUi.glyph(
+                        activity,
+                        if (note.optString("kind") ==
+                            "bookmark"
+                        ) {
+                            "bookmark"
+                        } else {
+                            "annotations"
+                        },
+                        this@NativePagesController.foreground,
+                    ),
+                )
+                ; importantForAccessibility =
+                    View.IMPORTANT_FOR_ACCESSIBILITY_NO
+            },
+            LinearLayout.LayoutParams(dp(20), dp(20)).apply { marginEnd = dp(8) },
+        )
+        header.addView(
+            text(
+                label(
+                    if (note.optString("kind") ==
+                        "bookmark"
+                    ) {
+                        "书签"
+                    } else {
+                        "标注"
+                    },
+                ),
+                13f,
+                true,
+            ),
+            LinearLayout.LayoutParams(0, -2, 1f),
+        )
+        header.addView(text(dateTime(note.optLong("createdAt")), 12f))
+        card.addView(header)
+        if (params.optString("bookId").isEmpty()) card.addView(text(note.optString("bookTitle", label("已移除的书籍")), 15f, true))
+        if (note.optString("text").isNotEmpty()) {
+            val quote = LinearLayout(activity).apply { setBackgroundColor(NativeUi.mutedSurface(this@NativePagesController.background)) }
+            quote.addView(
+                View(activity).apply { setBackgroundColor(this@NativePagesController.foreground) },
+                LinearLayout.LayoutParams(dp(3), -1),
+            )
+            quote.addView(
+                text("“${note.optString("text")}”", 15f).apply {
+                    setPadding(dp(12), dp(8), dp(8), dp(8))
+                    setTextIsSelectable(true)
+                },
+                LinearLayout.LayoutParams(0, -2, 1f),
+            )
+            card.addView(quote)
+        }
+        if (!note.isNull("note") &&
+            note.optString("note").isNotEmpty()
+        ) {
+            card.addView(text(label("想法") + ": " + note.getString("note"), 14f).apply { setTextIsSelectable(true) })
+        } else if (note.optString("kind") != "bookmark") {
+            card.addView(button("添加想法") { editNote(note) })
+        }
         actions(
             card,
             listOf(
@@ -1282,7 +2197,7 @@ internal class NativePagesController(
             val window = draftPager.window(drafts.length())
             val start = window.first
             val end = window.last + 1
-            body.addView(text("未保存的本机草稿：${start + 1}–$end / ${drafts.length()}", 19f, true))
+            body.addView(text("本机草稿：${start + 1}–$end / ${drafts.length()}", 19f, true))
             val pager = LinearLayout(activity)
             pager.addView(
                 button("上一页草稿") {
@@ -1311,7 +2226,7 @@ internal class NativePagesController(
                         "查看完整草稿" to {
                             val content = text(draft.getString("text"))
                             content.setTextIsSelectable(true)
-                            dialog("本机草稿（尚未提交批注）", ScrollView(activity).apply { addView(content) })
+                            dialog("本机草稿（保存状态需核对）", ScrollView(activity).apply { addView(content) })
                         },
                         "恢复编辑" to {
                             val contextId = draft.getString("contextId")
@@ -1322,26 +2237,30 @@ internal class NativePagesController(
                                 ) { editNote(it.getJSONObject("annotation")) }
                             } else {
                                 call("library.book", JSONObject().put("id", draft.getString("bookId"))) {
-                                    openReader(it.getJSONObject("book"), draft.optString("sourceLoc"))
+                                    val book = it.getJSONObject("book")
+                                    if (contextId.startsWith("sel:") &&
+                                        book.optString("format") != "pdf"
+                                    ) {
+                                        openReader(book, draftContextId = contextId)
+                                    } else {
+                                        openReader(book, draft.optString("sourceLoc"))
+                                    }
                                 }
                             }
                         },
                         "明确放弃此草稿" to {
                             confirm("删除", "只删除这一份本机草稿，不改动已保存的批注。") {
                                 val contextId = draft.getString("contextId")
-                                if (!contextId.startsWith("anno:")) {
+                                val payload = JSONObject().put("bookId", draft.getString("bookId"))
+                                if (contextId.startsWith("anno:")) {
+                                    payload.put("id", contextId.removePrefix("anno:"))
+                                } else if (contextId.startsWith("sel:")) {
+                                    payload.put("contextId", contextId)
+                                } else {
                                     showError("use_reader_for_this_draft")
                                     return@confirm
                                 }
-                                userAction(
-                                    "noteDraftDiscard",
-                                    JSONObject()
-                                        .put(
-                                            "bookId",
-                                            draft.getString("bookId"),
-                                        ).put("id", contextId.removePrefix("anno:"))
-                                        .put("confirmDiscard", true),
-                                )
+                                userAction("noteDraftDiscard", payload.put("confirmDiscard", true))
                             }
                         },
                     ),
@@ -1351,14 +2270,31 @@ internal class NativePagesController(
     }
 
     private fun statistics() {
-        val panel = NativeStatsPanel(activity, request, navigate, foreground, statisticsState, { DailyBars(it) }, repaint, ::showSettingsRecovery)
+        val panel =
+            NativeStatsPanel(
+                activity,
+                request,
+                navigate,
+                foreground,
+                statisticsState,
+                { DailyBars(it) },
+                repaint,
+                ::showSettingsRecovery,
+                initialEnglish =
+                    preferences.optString("language") == "en",
+            )
         statsPanel = panel
         body.addView(panel.render())
     }
 
     private fun showSettingsRecovery() {
         if (disposed || !mounted || overlay.visibility != View.VISIBLE) return
-        val panel = settingsPanel ?: NativeSettingsPanel(activity, request, preferences, foreground, background, { refresh() }, repaint).also { settingsPanel = it }
+        val panel =
+            settingsPanel
+                ?: NativeSettingsPanel(activity, request, preferences, foreground, background, { refresh() }, repaint).also {
+                    settingsPanel =
+                        it
+                }
         panel.showRecovery()
     }
 
@@ -1369,70 +2305,135 @@ internal class NativePagesController(
 
         override fun onDraw(canvas: Canvas) {
             super.onDraw(canvas)
-            if (values.isEmpty()) return
+            if (values.isEmpty() || width <= 0) return
             val max = values.maxOf { it.second }.coerceAtLeast(1.0)
-            val width =
-                width.toFloat() / values.size
-            val base = height - dp(30).toFloat()
+            val step = width.toFloat() / values.size
             paint.color = this@NativePagesController.foreground
-            paint.textSize = dp(10).toFloat()
+            paint.textSize = 14f * resources.displayMetrics.scaledDensity
+            val metrics = paint.fontMetrics
+            val base = height - (metrics.bottom - metrics.top) - dp(12)
+            val topInset = (metrics.bottom - metrics.top) + dp(12)
+            paint.textAlign = Paint.Align.LEFT
+            canvas.drawText(String.format(java.util.Locale.ROOT, "%.0f s", max), 0f, -metrics.top, paint)
+            val labelWidth = values.maxOf { paint.measureText(it.first) }
+            val stride =
+                kotlin.math
+                    .ceil((labelWidth + dp(12)) / step)
+                    .toInt()
+                    .coerceAtLeast(1)
             paint.textAlign = Paint.Align.CENTER
             values.forEachIndexed { i, value ->
-                val left =
-                    i * width + dp(3)
-                val right =
-                    (i + 1) * width - dp(3)
-                val top = base - (base - dp(15)) * (value.second / max).toFloat()
+                val left = i * step + dp(3)
+                val right = (i + 1) * step - dp(3)
+                val top = base - (base - topInset).coerceAtLeast(0f) * (value.second / max).toFloat()
                 canvas.drawRect(left, top, right.coerceAtLeast(left + 1), base, paint)
-                if (values.size <= 7 || i % 2 == 0) canvas.drawText(value.first, (left + right) / 2, height - dp(10).toFloat(), paint)
+                if (i % stride == 0) canvas.drawText(value.first, (left + right) / 2, height - metrics.bottom, paint)
             }
         }
     }
 
+    private fun clearSectionScrollListener() {
+        sectionScrollListener?.let { if (scroll.viewTreeObserver.isAlive) scroll.viewTreeObserver.removeOnScrollChangedListener(it) }
+        sectionScrollListener = null
+    }
+
     private fun settings() {
-        body.addView(text("设置由 Android 原生存储统一管理；旧副本仅供迁移前恢复，不再双写。", 14f))
-        body.addView(text("监控文件夹", 20f, true))
-        actions(
-            body,
-            listOf(
-                "选择/重新授权" to { userAction("selectFolder") },
-                "重新扫描" to { userAction("recheckFolder") },
-                "检查任务" to { userAction("fileJobStatus") },
-            ),
+        val folder = column()
+        folder.addView(text("选择或重新授权后扫描；原文件任务入口保留真实进度和错误。", 13f))
+        val folderActions = NativeActionFlow(activity)
+        folderActions.addView(
+            NativeUi.iconTextButton(activity, label("选择/重新授权"), "folder", foreground, background) { userAction("selectFolder") },
         )
-        val panel = NativeSettingsPanel(activity, request, preferences, foreground, background, { refresh() }, repaint)
-        settingsPanel = panel
-        body.addView(panel.render())
-        body.addView(text("数据", 21f, true))
-        body.addView(text("书库位置：${preferences.optString("libraryRoot").ifEmpty { "应用私有目录" }}", 14f))
+        folderActions.addView(
+            NativeUi.iconTextButton(activity, label("重新扫描"), "refresh", foreground, background) { userAction("recheckFolder") },
+        )
+        folderActions.addView(button("检查任务") { userAction("fileJobStatus") })
+        folder.addView(folderActions)
+        val data = column()
+        data.addView(text(label("书库位置") + ": " + preferences.optString("libraryRoot").ifEmpty { label("应用私有目录") }, 14f))
         actions(
-            body,
+            data,
             listOf(
                 "导出书库备份" to { userAction("backupExport") },
                 "导入书库备份" to { confirm("导入书库备份", "先选择备份；预览只显示文件大小。确认导入后再由恢复服务校验并合并数据。") { userAction("backupImport") } },
             ),
         )
-        body.addView(text("关于", 21f, true))
-        body.addView(text("Pagewise · Android 原生管理界面", 16f))
-        actions(body, listOf("使用手册" to { navigate("/manual") }))
+        val about = column()
+        about.addView(text("Pagewise · Android", 16f, true))
+        about.addView(text("设置由 Android 原生存储统一管理；旧副本仅供迁移前恢复，不再双写。", 13f))
+        actions(about, listOf("使用手册" to { navigate("/manual") }))
+
+        val panel = NativeSettingsPanel(activity, request, preferences, foreground, background, { refresh() }, repaint)
+        settingsPanel = panel
+        val requested = settingsUiState.requested
+        settingsUiState.requested = null
+        body.addView(panel.renderPage(mapOf("folder" to folder, "data" to data, "about" to about), requested, settingsUiState))
     }
 
     private fun manual() {
-        actions(
-            body,
-            manualFiles.map { file ->
-                (if (file == "README.md") "目录" else file.removeSuffix(".md").substringAfter('-')) to
-                    {
-                        manual = file
-                        manualAnchor = ""
-                        refresh()
+        body.addView(text("离线手册。历史实验功能以当前应用实际可用入口为准。", 12f))
+        val pane = NativeReferencePane(activity)
+        val rail = column()
+        val article = NativeUi.card(activity, background, 20)
+        val names = manualFiles.map { file -> if (file == "README.md") label("目录") else file.removeSuffix(".md").substringAfter('-') }
+
+        fun select(index: Int) {
+            if (index !in manualFiles.indices || manualFiles[index] == manual) return
+            manual = manualFiles[index]
+            manualAnchor = ""
+            refresh()
+        }
+        names.forEachIndexed { index, title ->
+            rail.addView(
+                button(title) { select(index) }.apply {
+                    gravity = Gravity.START or Gravity.CENTER_VERTICAL
+                    NativeUi.styleTab(
+                        this,
+                        manualFiles[index] == manual,
+                        this@NativePagesController.foreground,
+                        this@NativePagesController.background,
+                    )
+                },
+            )
+        }
+        val selector =
+            android.widget.Spinner(activity).apply {
+                contentDescription = label("选择章节")
+                adapter =
+                    object : android.widget.ArrayAdapter<String>(activity, android.R.layout.simple_spinner_dropdown_item, names) {
+                        override fun getView(
+                            position: Int,
+                            convertView: View?,
+                            parent: ViewGroup,
+                        ): View =
+                            (super.getView(position, convertView, parent) as TextView).apply {
+                                setTextColor(this@NativePagesController.foreground)
+                                minHeight =
+                                    dp(48)
+                            }
                     }
-            },
-        )
-        body.addView(text("离线手册。历史实验功能以当前应用实际可用入口为准。", 13f))
+                setSelection(manualFiles.indexOf(manual).coerceAtLeast(0))
+                onItemSelectedListener =
+                    object : android.widget.AdapterView.OnItemSelectedListener {
+                        override fun onNothingSelected(parent: android.widget.AdapterView<*>?) = Unit
+
+                        override fun onItemSelected(
+                            parent: android.widget.AdapterView<*>?,
+                            view: View?,
+                            position: Int,
+                            id: Long,
+                        ) {
+                            select(position)
+                        }
+                    }
+            }
+        pane.addView(rail)
+        pane.addView(selector)
+        pane.addView(article)
+        body.addView(pane)
         call("manual.get", JSONObject().put("file", manual)) { result ->
             val renderer = NativeManualRenderer(activity, foreground, background) { href -> manualLink(href) }
-            body.addView(renderer.render(result.getString("markdown")))
+            article.addView(renderer.render(result.getString("markdown")))
             if (manualAnchor.isNotEmpty()) renderer.scrollToAnchor(scroll, manualAnchor)
         }
     }
@@ -1468,6 +2469,20 @@ internal class NativePagesController(
                 showError("browser_unavailable")
             }
         }
+    }
+
+    private fun publicationDate(value: String): String {
+        val raw = value.trim().takeUnless { it == "null" } ?: return ""
+        return if (Regex("^[0-9]{4}-[0-9]{2}-[0-9]{2}T").containsMatchIn(raw)) raw.take(10) else raw
+    }
+
+    private fun languageName(value: String): String {
+        if (value.isEmpty() || value == "null") return ""
+        val locale = if (preferences.optString("language") == "en") java.util.Locale.ENGLISH else java.util.Locale.CHINESE
+        return java.util.Locale
+            .forLanguageTag(value)
+            .getDisplayName(locale)
+            .ifEmpty { value }
     }
 
     private fun duration(seconds: Double): String {

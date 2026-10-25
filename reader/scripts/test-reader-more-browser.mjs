@@ -5,12 +5,15 @@ import { mkdir } from 'node:fs/promises'
 import { createServer } from './vite-isolated.mjs'
 import { chromium } from 'playwright'
 
-const artifacts = resolve(import.meta.dirname, '../../.cache/typography-visual-20261018-r3/reader-more-regression')
+const artifacts = resolve(import.meta.dirname, '../../.cache/ui-ux-20261022/reader-more-regression')
 let server, browser, origin
 before(async () => {
   await mkdir(artifacts, { recursive: true })
   server = await createServer({ root: resolve(import.meta.dirname, '..'), server: { host: '127.0.0.1', port: 0 }, logLevel: 'error' })
   await server.listen()
+  // Dev-module transformation is not the reader's runtime readiness contract.
+  await server.warmupRequest('/src/views/ReaderView.vue')
+  await server.waitForRequestsIdle()
   origin = `http://127.0.0.1:${server.httpServer.address().port}`
   browser = await chromium.launch({ executablePath: 'C:/Program Files (x86)/Microsoft/Edge/Application/msedge.exe', headless: true })
 })
@@ -35,7 +38,8 @@ async function withReader(run, width = 992, language = 'en') {
   const page = await context.newPage()
   page.on('pageerror', error => errors.push(error.message))
   try {
-    await page.goto(origin + '/#/library', { waitUntil: 'networkidle' })
+    await page.goto(origin + '/#/library', { waitUntil: 'domcontentloaded' })
+    await page.waitForFunction(() => !!document.querySelector('#app')?.__vue_app__, undefined, { timeout: 20000 })
     const id = await page.evaluate(async language => {
       const { useSettings } = await import('/src/stores/settings.ts')
       const s = useSettings()
@@ -52,6 +56,13 @@ async function withReader(run, width = 992, language = 'en') {
       return v && !v.loading && v.view?.renderer?.scrolled && v.view?.lastLocation?.cfi
     }, undefined, { timeout: 20000 })
     await run(page, id)
+  } catch (error) {
+    await page.screenshot({ path: resolve(artifacts, `failure-${width}.png`) })
+    console.log(JSON.stringify(await page.evaluate(() => {
+      const v = document.querySelector('.reader')?.__vueParentComponent?.setupState
+      return { path: location.hash, loading: v?.loading, ready: !!v?.view?.lastLocation?.cfi, text: document.body.innerText.slice(0, 600) }
+    })))
+    throw error
   } finally {
     await context.close()
     console.log(JSON.stringify({ productionVue: true, width, externalOrigins: external, pageErrors: errors }))
@@ -59,6 +70,200 @@ async function withReader(run, width = 992, language = 'en') {
     assert.deepEqual(errors, [])
   }
 }
+
+async function selectFixtureText(page) {
+  return page.evaluate(() => {
+    const v = document.querySelector('.reader').__vueParentComponent.setupState
+    const section = v.view.renderer.getContents().find(s => s.doc?.body?.querySelector('p'))
+    if (!section) throw new Error('Missing rendered synthetic paragraph')
+    const doc = section.doc
+    const node = doc.createTreeWalker(doc.querySelector('p'), NodeFilter.SHOW_TEXT).nextNode()
+    if (!node) throw new Error('Missing rendered synthetic text node')
+    const range = doc.createRange(); range.setStart(node, 0); range.setEnd(node, Math.min(node.length, 45))
+    const selected = doc.getSelection(); selected.removeAllRanges(); selected.addRange(range)
+    doc.dispatchEvent(new Event('selectionchange'))
+    return { quote: range.toString(), write: v.t('reader.writeNote'), close: v.t('reader.closeIdeaEditor'), save: v.t('reader.saveNote') }
+  })
+}
+
+for (const width of [992, 390]) test(`PW-02/PW-03 actual reader ${width}px: draft close/reopen/save and accessible targets`, { timeout: 45000 }, async () => {
+  await withReader(async (page, id) => {
+    const selected = await selectFixtureText(page)
+    await page.locator('.highlight-bar').waitFor()
+    const targets = await page.locator('.highlight-bar button').evaluateAll(buttons => buttons.map(b => ({ text: b.textContent, width: Math.round(b.getBoundingClientRect().width * 1000) / 1000, height: Math.round(b.getBoundingClientRect().height * 1000) / 1000 })))
+    assert.ok(targets.length >= 6)
+    assert.ok(targets.every(r => r.width >= 48 && r.height >= 48), JSON.stringify(targets))
+    await page.locator('.highlight-bar').getByRole('button', { name: selected.write, exact: true }).click()
+    const count = () => page.evaluate(async id => (await (await import('/src/storage/index.ts')).getStorage()).listAnnotations(id).then(rows => rows.length), id)
+    assert.equal(await count(), 0, 'opening an idea editor cannot commit a highlight')
+    await page.locator('.annotation-pop .note-input').fill('SYNTHETIC RECOVERABLE IDEA')
+    await page.locator('.annotation-pop').getByRole('button', { name: selected.close, exact: true }).click()
+    await page.locator('.annotation-pop').waitFor({ state: 'hidden' })
+    assert.equal(await count(), 0, 'closing a draft must not commit an annotation')
+    await selectFixtureText(page)
+    await page.locator('.highlight-bar').getByRole('button', { name: selected.write, exact: true }).click()
+    assert.equal(await page.locator('.annotation-pop .note-input').inputValue(), 'SYNTHETIC RECOVERABLE IDEA')
+    await page.locator('.annotation-pop').getByRole('button', { name: selected.close, exact: true }).click()
+    const draftContextId = await page.evaluate(async id => (await import('/src/services/noteDrafts.ts')).listDrafts(id)[0]?.contextId, id)
+    assert.ok(draftContextId?.startsWith('sel:'))
+    await page.goto(`${origin}/#/library`)
+    await page.locator('.reader').waitFor({ state: 'hidden' })
+    await page.goto(`${origin}/#/read/${id}?draft=${encodeURIComponent(draftContextId)}`)
+    await page.locator('.annotation-pop .note-input').waitFor()
+    assert.equal(await page.locator('.annotation-pop .note-input').inputValue(), 'SYNTHETIC RECOVERABLE IDEA', 'cross-page recovery must not require selecting the quote again')
+    await page.locator('.annotation-pop').getByRole('button', { name: selected.save, exact: true }).click()
+    await page.locator('.annotation-pop').waitFor({ state: 'hidden' })
+    const records = await page.evaluate(async id => (await (await import('/src/storage/index.ts')).getStorage()).listAnnotations(id), id)
+    assert.equal(records.length, 1)
+    assert.equal(records[0].note, 'SYNTHETIC RECOVERABLE IDEA')
+    assert.equal(records[0].text, selected.quote)
+    await page.screenshot({ path: resolve(artifacts, `pw02-saved-${width}.png`) })
+  }, width)
+})
+
+for (const width of [992, 390]) test(`PW-02 actual reader ${width}px: acknowledged write plus cleanup failure recovers without duplication`, { timeout: 45000 }, async () => {
+  await withReader(async (page, id) => {
+    const selected = await selectFixtureText(page)
+    await page.locator('.highlight-bar').getByRole('button', { name: selected.write, exact: true }).click()
+    await page.locator('.annotation-pop .note-input').fill('SYNTHETIC CLEANUP FAILURE')
+    await page.evaluate(() => {
+      const original = Storage.prototype.removeItem
+      Storage.prototype.removeItem = function (key) {
+        if (String(key).startsWith('pagewise:note-draft:v1:')) throw new DOMException('Synthetic cleanup failure', 'SecurityError')
+        return original.call(this, key)
+      }
+      window.__pwRestoreDraftStorage = () => { Storage.prototype.removeItem = original; delete window.__pwRestoreDraftStorage }
+    })
+    try {
+      await page.locator('.annotation-pop').getByRole('button', { name: selected.save, exact: true }).click()
+      await page.locator('.annotation-pop [role="alert"]').waitFor()
+      const committed = await page.evaluate(async id => (await (await import('/src/storage/index.ts')).getStorage()).listAnnotations(id), id)
+      assert.equal(committed.length, 1)
+      assert.equal(await page.locator('.annotation-pop .note-input').inputValue(), 'SYNTHETIC CLEANUP FAILURE')
+      await page.locator('.annotation-pop').getByRole('button', { name: selected.close, exact: true }).click()
+      const contextId = await page.evaluate(async id => (await import('/src/services/noteDrafts.ts')).listDrafts(id)[0].contextId, id)
+      await page.evaluate(() => window.__pwRestoreDraftStorage())
+      await page.goto(`${origin}/#/library`)
+      await page.locator('.reader').waitFor({ state: 'hidden' })
+      await page.goto(`${origin}/#/read/${id}?draft=${encodeURIComponent(contextId)}`)
+      await page.locator('.annotation-pop .note-input').waitFor()
+      await page.locator('.annotation-pop [role="status"]').waitFor()
+      await page.locator('.annotation-pop .note-input').fill('SYNTHETIC UPDATED EXISTING IDEA')
+      await page.locator('.annotation-pop').getByRole('button', { name: selected.save, exact: true }).click()
+      await page.locator('.annotation-pop').waitFor({ state: 'hidden' })
+      const after = await page.evaluate(async id => ({
+        records: await (await (await import('/src/storage/index.ts')).getStorage()).listAnnotations(id),
+        drafts: (await import('/src/services/noteDrafts.ts')).listDrafts(id),
+      }), id)
+      assert.equal(after.records.length, 1)
+      assert.equal(after.records[0].id, committed[0].id)
+      assert.equal(after.records[0].note, 'SYNTHETIC UPDATED EXISTING IDEA')
+      assert.equal(after.drafts.length, 0)
+      await page.screenshot({ path: resolve(artifacts, `pw02-cleanup-recovered-${width}.png`) })
+    } finally { await page.evaluate(() => window.__pwRestoreDraftStorage?.()) }
+  }, width)
+})
+
+test('PW-02 actual reader: unconfirmed save receipt keeps input and offers scoped inspection', { timeout: 45000 }, async () => {
+  await withReader(async (page, id) => {
+    const selected = await selectFixtureText(page)
+    await page.locator('.highlight-bar').getByRole('button', { name: selected.write, exact: true }).click()
+    await page.locator('.annotation-pop .note-input').fill('SYNTHETIC LOST RECEIPT')
+    const installed = await page.evaluate(async () => {
+      const storage = await (await import('/src/storage/index.ts')).getStorage()
+      const original = storage.addAnnotation
+      const intercepted = async function (record) {
+        await original.call(this, record)
+        storage.addAnnotation = original
+        throw new Error('SYNTHETIC LOST WRITE RECEIPT')
+      }
+      storage.addAnnotation = intercepted
+      window.__pwRestoreAnnotationWrite = () => { storage.addAnnotation = original; delete window.__pwRestoreAnnotationWrite }
+      return storage.addAnnotation === intercepted
+    })
+    assert.equal(installed, true)
+    try {
+      await page.locator('.annotation-pop').getByRole('button', { name: selected.save, exact: true }).click()
+      await page.locator('.annotation-pop [role="alert"]').waitFor()
+      await page.evaluate(() => { const v = document.querySelector('.reader').__vueParentComponent.setupState; v.captureNoteDraft(); v.noteDraftSaver?.flush() })
+      assert.match(await page.locator('.annotation-pop [role="alert"]').innerText(), /save result is unconfirmed/)
+      await page.locator('.annotation-pop').getByRole('button', { name: 'Check saved notes', exact: true }).waitFor()
+      assert.equal(await page.locator('.annotation-pop .note-input').inputValue(), 'SYNTHETIC LOST RECEIPT')
+      assert.equal(await page.locator('.annotation-pop').evaluate(el => el.scrollWidth <= el.clientWidth + 1), true)
+      const records = await page.evaluate(async id => (await (await import('/src/storage/index.ts')).getStorage()).listAnnotations(id), id)
+      assert.equal(records.length, 1)
+      await page.screenshot({ path: resolve(artifacts, 'pw02-unconfirmed-390.png') })
+      await page.locator('.annotation-pop .note-input').fill('SYNTHETIC EXPLICIT RETRY')
+      await page.locator('.annotation-pop').getByRole('button', { name: selected.save, exact: true }).click()
+      await page.locator('.annotation-pop').waitFor({ state: 'hidden' })
+      const after = await page.evaluate(async id => (await (await import('/src/storage/index.ts')).getStorage()).listAnnotations(id), id)
+      assert.equal(after.length, 1)
+      assert.equal(after[0].id, records[0].id)
+      assert.equal(after[0].note, 'SYNTHETIC EXPLICIT RETRY')
+      assert.equal('draftContextId' in after[0], false)
+    } finally { await page.evaluate(() => window.__pwRestoreAnnotationWrite?.()) }
+  }, 390)
+})
+
+test('PW-02/R4 actual reader: foreign corrupt drafts are isolated and current corruption remains visible', { timeout: 45000 }, async () => {
+  await withReader(async (page, id) => {
+    const selected = await selectFixtureText(page)
+    const foreignKey = await page.evaluate(async () => {
+      const { buildDraftKey } = await import('/src/services/noteDrafts.ts')
+      const key = buildDraftKey('FOREIGN_SYNTHETIC_BOOK', 'sel:broken')
+      localStorage.setItem(key, '{BROKEN FOREIGN SYNTHETIC JSON')
+      return key
+    })
+    const write = () => page.locator('.highlight-bar').getByRole('button', { name: selected.write, exact: true }).click()
+    await write()
+    await page.locator('.annotation-pop .note-input').waitFor()
+    await page.locator('.annotation-pop .note-input').fill('SYNTHETIC VALID CURRENT DRAFT')
+    await page.locator('.annotation-pop').getByRole('button', { name: selected.close, exact: true }).click()
+    const contextId = await page.evaluate(async id => (await import('/src/services/noteDrafts.ts')).listDrafts(id)[0].contextId, id)
+    await selectFixtureText(page)
+    const brokenKey = await page.evaluate(async id => {
+      const { buildDraftKey } = await import('/src/services/noteDrafts.ts')
+      const key = buildDraftKey(id, 'sel:broken-current')
+      localStorage.setItem(key, '{BROKEN CURRENT SYNTHETIC JSON')
+      return key
+    }, id)
+    await write()
+    await page.locator('.highlight-bar [role="alert"]').waitFor()
+    assert.match(await page.locator('.highlight-bar [role="alert"]').innerText(), /草稿暂不可用/)
+    assert.equal(await page.locator('.annotation-pop').count(), 0)
+    const retained = await page.evaluate(async ({ id, contextId, foreignKey, brokenKey }) => ({
+      draft: (await import('/src/services/noteDrafts.ts')).loadNoteDraft({ bookId: id, contextId }),
+      records: await (await (await import('/src/storage/index.ts')).getStorage()).listAnnotations(id),
+      foreign: localStorage.getItem(foreignKey), broken: localStorage.getItem(brokenKey),
+    }), { id, contextId, foreignKey, brokenKey })
+    assert.equal(retained.draft.success, true)
+    assert.equal(retained.draft.draft.text, 'SYNTHETIC VALID CURRENT DRAFT')
+    assert.equal(retained.records.length, 0)
+    assert.equal(retained.foreign, '{BROKEN FOREIGN SYNTHETIC JSON')
+    assert.equal(retained.broken, '{BROKEN CURRENT SYNTHETIC JSON')
+    await page.screenshot({ path: resolve(artifacts, 'pw02-enumeration-error-390.png') })
+    await page.evaluate(key => localStorage.removeItem(key), brokenKey)
+    await write()
+    assert.equal(await page.locator('.annotation-pop .note-input').inputValue(), 'SYNTHETIC VALID CURRENT DRAFT')
+    await page.locator('.annotation-pop').getByRole('button', { name: selected.save, exact: true }).click()
+    await page.locator('.annotation-pop').waitFor({ state: 'hidden' })
+    assert.equal(await page.evaluate(async id => (await (await import('/src/storage/index.ts')).getStorage()).listAnnotations(id).then(records => records.length), id), 1)
+    assert.equal(await page.evaluate(key => localStorage.getItem(key), foreignKey), '{BROKEN FOREIGN SYNTHETIC JSON')
+  }, 390, 'zh')
+})
+
+for (const width of [992, 390]) test(`PW-03/PW-10 actual typography ${width}px: labels above controls and 48px touch targets`, { timeout: 45000 }, async () => {
+  await withReader(async page => {
+    const title = await page.evaluate(() => { const v = document.querySelector('.reader').__vueParentComponent.setupState; v.showBars(); return v.t('reader.typography') })
+    await page.getByTitle(title, { exact: true }).click()
+    await page.locator('.settings-pop').waitFor()
+    const rects = await page.locator('.settings-pop button, .settings-pop select').evaluateAll(nodes => nodes.map(n => { const r = n.getBoundingClientRect(); return { text: n.textContent?.slice(0, 30), width: Math.round(r.width * 1000) / 1000, height: Math.round(r.height * 1000) / 1000 } }).filter(r => r.width && r.height))
+    assert.ok(rects.every(r => r.width >= 48 && r.height >= 48), JSON.stringify(rects))
+    const labels = await page.locator('.set-row').evaluateAll(rows => rows.map(row => { const label = row.querySelector('.tp-label'), control = row.querySelector('input,button,select'); return label && control && label.getBoundingClientRect().height && control.getBoundingClientRect().height ? label.getBoundingClientRect().bottom <= control.getBoundingClientRect().top + 1 : true }))
+    assert.ok(labels.every(Boolean))
+    await page.screenshot({ path: resolve(artifacts, `pw10-typography-${width}.png`) })
+  }, width)
+})
 
 for (const width of [992, 390]) test(`actual reader ${width}px: More replaces panels, Escape/native Back dismiss, CFI preserved`, { timeout: 45000 }, async () => {
   await withReader(async page => {

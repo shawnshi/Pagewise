@@ -19,6 +19,7 @@ test('actual production action factories exactly match native allowlist and sati
   const required = new Set([...host.slice(host.indexOf('private val REQUIRED_ACTIONS')).matchAll(/"([A-Za-z][A-Za-z0-9]*)"/g)].map(m => m[1]))
   assert.deepEqual(new Set(Object.keys(actions)), allowed)
   for (const name of required) assert.equal(typeof actions[name], 'function', name)
+  for (const name of ['bookIntroductionGenerate', 'bookIntroductionSave', 'bookIntroductionCancel', 'recommendationsGet', 'recommendationsAi', 'recommendationsCancel', 'recommendationsFeedback', 'recommendationsClearFeedback', 'recommendationsWanted']) assert.equal(required.has(name), true, name + ' must participate in readiness')
 })
 test('native panels are Android Views and use protected shared actions rather than alternate data stores or web wrappers', () => {
   for (const file of ['NativeLibraryPanel.kt', 'NativeStatsPanel.kt', 'NativeSettingsPanel.kt', 'NativeNoteEditor.kt']) {

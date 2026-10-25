@@ -34,9 +34,9 @@ internal class NativeLibraryRepository(
             if (!directory.isDirectory) fail("library_root_unavailable")
             val file = File(directory, "lightread.db")
             if (!file.isFile) fail("library_database_missing")
-            opened = SQLiteDatabase.openDatabase(file.path, null, SQLiteDatabase.OPEN_READWRITE or SQLiteDatabase.NO_LOCALIZED_COLLATORS)
+            opened = CanonicalDatabase.open(file)
             database = opened
-            database.execSQL("PRAGMA busy_timeout=5000")
+            rows("PRAGMA busy_timeout=5000")
             for ((table, fields) in SCHEMA) {
                 val info = rows("PRAGMA table_info($table)")
                 if (!info.map { it["name"] }.containsAll(fields)) fail("library_schema_mismatch")
@@ -63,6 +63,9 @@ internal class NativeLibraryRepository(
             }
             val expected = (if (configured.isEmpty()) context.dataDir else File(configured)).canonicalFile
             if (expected != directory) fail("library_root_conflict")
+        } catch (error: CanonicalDatabaseFailure) {
+            opened?.close()
+            throw error
         } catch (error: NativeStateFailure) {
             opened?.close()
             throw error

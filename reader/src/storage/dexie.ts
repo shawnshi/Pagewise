@@ -1,12 +1,14 @@
 /** Web 端存储实现: IndexedDB (Dexie), 书籍与封面以 Blob 存库 */
 import Dexie, { type Table } from 'dexie'
 import type {
-  AnnotationRec, BookClassificationUpdate, LegacyBookTagsUpdate, BooklistRec, BooklistWantedRec, BookMeta, CatalogSourceRec, LibraryStorage, NewBookMeta,
+  AnnotationRec, BookClassificationUpdate, BookDescriptionSnapshot, BookReadingStatusSnapshot, ReadingStatus, LegacyBookTagsUpdate, BooklistRec, BooklistWantedRec, BookMeta, CatalogSourceRec, LibraryStorage, NewBookMeta,
 } from './types'
 import { BUILTIN_SOURCES, newId } from './types'
 import { isReadingStatus, normalizeReadingStatus } from '../services/readingStatus'
 import { readReferencedFile, validateSourceRef, validateAvailability } from './sourceFile'
 import { classificationMetadataMatches, prepareClassificationUpdates, rejectClassificationPatch, validatedBookClassification } from '../services/bookTagActions'
+import { RecommendationError, RecommendationStatusConflictError, recommendationStatusMatches, validateRecommendationStatusUpdate } from '../services/bookRecommendations.ts'
+import { bookDescriptionMatches, BookDescriptionConflictError, validateBookDescriptionUpdate } from '../services/bookDescription.ts'
 
 interface BookRow extends BookMeta {
   /** Safari 的 IndexedDB 存 Blob 会报错, 统一存 ArrayBuffer */
@@ -87,6 +89,18 @@ export class DexieStorage implements LibraryStorage {
     return rows.map(stripBlobs)
   }
 
+  async listRecommendationBooks(): Promise<BookMeta[]> {
+    const books:BookMeta[]=[]
+    // This existing Web store co-locates buffers with metadata. Cursor iteration
+    // releases each buffer instead of retaining the entire library's file bytes.
+    await this.db.books.limit(10_001).each(row=>{
+      const book=stripBlobs(row)
+      books.push({...book,description:book.description?.slice(0,2048),location:undefined,sourceRef:undefined})
+    })
+    if(books.length>10_000)throw new RecommendationError('library_limit')
+    return books
+  }
+
   async getBook(id: string) {
     const row = await this.db.books.get(id)
     return row ? stripBlobs(row) : undefined
@@ -128,6 +142,24 @@ export class DexieStorage implements LibraryStorage {
       const total = Math.max(0, Math.round((book.readingSeconds ?? 0) + delta))
       await this.db.books.update(id, { readingSeconds: total })
       return total
+    })
+  }
+
+  async updateBookDescription(id: string, expected: BookDescriptionSnapshot, description: string): Promise<void> {
+    validateBookDescriptionUpdate(id, expected, description)
+    await this.db.transaction('rw', this.db.books, async () => {
+      const current = await this.db.books.get(id)
+      if (!current || !bookDescriptionMatches(current, expected)) throw new BookDescriptionConflictError()
+      await this.db.books.update(id, { description })
+    })
+  }
+
+  async updateBookReadingStatus(id:string,expected:BookReadingStatusSnapshot,status:ReadingStatus):Promise<void> {
+    validateRecommendationStatusUpdate(id,expected,status)
+    await this.db.transaction('rw',this.db.books,async()=>{
+      const current=await this.db.books.get(id)
+      if(!current||!recommendationStatusMatches(current,expected))throw new RecommendationStatusConflictError()
+      await this.db.books.update(id,{readingStatus:status})
     })
   }
 

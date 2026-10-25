@@ -87,22 +87,26 @@ h2 {
 .days {
   list-style: none;
   display: grid;
-  grid-template-columns: repeat(7, minmax(0, 1fr));
-  gap: 2px;
+  grid-template-columns: repeat(auto-fit, minmax(56px, 1fr));
+  gap: 8px;
 }
 .day {
   width: 100%;
+  min-width: 48px;
+  min-height: 56px;
   display: flex;
   flex-direction: column;
   align-items: center;
-  gap: 6px;
-  padding: 6px 0 8px;
-  border: 0;
-  border-radius: var(--radius);
-  background: transparent;
-  color: var(--text-3);
+  justify-content: center;
+  gap: 4px;
+  padding: 4px 0;
+  border: 1px solid var(--border, #555555);
+  border-radius: 2px;
+  background: var(--bg, #FFFFFF);
+  color: var(--text, #000000);
   font: inherit;
-  transition: background var(--dur-fast) var(--ease);
+  cursor: pointer;
+  box-sizing: border-box;
 }
 @media (hover: hover) {
   .day:not(:disabled):hover {

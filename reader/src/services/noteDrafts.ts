@@ -95,6 +95,14 @@ function getDefaultStorage(): DraftStorageAdapter {
   return window.localStorage
 }
 
+/** Stable, book-scoped identity for a selection draft; v1 payloads and existing annotation IDs stay unchanged. */
+export async function annotationIdForDraft(ctx: Pick<NoteDraftContext, 'bookId' | 'contextId'>): Promise<string> {
+  if (!ctx.bookId || !ctx.contextId.startsWith('sel:')) throw new Error('Invalid selection draft context')
+  const bytes = new TextEncoder().encode(JSON.stringify([ctx.bookId, ctx.contextId]))
+  const digest = await crypto.subtle.digest('SHA-256', bytes)
+  return `draft-note:${Array.from(new Uint8Array(digest), byte => byte.toString(16).padStart(2, '0')).join('')}`
+}
+
 export function buildDraftKey(bookId: string, contextId: string): string {
   return `${DRAFT_KEY_PREFIX}${encodeURIComponent(bookId)}::${encodeURIComponent(contextId)}`
 }
@@ -345,6 +353,8 @@ export function listDrafts(bookId?: string, env?: DraftEnv): NoteDraft[] {
   const results: NoteDraft[] = []
 
   for (const k of keys) {
+    const owner = parseDraftKey(k)
+    if (bookId && owner && owner.bookId !== bookId) continue
     const raw = storage.getItem(k)
     if (!raw) continue
     try {

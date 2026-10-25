@@ -286,6 +286,13 @@ class MonitoredFolderPlugin(
         }
     }
 
+    private fun releaseSelection(invoke: Invoke) = synchronized(admission) {
+        if (pendingPicker === invoke) {
+            pendingPicker = null
+            selecting.set(false)
+        }
+    }
+
     @Command
     fun select(invoke: Invoke) {
         val error = reserveSelection(invoke)
@@ -300,13 +307,12 @@ class MonitoredFolderPlugin(
         try {
             synchronized(admission) {
                 if (destroyed) return
-                startActivityForResult(invoke, intent, "selected")
+                startActivityForResult(invoke, intent, "selected") { releaseSelection(invoke) }
             }
         } catch (
             error: Exception,
         ) {
-            selecting.set(false)
-            pendingPicker = null
+            releaseSelection(invoke)
             reject(invoke, error)
         }
     }

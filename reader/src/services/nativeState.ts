@@ -161,6 +161,9 @@ export class NativeStateClient {
         return result
       } catch (error) {
         const code = errorCode(error)
+        // SDK host loss is not a native non-admission proof. Keep the envelope for
+        // explicit receipt reconciliation; never replay it into a new Activity.
+        if (code === 'activity_changed_outcome_unknown') throw error
         if (code && !['unavailable', 'commit_outcome_unknown', 'location_receipt_error', 'native_state_error'].includes(code)) {
           this.pending = null
           throw error

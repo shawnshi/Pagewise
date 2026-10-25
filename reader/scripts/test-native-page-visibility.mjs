@@ -3,10 +3,38 @@ import { test } from 'node:test'
 import { existsSync, readdirSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs'
 import { resolve } from 'node:path'
 import { createHash } from 'node:crypto'
-import { compile, emit, runJvm, root } from './native-import-test-tools.mjs'
+import { compile, emit, runJvm, root, files } from './native-import-test-tools.mjs'
+import { homedir } from 'node:os'
 import { createNativePageVisibility } from '../src/services/nativePageVisibility.ts'
 const deferred = () => { let resolve, reject; const promise = new Promise((a, b) => { resolve = a; reject = b }); return { promise, resolve, reject } }
 const turn = () => new Promise(resolve => setImmediate(resolve))
+
+test('acknowledged native surface hides Web focus/a11y and restores exact original attributes', async () => {
+  const oldDocument = globalThis.document
+  const attributes = new Map([['aria-hidden', 'false'], ['inert', 'original']])
+  const element = { getAttribute: key => attributes.get(key) ?? null, setAttribute: (key, value) => attributes.set(key, value), removeAttribute: key => attributes.delete(key) }
+  globalThis.document = { getElementById: () => element }
+  try {
+    const f = fixture(async action => ({ applied: true, visible: action === 'show' }))
+    await f.owner.show('native', 'library', {})
+    assert.equal(attributes.get('aria-hidden'), 'true'); assert.equal(attributes.get('inert'), '')
+    await f.owner.hide('native')
+    assert.deepEqual([...attributes], [['aria-hidden', 'false'], ['inert', 'original']])
+  } finally { if (oldDocument === undefined) delete globalThis.document; else globalThis.document = oldDocument }
+})
+
+test('failed native hide cannot reactivate obscured Web controls', async () => {
+  const oldDocument = globalThis.document
+  const attributes = new Map()
+  const element = { getAttribute: key => attributes.get(key) ?? null, setAttribute: (key, value) => attributes.set(key, value), removeAttribute: key => attributes.delete(key) }
+  globalThis.document = { getElementById: () => element }
+  try {
+    const f = fixture(async action => { if (action === 'hide') throw { code: 'draft_write_outcome_unknown' }; return { applied: true, visible: true } })
+    await f.owner.show('native', 'library', {})
+    await assert.rejects(() => f.owner.hide('native'), e => e.code === 'draft_write_outcome_unknown')
+    assert.equal(attributes.get('aria-hidden'), 'true'); assert.equal(attributes.get('inert'), '')
+  } finally { if (oldDocument === undefined) delete globalThis.document; else globalThis.document = oldDocument }
+})
 function fixture(hook = async () => ({ applied: true, visible: true })) {
   let generation = 0
   const calls = []
@@ -143,7 +171,9 @@ fun main() {
   assert.ok(jar, 'Installed SDK jar required; never install dependencies from this test')
   const boundary = emit(out, 'NativePageReply.kt', 'package io.pagewise.reader\ninternal typealias NativePageReply = (org.json.JSONObject?, String?) -> Unit\n')
   const statsSource = resolve(root, 'src-tauri/android/NativeStatsPanel.kt')
-  const classpath = compile(out, [source, statsSource, boundary, harness], [jar])
+  const coreApis = files(resolve(homedir(), '.gradle/caches/8.14.3/transforms')).filter(p => p.endsWith('core-1.13.1-api.jar'))
+  assert.equal(coreApis.length, 1, 'Expected cached AndroidX core API for native path compilation; never install a test dependency')
+  const classpath = compile(out, [source, statsSource, resolve(root, 'src-tauri/android/NativeStatsSettingsUi.kt'), resolve(root, 'src-tauri/android/NativeUi.kt'), resolve(root, 'src-tauri/android/NativeUiMetrics.kt'), boundary, harness], [jar, coreApis[0]])
   const output = runJvm(out, 'run', ['-cp', classpath, 'io.pagewise.reader.NativeLifecycleHostKt'])
   assert.match(output, /assertions=\d+/)
   const hash = createHash('sha256').update(readFileSync(source)).digest('hex')

@@ -29,6 +29,19 @@ test('native Back is synchronously consumed and rapid presses do not reenter asy
   resolve(); await settle()
 })
 
+test('toolbar Back shares the single-flight owner while keeping system Back distinct', async () => {
+  const sources = []
+  let resolve
+  const f = fixture(source => { sources.push(source); return new Promise(done => { resolve = done }) })
+  assert.equal(f.handler('toolbar'), true)
+  assert.equal(f.handler('toolbar'), true)
+  assert.deepEqual(sources, ['toolbar'])
+  resolve(); await settle()
+  assert.equal(f.handler(), true)
+  assert.deepEqual(sources, ['toolbar', 'system'])
+  resolve(); await settle()
+})
+
 test('reader Back failure is explicit, stays consumed and unlocks a later retry', async () => {
   let calls = 0
   const f = fixture(() => { calls++; return Promise.reject(new Error('synthetic back failure')) })
@@ -51,7 +64,7 @@ test('mount registers the actual reader owner; cleanup never deletes a newer own
   assert.equal(hooks.onMounted.length, 1)
   assert.equal(hooks.onBeforeUnmount.length, 1)
   const host = {}, own = () => true
-  const hook = source => new Function('nativeBackHost', 'handleNativeReaderBack', `let nativeBackAlive = true; ${compile(`const callback = ${source}`)};return callback`)(host, own)
+  const hook = source => new Function('nativeBackHost', 'handleNativeReaderBack', 'onyxNativeAccelerator', `let nativeBackAlive = true; let unbindHardwareKeys = null; const anyOverlayOpen = () => false; const scribbleEnabled = { value: false }; const turnPage = () => {}; ${compile(`const callback = ${source}`)};return callback`)(host, own, { bindHardwarePageTurn: () => () => {} })
   const mount = hook(hooks.onMounted[0]), unmount = hook(hooks.onBeforeUnmount[0])
   mount(); assert.equal(host.__pagewiseReaderBack, own)
   unmount(); assert.equal(host.__pagewiseReaderBack, undefined)
@@ -70,7 +83,7 @@ test('actual PDF Back awaits note acknowledgement and leaves the editor intact o
   const state = { activeAnnotation: { value: { id: 'owned', note: '' } }, noteDraft: { value: 'retain input' }, annotations: { value: [{ id: 'owned' }] } }
   let reject, resolve
   const storage = { updateAnnotation: () => new Promise((yes, no) => { resolve = yes; reject = no }) }
-  const back = new Function('activeAnnotation', 'noteDraft', 'annotations', 'getStorage', 'toast', 't', `const bookmarkMutation = null; ${compile(bodies)}; return readerBack`)(state.activeAnnotation, state.noteDraft, state.annotations, async () => storage, () => {}, key => key)
+  const back = new Function('activeAnnotation', 'noteDraft', 'annotations', 'getStorage', 'toast', 't', `const bookmarkMutation = null; const endRecommendationsDialog = { value: null }; const endRecommendationsOpen = { value: false }; ${compile(bodies)}; return readerBack`)(state.activeAnnotation, state.noteDraft, state.annotations, async () => storage, () => {}, key => key)
   const failed = back()
   await settle()
   assert.equal(state.activeAnnotation.value.id, 'owned')

@@ -165,6 +165,14 @@ test('full Android prepare upgrades project-only Kotlin/DSL/dependencies atomica
   }))
   try {
     cpSync(join(root, 'src-tauri/android'), join(base, 'src-tauri/android'), { recursive: true })
+    cpSync(join(root, 'src-tauri/android-sdk'), join(base, 'src-tauri/android-sdk'), { recursive: true })
+    cpSync(join(root, 'docs/manual'), join(base, 'docs/manual'), { recursive: true })
+    put('src-tauri/Cargo.lock', readFileSync(join(root, 'src-tauri/Cargo.lock')))
+    const pin = JSON.parse(readFileSync(join(root, 'src-tauri/android-sdk/tauri-2.11.5/upstream.json'), 'utf8'))
+    const sdkLine = readFileSync(join(root, 'src-tauri/gen/android/tauri.settings.gradle'), 'utf8').split('\n').find(line => line.includes("project(':tauri-android').projectDir"))
+    assert.ok(sdkLine)
+    const sdk = JSON.parse(sdkLine.slice(sdkLine.indexOf('new File(') + 9, sdkLine.lastIndexOf(')')))
+    for (const name of Object.keys(pin.moduleFiles)) put(`upstream/tauri-android/${name}`, readFileSync(join(sdk, name)))
     cpSync(join(root, 'src-tauri/icons/android'), join(base, 'src-tauri/icons/android'), { recursive: true })
     for (const path of ['package.json', 'src-tauri/tauri.conf.json']) put(path, readFileSync(join(root, path)))
     put('src-tauri/gen/android/buildSrc/src/main/java/io/pagewise/reader/kotlin/BuildTask.kt', 'val executable = """npm""";\nval args = listOf("run", "--", "tauri", "android", "android-studio-script");\n')
@@ -175,7 +183,7 @@ test('full Android prepare upgrades project-only Kotlin/DSL/dependencies atomica
     put('src-tauri/gen/android/app/build.gradle.kts', oldDsl + 'apply(from = "tauri.build.gradle.kts")\n')
     put('src-tauri/gen/android/settings.gradle', "apply from: 'tauri.settings.gradle'\n")
     const names = ['tauri-android', 'tauri-plugin-dialog', 'tauri-plugin-fs', 'tauri-plugin-opener']
-    for (const name of names) put(`upstream/${name}/build.gradle.kts`, oldDsl)
+    for (const name of names) if (name !== 'tauri-android') put(`upstream/${name}/build.gradle.kts`, oldDsl)
     put('src-tauri/gen/android/tauri.settings.gradle', names.map(name => `project(':${name}').projectDir = new File(${JSON.stringify(join(base, 'upstream', name))})`).join('\n'))
     const before = snapshot(project), upstream = snapshot(join(base, 'upstream'))
     assert.throws(() => prepareAndroidProject(base, { replace(from, to) {

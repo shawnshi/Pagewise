@@ -106,11 +106,14 @@ class Cursor(val columnNames:Array<String>,val rows:List<List<Any?>>):Closeable{
  override fun close(){}
 }
 `)
+  put('DatabaseErrorHandler.kt', 'package android.database\nfun interface DatabaseErrorHandler { fun onCorruption(db:android.database.sqlite.SQLiteDatabase) }\n')
   const py = emit(out, 'sqlite-host.py', `import json,sqlite3,sys
 conn=sqlite3.connect('file:'+sys.argv[1]+'?mode=rw',uri=True,isolation_level=None,timeout=5)
 for line in sys.stdin:
  try:
   req=json.loads(line); c=conn.execute(req['sql'],req.get('args',[]))
+  if not req['query'] and c.description:
+   raise sqlite3.OperationalError('Queries can be performed using SQLiteDatabase query or rawQuery methods only.')
   result={'columns':[d[0] for d in c.description],'rows':[list(r) for r in c.fetchall()]} if req['query'] else {}
   print(json.dumps(result,ensure_ascii=True),flush=True)
  except sqlite3.Error as error:
@@ -123,7 +126,9 @@ import org.json.JSONObject
 import org.json.JSONArray
 import java.io.Closeable
 object HostSql{lateinit var script:String;var failSql:String?=null;var lostCommit=false;var opens=0;var closes=0}
-class SQLiteException(message:String):RuntimeException(message)
+open class SQLiteException(message:String):RuntimeException(message)
+class SQLiteDatabaseCorruptException(message:String):SQLiteException(message)
+class SQLiteDatabaseLockedException(message:String):SQLiteException(message)
 class SQLiteDatabase private constructor(path:String):Closeable{
  private val process=ProcessBuilder("python","-u",HostSql.script,path).apply{environment()["PYTHONUTF8"]="1"}.start()
  private val writer=process.outputStream.bufferedWriter(Charsets.UTF_8)
@@ -147,7 +152,7 @@ class SQLiteDatabase private constructor(path:String):Closeable{
  fun setTransactionSuccessful(){success=true}
  fun endTransaction(){send(if(success)"COMMIT" else "ROLLBACK");if(success&&HostSql.lostCommit){HostSql.lostCommit=false;throw SQLiteException("lost ACK")}}
  override fun close(){writer.close();process.waitFor(3,java.util.concurrent.TimeUnit.SECONDS);if(process.isAlive)process.destroyForcibly();HostSql.closes++}
- companion object{const val OPEN_READWRITE=0;const val NO_LOCALIZED_COLLATORS=16;fun openDatabase(path:String,factory:Any?,flags:Int)=SQLiteDatabase(path)}
+ companion object{const val OPEN_READWRITE=0;const val OPEN_READONLY=1;const val NO_LOCALIZED_COLLATORS=16;const val ENABLE_WRITE_AHEAD_LOGGING=0x20000000;const val CREATE_IF_NECESSARY=0x10000000;fun openDatabase(path:String,factory:Any?,flags:Int)=SQLiteDatabase(path);fun openDatabase(path:String,factory:Any?,flags:Int,handler:android.database.DatabaseErrorHandler)=SQLiteDatabase(path)}
 }
 `)
   put('Harness.kt', `package io.pagewise.reader
@@ -265,11 +270,12 @@ fun main(args:Array<String>){
 }
 `)
   const repository = join(root, 'src-tauri/android/NativeLibraryRepository.kt')
-  sources.push(repository)
+  const canonical = join(root, 'src-tauri/android/CanonicalDatabase.kt')
+  sources.push(repository, canonical)
   const sdk = process.env.ANDROID_HOME ?? process.env.ANDROID_SDK_ROOT ?? join(homedir(), 'AppData/Local/Android/Sdk')
   const androidJar = join(sdk, 'platforms/android-36/android.jar')
   assert.ok(existsSync(androidJar), 'Installed Android 36 SDK required; no dependency installation')
-  compile(join(out, 'android-api'), [join(out, 'Failure.kt'), repository], [androidJar])
+  compile(join(out, 'android-api'), [join(out, 'Failure.kt'), repository, canonical], [androidJar])
   const cp = compile(out, sources, groovy())
   const output = runJvm(out, 'repository', ['-cp', cp, 'io.pagewise.reader.HarnessKt', py, fixture])
   assert.match(output, /PASS: SQLite CAS/)

@@ -1,6 +1,7 @@
 import { existsSync, lstatSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, renameSync, rmSync, rmdirSync, writeFileSync } from 'node:fs'
 import { dirname, join, resolve } from 'node:path'
 import { fileURLToPath } from 'node:url'
+import { tauriLifecycleEntries } from './prepare-tauri-lifecycle.mjs'
 
 const root = resolve(dirname(fileURLToPath(import.meta.url)), '..')
 
@@ -78,7 +79,7 @@ export function prepareAndroidProject(base = root, { replace = renameSync, resto
   const kotlin = template.toString('utf8')
   if (!/^package io\.pagewise\.reader\s*\r?\n/.test(kotlin) || !/class MainActivity\s*:\s*TauriActivity\(\)/.test(kotlin) || /LightReadUpdater|UpdaterBridge|REQUEST_INSTALL_PACKAGES/.test(kotlin)) throw new Error('Invalid MainActivity template')
   const nativeFolderTemplates = readdirSync(join(base, 'src-tauri/android')).filter(name => name !== 'MainActivity.kt' && name.endsWith('.kt')).map(name => {
-    if (!['MonitoredFolderPlugin.kt', 'MonitoredFolderIo.kt', 'NativeFileJobs.kt', 'ExportPlugin.kt', 'SystemTtsPlugin.kt', 'NativeSpeechService.kt', 'ReaderWindowState.kt', 'OnyxSdkBridge.kt', 'NativeBookMetadata.kt', 'NativeMobiLocales.kt', 'NativePdfMetadata.kt', 'NativeImportDatabase.kt', 'NativeBookImporter.kt', 'NativeStateStore.kt', 'NativeStatePlugin.kt', 'NativePagesController.kt', 'NativeManualRenderer.kt', 'NativeLibraryRepository.kt', 'NativeManagementDispatcher.kt', 'NativeManagementHost.kt', 'NativePagesPlugin.kt', 'NativeClassificationEditor.kt', 'NativeNoteEditor.kt', 'NativeSettingsPanel.kt', 'NativePageVisibility.kt', 'NativeStatsPanel.kt', 'NativeLibraryPanel.kt'].includes(name)) throw new Error(`Unsupported Android template: ${name}`)
+    if (!['MonitoredFolderPlugin.kt', 'MonitoredFolderIo.kt', 'NativeFileJobs.kt', 'ExportPlugin.kt', 'SystemTtsPlugin.kt', 'NativeSpeechService.kt', 'ReaderWindowState.kt', 'OnyxSdkBridge.kt', 'NativeBookMetadata.kt', 'NativeMobiLocales.kt', 'NativePdfMetadata.kt', 'NativeImportDatabase.kt', 'CanonicalDatabase.kt', 'NativeSqlDatabase.kt', 'NativeBookImporter.kt', 'NativeStateStore.kt', 'NativeStatePlugin.kt', 'NativePagesController.kt', 'NativeManualRenderer.kt', 'NativeLibraryRepository.kt', 'NativeManagementDispatcher.kt', 'NativeManagementHost.kt', 'NativePagesPlugin.kt', 'NativeClassificationEditor.kt', 'NativeNoteEditor.kt', 'NativeSettingsPanel.kt', 'NativePageVisibility.kt', 'NativeStatsPanel.kt', 'NativeLibraryPanel.kt', 'NativeBookIntroductionEditor.kt', 'NativeBookRecommendationsPanel.kt', 'NativeStatsSettingsUi.kt', 'NativeUi.kt', 'NativeUiMetrics.kt'].includes(name)) throw new Error(`Unsupported Android template: ${name}`)
 
 
 
@@ -91,14 +92,17 @@ export function prepareAndroidProject(base = root, { replace = renameSync, resto
       if (!/^package io\.pagewise\.reader\s*\r?\n/.test(source) || !/class MonitoredFolderIo\b/.test(source)) throw new Error('Invalid monitored-folder IO template')
     } else if (name === 'NativeFileJobs.kt') {
       if (!/^package io\.pagewise\.reader\s*\r?\n/.test(source) || !/class NativeFileJobService\b/.test(source)) throw new Error('Invalid native file service template')
-    } else if (['NativeStateStore.kt', 'NativeStatePlugin.kt', 'NativePagesController.kt', 'NativeManualRenderer.kt', 'NativeLibraryRepository.kt', 'NativeManagementDispatcher.kt', 'NativeManagementHost.kt', 'NativePagesPlugin.kt', 'NativeClassificationEditor.kt', 'NativeNoteEditor.kt', 'NativeSettingsPanel.kt', 'NativePageVisibility.kt', 'NativeStatsPanel.kt', 'NativeLibraryPanel.kt'].includes(name)) {
+    } else if (['NativeUi.kt', 'NativeUiMetrics.kt'].includes(name)) {
+      const symbol = name === 'NativeUi.kt' ? 'object NativeUi' : 'fun nativeFlowRects'
+      if (!/^package io\.pagewise\.reader\s*\r?\n/.test(source) || !source.includes(symbol)) throw new Error(`Invalid native layout template: ${name}`)
+    } else if (['NativeStateStore.kt', 'NativeStatePlugin.kt', 'NativePagesController.kt', 'NativeManualRenderer.kt', 'NativeLibraryRepository.kt', 'NativeManagementDispatcher.kt', 'NativeManagementHost.kt', 'NativePagesPlugin.kt', 'NativeClassificationEditor.kt', 'NativeNoteEditor.kt', 'NativeSettingsPanel.kt', 'NativePageVisibility.kt', 'NativeStatsPanel.kt', 'NativeLibraryPanel.kt', 'NativeBookIntroductionEditor.kt', 'NativeBookRecommendationsPanel.kt', 'NativeStatsSettingsUi.kt'].includes(name)) {
 
 
 
 
       const symbol = name.replace(/\.kt$/, '')
       if (!/^package io\.pagewise\.reader\s*\r?\n/.test(source) || !source.includes(`class ${symbol}`) || (name.endsWith('Plugin.kt') && !/@TauriPlugin\b/.test(source))) throw new Error(`Invalid native state template: ${name}`)
-    } else if (['NativeBookMetadata.kt', 'NativeMobiLocales.kt', 'NativePdfMetadata.kt', 'NativeImportDatabase.kt', 'NativeBookImporter.kt'].includes(name)) {
+    } else if (['NativeBookMetadata.kt', 'NativeMobiLocales.kt', 'NativePdfMetadata.kt', 'NativeImportDatabase.kt', 'NativeBookImporter.kt', 'CanonicalDatabase.kt', 'NativeSqlDatabase.kt'].includes(name)) {
       const symbol = name === 'NativeMobiLocales.kt' ? 'nativeMobiLocales' : name.replace(/\.kt$/, '')
       if (!/^package io\.pagewise\.reader\s*\r?\n/.test(source) || !source.includes(symbol)) throw new Error(`Invalid native import template: ${name}`)
     } else if (name === 'ExportPlugin.kt') {
@@ -188,8 +192,13 @@ export function prepareAndroidProject(base = root, { replace = renameSync, resto
       const name = line.split("'")[1].replace(/^:/, '')
       if (!expected.delete(name)) throw new Error(`Unsupported Tauri Kotlin module: ${name}`)
       const literal = line.slice(line.indexOf('new File(') + 9, line.lastIndexOf(')'))
-      const upstream = regularFile(join(JSON.parse(literal), 'build.gradle.kts')).toString('utf8')
-      const adapter = compilerDsl(upstream) + '\nlayout.buildDirectory.set(rootProject.layout.buildDirectory.dir("native-modules/" + project.name))\n'
+      let moduleDirectory
+      try { moduleDirectory = JSON.parse(literal) }
+      catch (error) { throw new Error('Invalid native module path', { cause: error }) }
+      if (name === 'tauri-android') importEntries.push(...tauriLifecycleEntries(base, project, moduleDirectory))
+      const upstream = regularFile(join(moduleDirectory, 'build.gradle.kts')).toString('utf8')
+      const buildDirectory = name === 'tauri-android' ? 'native-lifecycle-modules/' : 'native-modules/'
+      const adapter = compilerDsl(upstream) + `\nlayout.buildDirectory.set(rootProject.layout.buildDirectory.dir("${buildDirectory}" + project.name))\n`
       importEntries.push({ path: join(project, 'native-gradle', name + '.gradle.kts'), data: Buffer.from(adapter) })
     }
     if (expected.size) throw new Error('Missing expected Tauri Kotlin modules')

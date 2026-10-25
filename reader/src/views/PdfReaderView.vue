@@ -6,7 +6,9 @@ import PdfReadingAssistant from '../components/PdfReadingAssistant.vue'
 import { buildPdfAssistantMessages, PDF_AI_CONTEXT_LIMIT } from '../services/pdfReadingAssistant'
 import { TTS_RATE_MAX, TTS_RATE_MIN, TTS_RATE_STOPS, rateText } from '../services/ttsRate'
 import { computed, inject, nextTick, onBeforeUnmount, onMounted, ref, watch } from 'vue'
-import { useRoute, useRouter } from 'vue-router'
+import { onBeforeRouteLeave, onBeforeRouteUpdate, useRoute, useRouter } from 'vue-router'
+import BookEndRecommendationsDialog from '../components/BookEndRecommendationsDialog.vue'
+import { createReaderEndRecommendationGate, isPdfDocumentEnd } from '../services/readerEndRecommendations'
 import { readerActivityKey } from '../services/readerActivity'
 import { getStorage, isTauri, type BookMeta, type AnnotationRec } from '../storage'
 import {
@@ -90,6 +92,11 @@ const pdfOpenInput = ref<HTMLInputElement>()
 let openingPdf = false
 let readerAlive = true
 let pdfPositionReady = false
+const endRecommendationsOpen = ref(false)
+const endRecommendationsDialog = ref<InstanceType<typeof BookEndRecommendationsDialog> | null>(null)
+const pdfEndGate = createReaderEndRecommendationGate(bookId)
+let pdfEndManualInput = false
+let pdfEndInputSize = ''
 
 /** PDFium 交互引擎：几何选择、链接、目录、文本与段落提取。 */
 let pdm: PdfiumDoc | null = null
@@ -136,7 +143,7 @@ let resizeObserver: ResizeObserver | undefined
 let scrollScheduled = false
 let tocPositionScheduled = false
 
-const { pingAuto: pingReadingAuto } = useReadingTimer(bookId)
+const { pingAuto: pingReadingAuto } = useReadingTimer(bookId, { enabled: () => !endRecommendationsOpen.value })
 // 翻页 (含自动阅读、跳转) 算作在读
 // 页码变化也可能来自自动滚动, 按自动推进计; 手动滚动由 window 上的 wheel/touch 计入
 watch(currentPage, () => pingReadingAuto())
@@ -384,6 +391,7 @@ async function renderScrollPage(num: number, priority = 0) {
     renderPdmLinks(holder, num)
   } finally {
     rendering.delete(num)
+    if (!bookPaged.value) considerPdfEndOffer()
     if (readerAlive && !bookPaged.value && revision !== rasterRevision) updateViewport()
   }
 }
@@ -418,6 +426,7 @@ async function renderPaged() {
   }))
   if (!readerAlive || revision !== rasterRevision) return
   pagedBox.value?.scrollTo({ top: 0, left: 0 })
+  considerPdfEndOffer()
 }
 
 async function pagedGoto(page: number) {
@@ -633,6 +642,7 @@ function onScroll() {
     scrollScheduled = false
     updateViewport()
     updateCurrentTocPosition()
+    considerPdfEndOffer()
   })
 }
 
@@ -663,6 +673,7 @@ function scrollGoto(n: number, smooth = false, yOffsetPx = 0) {
 }
 
 function gotoPage(n: number, smooth = false, yOffsetPx = 0) {
+  cancelPdfEndNavigation()
   if (pdfLayout.value === 'reflow') reflowGoto(n, smooth)
   else if (bookPaged.value) void pagedGoto(n)
   else scrollGoto(n, smooth, yOffsetPx)
@@ -977,6 +988,7 @@ let relayoutSession = 0
 
 /** 重算缩放并保持当前页锚点 (页内比例) */
 async function relayout(force = false) {
+  cancelPdfEndNavigation()
   const el = scroller.value
   if (!el) return
   const next = typeof zoom.value === 'number' ? fixedZoomScale(zoom.value) : fitScale(zoom.value)
@@ -1046,6 +1058,7 @@ function jumpTo() {
 }
 
 function prevPage() {
+  markPdfEndInput()
   if (pdfLayout.value === 'reflow') reflowStep(-1)
   else if (bookPaged.value) void pagedGoto(pagedPages.value[0] - 1)
   else if (scrollSpread.value) {
@@ -1055,6 +1068,7 @@ function prevPage() {
   } else scrollGoto(currentPage.value - 1, true)
 }
 function nextPage() {
+  markPdfEndInput()
   if (pdfLayout.value === 'reflow') {
     reflowStep(1)
   } else if (bookPaged.value) {
@@ -2671,6 +2685,42 @@ watch(() => settings.autoReadSeconds, () => {
 /* ---- 听书 (Edge 在线 / 本地离线 / 系统语音) ---- */
 const ttsPanel = ref(false)
 const ttsState = ref<'stopped' | 'playing' | 'paused'>('stopped')
+const pdfEndBlocked = computed(() => endRecommendationsOpen.value || drawerOpen.value || propertiesOpen.value || pdfSearchOpen.value || pdfAiOpen.value || moreMenu.value || zoomMenu.value || typographyOpen.value || shortcutsOpen.value || autoPanel.value || autoReading.value || ttsPanel.value || ttsState.value === 'playing' || !!selection.value || !!liveSel.value || !!activeAnnotation.value || !!bookmarkMutation)
+function pdfEndPosition() {
+  const viewport = bookPaged.value ? pagedBox.value : scroller.value
+  const lastPage = bookPaged.value ? (pagedPages.value.at(-1) ?? 0) : pageCount.value
+  const canvas = holderOf(pageCount.value)?.querySelector('canvas')
+  return { viewport: viewport ?? null, lastPage, pageCount: pageCount.value, rendered: !!canvas?.width && !rendering.has(pageCount.value) }
+}
+function cancelPdfEndNavigation() { pdfEndManualInput = false; pdfEndGate.cancelPending() }
+function markPdfEndInput() {
+  if (!pdfPositionReady || loading.value || pdfEndBlocked.value || pdfLayout.value !== 'original') return
+  const viewport = pdfEndPosition().viewport
+  if (!viewport) return
+  pdfEndManualInput = true
+  pdfEndInputSize = `${viewport.clientWidth}:${viewport.clientHeight}`
+}
+function considerPdfEndOffer() {
+  if (!readerAlive || !pdfPositionReady) return
+  const position = pdfEndPosition()
+  if (pdfEndManualInput && position.viewport && pdfEndInputSize !== `${position.viewport.clientWidth}:${position.viewport.clientHeight}`) cancelPdfEndNavigation()
+  const atEnd = isPdfDocumentEnd(position)
+  if (pdfEndGate.observe({bookId, atEnd, primary: true, loading: loading.value || !!error.value, unstable: pdfLayout.value !== 'original' || position.lastPage === pageCount.value && !position.rendered, navigating: false, inspecting: false, blocked: pdfEndBlocked.value, reason: pdfEndManualInput ? 'scroll' : null})) {
+    pdfEndManualInput = false
+    endRecommendationsOpen.value = true
+  }
+}
+watch(pdfEndBlocked, blocked => {
+  if (!blocked && pdfEndGate.consume(bookId, isPdfDocumentEnd(pdfEndPosition()), false)) endRecommendationsOpen.value = true
+})
+watch([zoom, mode, spreadMode, presentationMode], cancelPdfEndNavigation, { flush: 'sync' })
+onBeforeRouteLeave(() => !endRecommendationsDialog.value?.isWriting())
+onBeforeRouteUpdate(() => !endRecommendationsDialog.value?.isWriting())
+async function navigatePdfEndRecommendation(id: string) {
+  if (endRecommendationsDialog.value?.isWriting()) return
+  try { await flushProgress(); if (readerAlive) await router.push(`/book/${encodeURIComponent(id)}`) }
+  catch { toast(settings.language === 'en' ? 'Could not save reading position; stay here and retry.' : '阅读位置保存失败，请留在此页重试。', 'error') }
+}
 watch(() => systemTts.focusLoss, () => {
   if (ttsState.value !== 'playing') return
   pauseTTS()
@@ -3056,6 +3106,8 @@ function runPdfShortcutCommand(command: PdfReaderShortcutCommandId) {
 }
 
 async function readerBack() {
+  if (endRecommendationsDialog.value?.isWriting()) return
+  if (endRecommendationsOpen.value) { endRecommendationsOpen.value = false; return }
   if (bookmarkMutation) { await bookmarkMutation; return }
   if (activeAnnotation.value) { await saveNote(); return }
   if (selection.value || liveSel.value) {
@@ -3115,6 +3167,7 @@ onBeforeUnmount(() => {
 })
 
 function handleKeydown(e: KeyboardEvent) {
+  if (endRecommendationsOpen.value) return
   dispatchPdfReaderShortcut(e, isMacPlatform, {
     state: {
       isPaper: false,
@@ -3233,6 +3286,7 @@ onMounted(async () => {
     })
     observeActiveViewport()
     pdfPositionReady = true
+    considerPdfEndOffer()
     try {
       if (isNativeSystemTts()) {
         const native = await nativeSpeech.attach()
@@ -3268,6 +3322,7 @@ document.addEventListener('visibilitychange', onVisibilityCheckpoint)
 onBeforeUnmount(() => {
   document.removeEventListener('visibilitychange', onVisibilityCheckpoint)
   readerAlive = false
+  pdfEndGate.dispose()
   // 卸载前先取消防抖并写入最后位置; 失败不回滚已显示的内容, 也不阻塞退出。
   void flushProgress().catch(() => { /* 退出时无法保证展示提示 */ })
   pdfPositionReady = false
@@ -3323,6 +3378,7 @@ onBeforeUnmount(() => {
     :class="{ 'is-fullscreen': isFullscreen, 'is-presentation': presentationMode, 'lr-eink': settings.readingMode.eink.enabled }"
     :data-reader-theme="resolveReaderTheme(settings.reader.theme, resolvedTheme === 'dark')"
   >
+    <BookEndRecommendationsDialog v-if="endRecommendationsOpen" ref="endRecommendationsDialog" v-model="endRecommendationsOpen" :book-id="bookId" @navigate="navigatePdfEndRecommendation" />
     <input
       ref="pdfOpenInput"
       data-reader-pdf-open
@@ -3840,6 +3896,9 @@ onBeforeUnmount(() => {
           v-else-if="bookPaged"
           ref="pagedBox"
           class="paged-box"
+          @wheel.capture="markPdfEndInput"
+          @pointerdown.capture="markPdfEndInput"
+          @touchmove.capture="markPdfEndInput"
           :class="{ 'is-fit-width': zoom === 'fit-width', 'is-fit-height': zoom === 'fit-page' }"
           @pointerdown="onScrollerPointerDown"
           @dblclick="onScrollerDblClick"
@@ -3847,7 +3906,7 @@ onBeforeUnmount(() => {
           @touchstart="onPdfTouchStart"
           @touchmove="onPdfTouchMove"
           @touchend="onPdfTouchEnd"
-          @scroll.passive="scheduleCurrentTocPositionUpdate"
+          @scroll.passive="scheduleCurrentTocPositionUpdate(); considerPdfEndOffer()"
           @contextmenu.prevent
         >
           <div class="spread-host">
@@ -3886,7 +3945,7 @@ onBeforeUnmount(() => {
                 :book-id="bookId"
                 :page-key="`pdf-page-${n}`"
                 v-model:enabled="scribbleEnabled"
-                :modal-open="moreMenu || zoomMenu || autoPanel"
+                :modal-open="moreMenu || zoomMenu || autoPanel || endRecommendationsOpen"
               />
             </div>
           </div>
@@ -3896,6 +3955,9 @@ onBeforeUnmount(() => {
           v-else
           ref="scroller"
           class="pane pane-left"
+          @wheel.capture="markPdfEndInput"
+          @pointerdown.capture="markPdfEndInput"
+          @touchmove.capture="markPdfEndInput"
           :class="{ 'is-fit-width': zoom === 'fit-width', 'is-fit-height': zoom === 'fit-page' }"
           @pointerdown="onScrollerPointerDown"
           @dblclick="onScrollerDblClick"
@@ -3942,7 +4004,7 @@ onBeforeUnmount(() => {
                 :book-id="bookId"
                 :page-key="`pdf-page-${n}`"
                 v-model:enabled="scribbleEnabled"
-                :modal-open="moreMenu || zoomMenu || autoPanel"
+                :modal-open="moreMenu || zoomMenu || autoPanel || endRecommendationsOpen"
               />
             </div>
           </div>

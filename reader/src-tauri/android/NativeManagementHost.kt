@@ -162,7 +162,25 @@ internal class NativeManagementHost(
                 reply(null, "native_actions_unavailable")
                 return@runOnUiThread
             }
-            val key = action + ":" + payload.optString("id") + ":" + payload.optString("token")
+            val key =
+                if (action.startsWith("recommendations")) {
+                    JSONArray()
+                        .put(
+                            action,
+                        ).put(payload.optString("token"))
+                        .put(payload.optString("requestId"))
+                        .put(payload.optString("candidateId"))
+                        .toString()
+                } else if (action in setOf("bookIntroductionGenerate", "bookIntroductionSave", "bookIntroductionCancel")) {
+                    val nonce = payload.optString(if (action == "bookIntroductionSave") "token" else "requestId")
+                    JSONArray()
+                        .put(action)
+                        .put(payload.optString("bookId"))
+                        .put(nonce)
+                        .toString()
+                } else {
+                    action + ":" + payload.optString("id") + ":" + payload.optString("token")
+                }
             if (pending.size >= 32) {
                 reply(null, "resource_limit")
                 return@runOnUiThread
@@ -252,6 +270,15 @@ internal class NativeManagementHost(
                 "relinkBook",
                 "relinkBookCommit",
                 "aiClassify",
+                "bookIntroductionGenerate",
+                "bookIntroductionSave",
+                "bookIntroductionCancel",
+                "recommendationsGet",
+                "recommendationsAi",
+                "recommendationsCancel",
+                "recommendationsFeedback",
+                "recommendationsClearFeedback",
+                "recommendationsWanted",
                 "classificationGet",
                 "classificationSave",
                 "noteDraftList",

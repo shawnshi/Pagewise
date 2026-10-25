@@ -42,7 +42,7 @@ import { resolveBookTypographyContext, createTypographyBookOwner, prepareTypogra
 import { TYPOGRAPHY_POLICY_VERSION } from '../services/readerTypographyProfiles'
 import { applyTypographyDocumentMode } from '../services/readerTypographyDocument'
 import { restorableView } from '../services/navigationSession'
-import { createDebouncedDraftSaver, loadNoteDraft, removeNoteDraft, type DebouncedDraftSaver } from '../services/noteDrafts'
+import { annotationIdForDraft, createDebouncedDraftSaver, listDrafts, loadNoteDraft, removeNoteDraft, saveNoteDraft, type DebouncedDraftSaver } from '../services/noteDrafts'
 import ReadingModeMini from '../components/ReadingModeMini.vue'
 import { useReadingModes } from '../composables/useReadingModes'
 import ReadingModeLayer from '../components/ReadingModeLayer.vue'
@@ -57,6 +57,8 @@ import PagewiseCompanionOutline from '../components/PagewiseCompanionOutline.vue
 import PagewiseCompanionSkim from '../components/PagewiseCompanionSkim.vue'
 import PagewiseCompanionStatus from '../components/PagewiseCompanionStatus.vue'
 import AppIcon from '../components/AppIcon.vue'
+import BookEndRecommendationsDialog from '../components/BookEndRecommendationsDialog.vue'
+import { createReaderEndRecommendationGate } from '../services/readerEndRecommendations.ts'
 import { usePagewiseCompanion } from '../composables/usePagewiseCompanion'
 import { companionThemeName } from '../services/PagewiseCompanion/theme'
 import type { ReadingModeProgress } from '../services/readingModes/progress'
@@ -117,7 +119,23 @@ const chapterLabel = ref('')
 type PanelName = 'toc' | 'annotations' | 'search' | 'ai'
 type PrimaryPanel = PanelName | 'settings' | 'tts' | 'more' | 'none'
 const primaryPanel = ref<PrimaryPanel>('none')
+const endRecommendationsOpen = ref(false)
+const endRecommendationsDialog = ref<InstanceType<typeof BookEndRecommendationsDialog> | null>(null)
+const endRecommendationGate = createReaderEndRecommendationGate(bookId)
+let recommendationRenderer: EventTarget | null = null
+let recommendationRelocateRange: unknown = null
+let recommendationRelocateReason: unknown = null
+function captureRecommendationRelocate(event: Event) {
+  if (event.currentTarget !== recommendationRenderer) return
+  const detail = (event as CustomEvent).detail
+  recommendationRelocateRange = detail?.range
+  recommendationRelocateReason = typeof detail?.reason === 'string' ? detail.reason : null
+}
 function setPrimaryPanel(name: PrimaryPanel) {
+  if (name !== 'none' && endRecommendationsOpen.value) {
+    if (endRecommendationsDialog.value?.isWriting()) return
+    endRecommendationsOpen.value = false
+  }
   if (name !== 'none') {
     modes.closePanel()
     dj.closeOverlays()
@@ -143,7 +161,7 @@ const barsVisible = ref(true)
 let barsTimer: ReturnType<typeof setTimeout> | undefined
 
 const anyOverlayOpen = () =>
-  panel.value !== 'none' || settingsOpen.value || ttsPanel.value || modes.panelOpen.value || !!activeAnnotation.value || jumpOpen.value || dj.overlayOpen.value || readerMoreOpen.value
+  panel.value !== 'none' || settingsOpen.value || ttsPanel.value || modes.panelOpen.value || !!activeAnnotation.value || jumpOpen.value || dj.overlayOpen.value || readerMoreOpen.value || endRecommendationsOpen.value
 
 /** 显示工具栏; autoHide 时若几秒内无交互且无面板打开则自动隐去 */
 function showBars(autoHide = false) {
@@ -165,6 +183,8 @@ const cancelBarsTimer = () => clearTimeout(barsTimer)
 
 // ---- 面板开关: 同一时间只开一个浮层 (手机端它们都是底部抽屉, 叠在一起会互相遮挡) ----
 function closeOverlays() {
+  if (endRecommendationsDialog.value?.isWriting()) return
+  endRecommendationsOpen.value = false
   readerMoreOpen.value = false
   panel.value = 'none'
   settingsOpen.value = false
@@ -249,7 +269,8 @@ watch(panel, async p => {
 // 高亮选区
 const selection = ref<{ cfi: string; text: string } | null>(null)
 const annotations = ref<AnnotationRec[]>([])
-const activeAnnotation = ref<AnnotationRec | null>(null)
+type EditableAnnotation = Omit<AnnotationRec, 'id'> & { id?: string; draftContextId?: string }
+const activeAnnotation = ref<EditableAnnotation | null>(null)
 const noteDraft = ref('')
 const annoTab = ref<'highlight' | 'bookmark'>('highlight')
 const highlights = computed(() => annotations.value.filter(a => a.kind !== 'bookmark'))
@@ -287,7 +308,7 @@ const ttsHint = computed(() => {
 let sectionLoadResolvers: Array<() => void> = []
 
 // 翻页 / 位置变化 / 朗读推进时 ping: 正文在 iframe 里, 其中的操作不会冒泡到 window
-const { ping: pingReading, pingAuto: pingReadingAuto } = useReadingTimer(bookId)
+const { ping: pingReading, pingAuto: pingReadingAuto } = useReadingTimer(bookId, { enabled: () => !endRecommendationsOpen.value })
 
 // 书内搜索 (VSCode 风格: 多关键词 / 正则 / 大小写 / 全词)
 const searchQuery = ref('')
@@ -750,6 +771,14 @@ function onRelocate(e: CustomEvent) {
   if (tocAuto.value) syncSmartTocPosition()
   updatePages(e.detail)
   updateMarginals()
+  const atEnd = view?.renderer?.atEnd
+  const rendererEvent = e.currentTarget === view && e.detail?.range === recommendationRelocateRange
+  const reason = rendererEvent ? (pageTurning || autoReading.value ? 'page' : recommendationRelocateReason) : null
+  if (typeof atEnd === 'boolean' && endRecommendationGate.observe({
+    bookId: String(route.params.id || ''), atEnd, primary, loading: loading.value,
+    unstable: typographyApplying.value, navigating: readerSession.navigating, inspecting: readerSession.inspecting,
+    blocked: recommendationOfferBlocked(), reason,
+  })) endRecommendationsOpen.value = true
 }
 
 /**
@@ -1074,14 +1103,14 @@ async function turnPage(dir: 'left' | 'right') {
   pageTurning = true
   try { await (dir === 'left' ? view?.goLeft() : view?.goRight()) }
   catch { toast(t('reader.cantGoto'), 'error') }
-  finally { pageTurning = false }
+  finally { pageTurning = false; consumeEndRecommendationOffer() }
 }
 
-async function readerBack() {
+async function readerBack(source: 'system' | 'toolbar' = 'system') {
   if (typographyApplying.value) return
   const target = readerBackTarget({
     editor: !!activeAnnotation.value, selection: !!selection.value,
-    inspection: readerSession.inspecting, panel: anyOverlayOpen(), toolbar: barsVisible.value,
+    inspection: readerSession.inspecting, panel: anyOverlayOpen(), toolbar: source === 'system' && barsVisible.value,
   })
   if (target === 'editor') {
     closeAnnotation()
@@ -1096,6 +1125,9 @@ async function readerBack() {
     // until progress is acknowledged, including failed saves and rapid presses.
     await readerSession.flush()
     if (!nativeBackAlive || nativeBackHost.__pagewiseReaderBack !== handleNativeReaderBack) return
+    // The save barrier may outlive chrome changes. Do not let the route guard
+    // consume the same navigation Back a second time as a toolbar dismissal.
+    barsVisible.value = false
     const origin = restorableView(window.history.state?.back)
     if (origin && origin !== route.path) router.back()
     else await router.replace('/library')
@@ -1105,11 +1137,11 @@ async function readerBack() {
 const nativeBackHost = window as Window & { __pagewiseReaderBack?: () => boolean }
 let nativeBackPending = false
 let nativeBackAlive = true
-function handleNativeReaderBack(): boolean {
+function handleNativeReaderBack(source: 'system' | 'toolbar' = 'system'): boolean {
   if (!nativeBackAlive || nativeBackHost.__pagewiseReaderBack !== handleNativeReaderBack) return false
   if (nativeBackPending) return true
   nativeBackPending = true
-  void readerBack()
+  void readerBack(source)
     .catch(error => {
       if (!nativeBackAlive || nativeBackHost.__pagewiseReaderBack !== handleNativeReaderBack) return
       console.error('Pagewise: native Back failed', error)
@@ -2411,6 +2443,10 @@ function onSectionLoad(e: CustomEvent) {
       selection.value = null
     }
   }
+  doc.addEventListener('contextmenu', (event: Event) => {
+    // PW-04: the selection toolbar owns these actions without suppressing links or media.
+    if (nativeSelection() && !isReaderInteractive(event.target)) event.preventDefault()
+  })
   doc.addEventListener('selectionchange', (e: Event) => {
     if (nativeSelection()) {
       selectionGesture = true
@@ -2734,13 +2770,25 @@ function drawStoredAnnotations() {
   }
 }
 
+async function copySelectedText() {
+  const selected = selection.value
+  if (!selected) return
+  try {
+    await navigator.clipboard.writeText(selected.text)
+    toast(t('reader.selectionCopied'), 'success')
+  } catch { toast(t('common.copyFailed'), 'error') }
+}
+function selectSectionText() {
+  const doc = selectionRange?.startContainer.ownerDocument
+  if (doc?.body) doc.getSelection()?.selectAllChildren(doc.body)
+}
+
 let highlightSaving = false
 
 async function addHighlight(color: string, withNote = false) {
   // 在第一个 await 前拍快照: 存储打开期间改选区不能改变待保存的划线。
   const selected = selection.value
   if (!selected || highlightSaving) return
-  highlightSaving = true
   const rec: Omit<AnnotationRec, 'id'> = {
     bookId,
     kind: 'highlight',
@@ -2749,6 +2797,24 @@ async function addHighlight(color: string, withNote = false) {
     color,
     createdAt: Date.now(),
   }
+  // PW-02: opening the editor must not commit a highlight before the user saves.
+  if (withNote) {
+    let draftContextId: string
+    try {
+      const previous = listDrafts(bookId).filter(draft => draft.contextId.startsWith('sel:') && draft.sourceLoc === rec.cfi && draft.quote === rec.text)
+        .sort((a, b) => b.updatedAt - a.updatedAt)[0]
+      draftContextId = previous?.contextId ?? `sel:${crypto.randomUUID()}`
+    } catch {
+      localDraftError.value = t('reader.ideaDraftUnavailable')
+      toast(localDraftError.value, 'error')
+      return
+    }
+    noteDraft.value = ''
+    activeAnnotation.value = { ...rec, draftContextId }
+    if (selection.value?.cfi === selected.cfi) selection.value = null
+    return
+  }
+  highlightSaving = true
   try {
     const storage = await getStorage()
     const id = await storage.addAnnotation(rec)
@@ -2759,12 +2825,7 @@ async function addHighlight(color: string, withNote = false) {
     } catch { /* 绘制失败不影响保存 */ }
     // 仅在选区仍是同一条时清理; 用户已选别的文字则保留新选区。
     if (selection.value?.cfi === selected.cfi) selection.value = null
-    if (withNote) {
-      noteDraft.value = ''
-      activeAnnotation.value = saved
-    } else {
-      toast(t('reader.highlighted'), 'success')
-    }
+    toast(t('reader.highlighted'), 'success')
   } catch (error) {
     toast(`${t('reader.highlightSaveFailed')} ${error instanceof Error ? error.message : ''}`.trim(), 'error')
   } finally {
@@ -2775,15 +2836,35 @@ async function addHighlight(color: string, withNote = false) {
 const noteSaving = ref(false)
 let noteDraftSaver: DebouncedDraftSaver | null = null
 const localDraftError = ref('')
+const noteWriteUnconfirmed = ref(false)
+const annotationRecoveryNotice = ref('')
 watch(activeAnnotation, active => {
   noteDraftSaver?.cancel()
   noteDraftSaver = null
   localDraftError.value = ''
+  noteWriteUnconfirmed.value = false
+  annotationRecoveryNotice.value = ''
   if (!active) return
-  const context = { bookId, contextId: `anno:${active.id}`, quote: active.text, sourceLoc: active.cfi }
+  const context = { bookId, contextId: active.draftContextId ?? (active.id ? `anno:${active.id}` : `sel:${active.cfi}`), quote: active.text, sourceLoc: active.cfi }
   const restored = loadNoteDraft(context)
-  if (restored.success) noteDraft.value = restored.draft.text
-  else {
+  if (restored.success) {
+    noteDraft.value = restored.draft.text
+    if (active.draftContextId) {
+      const token = readerContext.capture()
+      void annotationIdForDraft(context).then(id => {
+        if (!readerContext.current(token) || activeAnnotation.value !== active) return
+        const committed = annotations.value.find(item => item.id === id)
+        if (committed && committed.cfi === active.cfi && committed.text === active.text) {
+          active.id = committed.id
+          active.note = committed.note
+          active.color = committed.color
+          annotationRecoveryNotice.value = t('reader.selectionDraftAlreadySaved')
+        }
+      }).catch(() => {
+        if (readerContext.current(token) && activeAnnotation.value === active) localDraftError.value = t('reader.draftRestoreFailed')
+      })
+    }
+  } else {
     noteDraft.value = active.note ?? ''
     if (restored.error !== 'not_found') localDraftError.value = restored.message
   }
@@ -2791,6 +2872,35 @@ watch(activeAnnotation, active => {
     localDraftError.value = result.success ? '' : result.message
   } })
 }, { flush: 'sync' })
+
+async function restoreSelectionDraft(contextId: string) {
+  if (!contextId.startsWith('sel:')) return
+  const token = readerContext.capture()
+  const previous = activeAnnotation.value
+  const previousText = noteDraft.value
+  const restored = loadNoteDraft({ bookId, contextId })
+  if (!restored.success) {
+    toast(t('reader.draftRestoreFailed'), 'error')
+    return
+  }
+  try {
+    const draft = restored.draft
+    if (!draft.sourceLoc) throw new Error('Draft source unavailable')
+    const id = await annotationIdForDraft(draft)
+    const committed = annotations.value.find(item => item.id === id)
+    if (committed && (committed.cfi !== draft.sourceLoc || committed.text !== (draft.quote ?? ''))) throw new Error('Draft identity conflict')
+    await navigateReader(draft.sourceLoc)
+    if (!readerContext.current(token) || activeAnnotation.value !== previous || noteDraft.value !== previousText || !preserveReaderNote()) return
+    closeOverlays()
+    activeAnnotation.value = {
+      ...(committed ?? { bookId, kind: 'highlight', cfi: draft.sourceLoc, text: draft.quote ?? '', color: 'yellow', createdAt: Date.now() }),
+      draftContextId: contextId,
+    }
+    noteDraft.value = draft.text
+  } catch {
+    if (readerContext.current(token)) toast(t('reader.draftRestoreFailed'), 'error')
+  }
+}
 
 function captureNoteDraft() { noteDraftSaver?.save(noteDraft.value) }
 function preserveReaderNote(): boolean {
@@ -2803,6 +2913,14 @@ function closeAnnotation(): boolean {
   if (!preserveReaderNote()) return false
   activeAnnotation.value = null
   return true
+}
+function discardAnnotationDraft() {
+  const active = activeAnnotation.value
+  if (!active || active.id || noteSaving.value) return
+  const result = removeNoteDraft({ bookId, contextId: active.draftContextId ?? `sel:${active.cfi}` })
+  if (!result.success) { localDraftError.value = result.message ?? ''; return }
+  noteDraftSaver?.cancel()
+  activeAnnotation.value = null
 }
 function protectReaderUnload(event: BeforeUnloadEvent) {
   if (typographyApplying.value || !preserveReaderNote()) { event.preventDefault(); event.returnValue = '' }
@@ -2821,25 +2939,72 @@ onBeforeUnmount(() => {
   noteDraftSaver?.cancel()
 })
 
+async function inspectSavedNotes() {
+  if (!preserveReaderNote()) return
+  try { await router.push({ path: '/notes', query: { bookId } }) }
+  catch { toast(t('reader.sourceUnavailable'), 'error') }
+}
+
 async function saveNote() {
   const active = activeAnnotation.value
   if (!active || noteSaving.value) return
   const draft = noteDraft.value
   const token = readerContext.capture()
   noteSaving.value = true
+  let writeStarted = false
   try {
     const storage = await getStorage()
     const note = draft.trim() || undefined
-    await storage.updateAnnotation(active.id, { note })
+    const contextId = active.draftContextId ?? (active.id ? `anno:${active.id}` : `sel:${active.cfi}`)
+    const context = { bookId, contextId, quote: active.text, sourceLoc: active.cfi }
+    const isNew = !active.id
+    const id = active.id ?? await annotationIdForDraft(context)
+    const known = annotations.value.find(item => item.id === id)
+    if (isNew && known && (known.bookId !== bookId || known.cfi !== active.cfi || known.text !== active.text)) throw new Error('Draft identity conflict')
+    if (isNew) {
+      const prepared = saveNoteDraft(context, draft)
+      if (!prepared.success) { localDraftError.value = prepared.message; return }
+    }
+    const { draftContextId: _draftContextId, ...record } = active
+    const saved: AnnotationRec = { ...record, id, createdAt: known?.createdAt ?? record.createdAt, color: known?.color ?? record.color, note }
+    // PW-02: a lost write receipt or failed cleanup must reuse the same identity after restart.
+    writeStarted = true
+    if (isNew && !known) {
+      if (await storage.addAnnotation(saved) !== id) throw new Error('Annotation receipt mismatch')
+    } else await storage.updateAnnotation(id, { note: note ?? '' })
     if (!readerContext.current(token)) return
-    active.note = note
-    const item = annotations.value.find(a => a.id === active.id)
+    if (activeAnnotation.value === active) noteWriteUnconfirmed.value = false
+    const item = annotations.value.find(a => a.id === id)
     if (item) item.note = note
-    const cleanup = removeNoteDraft({ bookId, contextId: `anno:${active.id}` })
-    if (activeAnnotation.value?.id === active.id && noteDraft.value === draft) activeAnnotation.value = null
-    toast(cleanup.success ? t('reader.noteSaved') : t('reader.noteSavedDraftCleanupFailed'), cleanup.success ? 'success' : 'error')
+    else if (isNew) {
+      annotations.value.push(saved)
+      try { view.addAnnotation({ value: saved.cfi, color: saved.color }) }
+      catch { /* PW-02: rendering failure does not roll back an acknowledged note write. */ }
+    }
+    active.id = id
+    active.note = note
+    if (activeAnnotation.value !== active) return
+    if (noteDraft.value !== draft) {
+      captureNoteDraft()
+      const preserved = noteDraftSaver?.flush()
+      if (preserved && !preserved.success) localDraftError.value = preserved.message
+      toast(t('reader.noteSavedNewerDraft'), 'success')
+      return
+    }
+    noteDraftSaver?.cancel()
+    const cleanup = removeNoteDraft(context)
+    if (!cleanup.success) {
+      localDraftError.value = t('reader.noteSavedDraftCleanupFailed')
+      toast(localDraftError.value, 'error')
+      return
+    }
+    activeAnnotation.value = null
+    toast(t('reader.noteSaved'), 'success')
   } catch {
-    if (readerContext.current(token)) toast(t('reader.noteSaveFailed'), 'error')
+    if (readerContext.current(token)) {
+      if (activeAnnotation.value === active) noteWriteUnconfirmed.value = writeStarted
+      toast(t(writeStarted ? 'reader.noteSaveUnconfirmed' : 'reader.noteSaveFailed'), 'error')
+    }
   } finally { noteSaving.value = false }
 }
 
@@ -2866,7 +3031,8 @@ async function toggleBookmark() {
   toast(t('reader.bookmarkAdded'), 'success')
 }
 
-async function removeAnnotation(a: AnnotationRec) {
+async function removeAnnotation(a: EditableAnnotation) {
+  if (!a.id || noteSaving.value) return
   const storage = await getStorage()
   await storage.deleteAnnotation(a.id)
   annotations.value = annotations.value.filter(x => x.id !== a.id)
@@ -3354,6 +3520,10 @@ onMounted(async () => {
     if (!readerContext.current(context)) { typographyBookOwner.release(); return }
     const openedView = view
     await openedView.open(foliateBook)
+    if (readerContext.current(context) && openedView === view && openedView.renderer) {
+      recommendationRenderer = openedView.renderer as EventTarget
+      recommendationRenderer.addEventListener('relocate', captureRecommendationRelocate, true)
+    }
     bookOpened = true
     if (!readerContext.current(context)) { openedView.close?.(); return }
     // 跨章连续滚动的渲染器事件 (view 不转发): 主章切换、远处分节卸载。旧版渲染器不会派发
@@ -3418,6 +3588,7 @@ onMounted(async () => {
         ttsPanel.value = true
       } else listenDetached.value = false
     } catch (nativeError) { toast(t(systemTtsErrorKey(nativeError)), 'error') }
+    if (typeof route.query.draft === 'string') await restoreSelectionDraft(route.query.draft)
   } catch (e: any) {
     if (!bookOpened) typographyBookOwner.release()
     if (readerContext.current(context)) {
@@ -3430,6 +3601,9 @@ onMounted(async () => {
 })
 
 onBeforeUnmount(() => {
+  endRecommendationGate.dispose()
+  recommendationRenderer?.removeEventListener('relocate', captureRecommendationRelocate, true)
+  recommendationRenderer = null
   textConversion.abort()
   setPageBarsDark(null)
   window.removeEventListener('keydown', handleKeydown)
@@ -3466,7 +3640,22 @@ onBeforeUnmount(() => {
 let traversingBack = false
 const stopHistoryTracking = router.options.history.listen((_to, _from, info) => { traversingBack = info.direction === 'back' })
 onBeforeUnmount(stopHistoryTracking)
+function recommendationOfferBlocked(): boolean {
+  return anyOverlayOpen() || !!selection.value || readerSession.inspecting || readerSession.navigating ||
+    typographyApplying.value || loading.value || pageTurning || ttsState.value === 'playing' || modes.progressActive.value || autoReading.value
+}
+function consumeEndRecommendationOffer() {
+  const atEnd = view?.renderer?.atEnd
+  if (typeof atEnd === 'boolean' && endRecommendationGate.consume(String(route.params.id || ''), atEnd, recommendationOfferBlocked())) endRecommendationsOpen.value = true
+}
+function navigateEndRecommendation(id: string) {
+  if (endRecommendationsDialog.value?.isWriting()) return
+  void router.push(`/book/${encodeURIComponent(id)}`)
+}
+watch(() => [primaryPanel.value, modes.panelOpen.value, dj.overlayOpen.value, !!selection.value, typographyApplying.value, loading.value, ttsState.value, modes.progressActive.value, autoReading.value], consumeEndRecommendationOffer)
+
 onBeforeRouteLeave(async () => {
+  if (endRecommendationsDialog.value?.isWriting()) return false
   const wasBack = traversingBack
   traversingBack = false
   if (typographyApplying.value || noteSaving.value) return false
@@ -3501,7 +3690,7 @@ onBeforeRouteLeave(async () => {
 
     <!-- 顶栏 -->
     <header class="bar top" :class="{ hidden: !barsVisible }" @mouseenter="cancelBarsTimer">
-      <button class="icon-btn reader-back-btn" :title="t('common.back')" :aria-label="t('common.back')" @click="readerBack">
+      <button class="icon-btn reader-back-btn" :title="t('common.back')" :aria-label="t('common.back')" @click="handleNativeReaderBack('toolbar')">
         <AppIcon name="back" :size="20" aria-hidden="true" />
         <span class="btn-text">{{ t('common.back') }}</span>
       </button>
@@ -3767,6 +3956,7 @@ onBeforeRouteLeave(async () => {
     />
 
     <!-- 伴读: 首次同意 / 解释卡 / 章首要义 / 脉络 / 速读 / 状态 -->
+    <BookEndRecommendationsDialog ref="endRecommendationsDialog" v-model="endRecommendationsOpen" :book-id="bookId" @navigate="navigateEndRecommendation" />
     <PagewiseCompanionConsent v-if="dj.consentOpen.value" :dj="dj" />
     <PagewiseCompanionCard v-if="dj.card.value" :dj="dj" @inspect="inspectPagewiseCompanionCard" />
     <PagewiseCompanionChapterCard v-if="dj.chapterCard.value" :dj="dj" />
@@ -3785,6 +3975,9 @@ onBeforeRouteLeave(async () => {
 
     <!-- 高亮选区浮条 -->
     <div v-if="selection" class="highlight-bar card">
+      <p v-if="localDraftError" role="alert" style="flex-basis: 100%; margin: 0">{{ localDraftError }}</p>
+      <button class="btn btn-sm" @click="copySelectedText">{{ t('reader.copySelection') }}</button>
+      <button class="btn btn-sm" @click="selectSectionText">{{ t('reader.selectSection') }}</button>
       <span class="hl-hint">{{ t('reader.highlight') }}</span>
       <button
         v-for="name in Object.keys(HIGHLIGHT_COLORS)"
@@ -3795,7 +3988,7 @@ onBeforeRouteLeave(async () => {
         :title="t(annotationLabelKey(name as string, modes.einkActive.value))"
         :aria-label="t(annotationLabelKey(name as string, modes.einkActive.value))"
         @click="addHighlight(name as string)"
-      ><span v-if="modes.einkActive.value">{{ t(annotationLabelKey(name as string, true)) }}</span></button>
+      ><span>{{ t(annotationLabelKey(name as string, modes.einkActive.value)) }}</span></button>
       <button class="btn btn-sm" @click="addHighlight('yellow', true)"><svg viewBox="0 0 24 24" width="14" height="14" aria-hidden="true"><path fill="currentColor" d="M5 4h14a2 2 0 0 1 2 2v9a2 2 0 0 1-2 2H10l-4.3 3.4A1 1 0 0 1 4 19.6V6a2 2 0 0 1 1-2zm1 2v11.5L9.3 15H19V6H6zm2 2.5h8a1 1 0 1 1 0 2H8a1 1 0 1 1 0-2zm0 3h5a1 1 0 1 1 0 2H8a1 1 0 1 1 0-2z"/></svg>{{ t('reader.writeNote') }}</button>
       <button class="btn btn-sm" @click="aiExplainSelection"><svg viewBox="0 0 24 24" width="14" height="14" aria-hidden="true"><path fill="currentColor" d="M10 3a1 1 0 0 1 .95.68l1.3 3.9a3 3 0 0 0 1.9 1.9l3.9 1.3a1 1 0 0 1 0 1.9l-3.9 1.3a3 3 0 0 0-1.9 1.9l-1.3 3.9a1 1 0 0 1-1.9 0l-1.3-3.9a3 3 0 0 0-1.9-1.9l-3.9-1.3a1 1 0 0 1 0-1.9l3.9-1.3a3 3 0 0 0 1.9-1.9l1.3-3.9A1 1 0 0 1 10 3zm8-1a1 1 0 0 1 .95.68l.4 1.2.97.32a1 1 0 0 1 0 1.9l-.97.32-.4 1.2a1 1 0 0 1-1.9 0l-.4-1.2-.97-.32a1 1 0 0 1 0-1.9l.97-.32.4-1.2A1 1 0 0 1 18 2z"/></svg>{{ t('ai.explain') }}</button>
       <button v-if="dj.selectionKey.value" class="btn btn-sm" @click="dj.openKeyCard(); selection = null">{{ t('companion.why') }}</button>
@@ -3804,8 +3997,10 @@ onBeforeRouteLeave(async () => {
     </div>
 
     <!-- 标注详情 / 想法编辑浮层 -->
-    <div v-if="activeAnnotation" class="annotation-pop card">
+    <div v-if="activeAnnotation" class="annotation-pop card" role="dialog" :aria-label="t('reader.writeNote')">
       <p class="quote">{{ activeAnnotation.text }}</p>
+      <p v-if="!activeAnnotation.id" class="draft-hint">{{ t('reader.ideaDraftHint') }}</p>
+      <p v-if="annotationRecoveryNotice" class="draft-hint" role="status">{{ annotationRecoveryNotice }}</p>
       <textarea
         v-model="noteDraft"
         class="note-input"
@@ -3816,10 +4011,13 @@ onBeforeRouteLeave(async () => {
         @input="captureNoteDraft"
       />
       <p v-if="localDraftError" role="alert">{{ localDraftError }}</p>
+      <p v-if="noteWriteUnconfirmed" role="alert">{{ t('reader.noteSaveUnconfirmed') }}</p>
       <div class="pop-actions">
-        <button class="btn btn-sm btn-danger" @click="removeAnnotation(activeAnnotation)">{{ t('reader.deleteHighlight') }}</button>
+        <button v-if="activeAnnotation.id" class="btn btn-sm btn-danger" :disabled="noteSaving" @click="removeAnnotation(activeAnnotation)">{{ t('reader.deleteHighlight') }}</button>
+        <button v-else class="btn btn-sm btn-danger" :disabled="noteSaving" @click="discardAnnotationDraft">{{ t('reader.discardIdeaDraft') }}</button>
+        <button v-if="noteWriteUnconfirmed" class="btn btn-sm" :disabled="noteSaving" @click="inspectSavedNotes">{{ t('reader.inspectSavedNotes') }}</button>
         <span style="flex: 1" />
-        <button class="btn btn-sm" :disabled="noteSaving" @click="closeAnnotation">{{ t('common.cancel') }}</button>
+        <button class="btn btn-sm" :disabled="noteSaving" @click="closeAnnotation">{{ t('reader.closeIdeaEditor') }}</button>
         <button class="btn btn-sm btn-primary" :disabled="noteSaving" @click="saveNote">{{ t('reader.saveNote') }}</button>
       </div>
     </div>
@@ -4100,9 +4298,9 @@ onBeforeRouteLeave(async () => {
           <input v-model="searchQuery" class="input" type="search" :placeholder="t('reader.searchPlaceholder')" />
         </form>
         <div class="search-opts">
-          <button type="button" class="search-opt" :class="{ active: searchOpts.caseSensitive }" :title="t('reader.matchCase')" @click="toggleSearchOpt('caseSensitive')">Aa</button>
-          <button type="button" class="search-opt" :class="{ active: searchOpts.wholeWord }" :title="t('reader.wholeWord')" @click="toggleSearchOpt('wholeWord')">\b</button>
-          <button type="button" class="search-opt" :class="{ active: searchOpts.regex }" :title="t('reader.useRegex')" @click="toggleSearchOpt('regex')">.*</button>
+          <button type="button" class="search-opt" :class="{ active: searchOpts.caseSensitive }" :title="t('reader.matchCase')" :aria-label="t('reader.matchCase')" :aria-pressed="searchOpts.caseSensitive" @click="toggleSearchOpt('caseSensitive')">Aa</button>
+          <button type="button" class="search-opt" :class="{ active: searchOpts.wholeWord }" :title="t('reader.wholeWord')" :aria-label="t('reader.wholeWord')" :aria-pressed="searchOpts.wholeWord" @click="toggleSearchOpt('wholeWord')">\b</button>
+          <button type="button" class="search-opt" :class="{ active: searchOpts.regex }" :title="t('reader.useRegex')" :aria-label="t('reader.useRegex')" :aria-pressed="searchOpts.regex" @click="toggleSearchOpt('regex')">.*</button>
           <span v-if="searching" class="search-count">{{ Math.round(searchProgress * 100) }}%</span>
           <span v-else-if="searchQuery && searchResults.length" class="search-count">
             {{ t('reader.resultCount', { n: searchResults.length }) }}{{ searchTruncated ? '+' : '' }}
@@ -4569,6 +4767,9 @@ onBeforeRouteLeave(async () => {
   font-weight: 700;
 }
 .highlight-bar {
+  width: max-content;
+  max-width: calc(100% - 24px);
+  flex-wrap: wrap;
   position: absolute;
   top: calc(56px + var(--safe-top));
   left: 50%;
@@ -4584,11 +4785,28 @@ onBeforeRouteLeave(async () => {
   color: var(--text-2);
 }
 .hl-color {
-  width: 22px;
-  height: 22px;
-  border-radius: 50%;
-  border: 2px solid #fff;
-  box-shadow: 0 0 0 1px var(--border);
+  min-width: 48px;
+  min-height: 48px;
+  padding: 4px 8px;
+  border-radius: 6px;
+  border: 1px solid var(--text-2);
+}
+.hl-color span {
+  padding: 2px 4px;
+  color: var(--text);
+  background: var(--card);
+  white-space: nowrap;
+}
+.highlight-bar .btn,
+.annotation-pop .btn {
+  min-width: 48px;
+  min-height: 48px;
+}
+.draft-hint {
+  margin-bottom: 8px;
+  font-size: 13px;
+  line-height: 1.5;
+  color: var(--text-2);
 }
 .annotation-pop {
   position: absolute;
@@ -4610,6 +4828,7 @@ onBeforeRouteLeave(async () => {
 }
 .pop-actions {
   display: flex;
+  flex-wrap: wrap;
   gap: 8px;
   justify-content: flex-end;
 }
@@ -4619,7 +4838,9 @@ onBeforeRouteLeave(async () => {
   right: 12px;
   bottom: calc(50px + var(--safe-bottom));
   z-index: 15;
-  width: min(320px, calc(100% - 24px));
+  width: min(360px, calc(100% - 24px));
+  min-height: 0;
+  max-height: calc(100dvh - 104px - var(--safe-top) - var(--safe-bottom));
   padding: 16px;
   display: flex;
   flex-direction: column;
@@ -4630,7 +4851,14 @@ onBeforeRouteLeave(async () => {
 }
 .panel-body {
   flex: 1;
+  min-height: 0;
   overflow: auto;
+  overscroll-behavior: contain;
+}
+.panel > button,
+.panel .input {
+  min-height: 48px;
+  flex-shrink: 0;
 }
 .panel-empty {
   color: var(--text-3);
@@ -5198,8 +5426,8 @@ onBeforeRouteLeave(async () => {
   margin-bottom: 8px;
 }
 .search-opt {
-  height: 24px;
-  min-width: 30px;
+  height: 48px;
+  min-width: 48px;
   padding: 0 6px;
   border: 1px solid var(--border);
   border-radius: 5px;
@@ -5495,8 +5723,8 @@ onBeforeRouteLeave(async () => {
     justify-content: center;
   }
   .hl-color {
-    width: 28px;
-    height: 28px;
+    min-width: 48px;
+    min-height: 48px;
   }
   .nav {
     display: none;

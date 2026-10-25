@@ -19,12 +19,18 @@ const emit = defineEmits<{ select: [day: string, trigger: HTMLElement] }>()
 // ---- 宽卡片画年度热力图, 窄卡片 (手机) 画月历: 按卡片实际宽度切换, 不依赖视口断点 ----
 const root = ref<HTMLElement>()
 const compact = ref(false)
+const monthAsList = ref(false)
 let ro: ResizeObserver | undefined
 onMounted(() => {
   const el = root.value
   if (!el) return
-  const measure = (w: number) => { compact.value = w < 600 }
-  measure(el.clientWidth)
+  const measure = (w: number) => {
+    const scale = Math.max(1, Number.parseFloat(getComputedStyle(el).fontSize) / 16)
+    compact.value = w < 672 * scale
+    monthAsList.value = w < 392 * scale
+  }
+  const style = getComputedStyle(el)
+  measure(el.clientWidth - Number.parseFloat(style.paddingLeft) - Number.parseFloat(style.paddingRight))
   if (typeof ResizeObserver !== 'undefined') {
     ro = new ResizeObserver(entries => measure(entries[0].contentRect.width))
     ro.observe(el)
@@ -86,10 +92,6 @@ const monthLabels = computed(() => {
 })
 // 周一起: 显示一 / 三 / 五
 const weekdayLabels = computed(() => [0, 1, 2, 3, 4, 5, 6].map(i => (i % 2 === 0 && i < 6 ? fmtDay(addDays('2024-01-01', i), { weekday: 'short' }) : '')))
-const heatFocus = computed(() => {
-  const d = focusDay.value
-  return d >= firstCell.value && d <= lastCell.value ? d : lastCell.value
-})
 const scopeSummary = computed(() => {
   let seconds = 0
   let days = 0
@@ -144,7 +146,7 @@ function onGridKey(e: KeyboardEvent) {
   const delta = map[e.key]
   if (!delta) return
   e.preventDefault()
-  const from = compact.value ? monthFocus.value : heatFocus.value
+  const from = monthFocus.value
   const next = addDays(from, delta)
   if (next > props.today) return
   if (compact.value) {
@@ -155,6 +157,13 @@ function onGridKey(e: KeyboardEvent) {
   }
   focusDay.value = next
   void nextTick(() => root.value?.querySelector<HTMLElement>(`[data-day="${next}"]`)?.focus())
+}
+function pickDate(event: Event) {
+  const input = event.currentTarget as HTMLInputElement
+  if (/^\d{4}-\d{2}-\d{2}$/.test(input.value) && input.value <= props.today) {
+    focusDay.value = input.value
+    emit('select', input.value, input)
+  }
 }
 function pick(day: string, e: MouseEvent) {
   focusDay.value = day
@@ -187,14 +196,15 @@ function pick(day: string, e: MouseEvent) {
       </div>
     </div>
 
-    <!-- 年度热力图 -->
+    <label class="calendar-date">{{ t('stats.dayDetail') }}<input type="date" :max="today" :value="selectedDay ?? today" @change="pickDate" /></label>
+
+    <!-- Noninteractive year summary: date selection remains available above. -->
     <div
       v-if="!compact"
       class="hm"
       role="group"
       :aria-label="t('stats.heatmapAria')"
       :style="{ '--cols': cols.length }"
-      @keydown="onGridKey"
     >
       <span
         v-for="m in monthLabels"
@@ -212,41 +222,44 @@ function pick(day: string, e: MouseEvent) {
       >{{ w }}</span>
       <template v-for="(col, ci) in cols" :key="ci">
         <template v-for="(cell, ri) in col" :key="`${ci}-${ri}`">
-          <button
+          <span
             v-if="cell"
-            type="button"
             class="hm-cell"
             :class="[`l${heatLevel(cell.seconds)}`, { today: cell.day === today, selected: cell.day === selectedDay }]"
             :style="{ gridColumn: ci + 2, gridRow: ri + 2 }"
-            :data-day="cell.day"
-            :tabindex="cell.day === heatFocus ? 0 : -1"
             :title="cellLabel(cell.day)"
-            :aria-label="cellLabel(cell.day)"
-            @click="pick(cell.day, $event)"
+            aria-hidden="true"
           />
         </template>
       </template>
     </div>
 
-    <!-- 手机: 月历 -->
-    <div v-else class="mc" role="group" :aria-label="t('stats.monthCalAria', { month: monthTitle })" @keydown="onGridKey">
-      <span v-for="(w, i) in weekdayHeads" :key="`h${i}`" class="mc-head" aria-hidden="true">{{ w }}</span>
-      <template v-for="(row, ri) in monthRows" :key="ri">
-        <template v-for="(day, di) in row" :key="`${ri}-${di}`">
-          <span v-if="!day" class="mc-pad" aria-hidden="true" />
-          <button
-            v-else
-            type="button"
-            class="mc-cell"
-            :class="[`l${heatLevel(secondsOf(day))}`, { today: day === today, selected: day === selectedDay, future: day > today }]"
-            :data-day="day"
-            :disabled="day > today"
-            :tabindex="day === monthFocus ? 0 : -1"
-            :aria-label="cellLabel(day)"
-            @click="pick(day, $event)"
-          ><span>{{ Number(day.slice(8)) }}</span></button>
+    <!-- 手机: 月历 (392px 最小安全布局, 确保 7 列触控目标不小于 48px; 488px 容器时优先 56px) -->
+    <div v-else-if="monthAsList" class="month-list">
+      <button v-for="day in monthRows.flat().filter((day): day is string => !!day)" :key="day" type="button" :disabled="day > today" :data-day="day" :aria-label="cellLabel(day)" @click="pick(day, $event)">
+        <span>{{ fmtDayLong(day, today) }}</span><span>{{ fmtDuration(secondsOf(day)) }}</span>
+      </button>
+    </div>
+    <div v-else class="mc-wrap">
+      <div class="mc" role="group" :aria-label="t('stats.monthCalAria', { month: monthTitle })" @keydown="onGridKey">
+        <span v-for="(w, i) in weekdayHeads" :key="`h${i}`" class="mc-head" aria-hidden="true">{{ w }}</span>
+        <template v-for="(row, ri) in monthRows" :key="ri">
+          <template v-for="(day, di) in row" :key="`${ri}-${di}`">
+            <span v-if="!day" class="mc-pad" aria-hidden="true" />
+            <button
+              v-else
+              type="button"
+              class="mc-cell"
+              :class="[`l${heatLevel(secondsOf(day))}`, { today: day === today, selected: day === selectedDay, future: day > today }]"
+              :data-day="day"
+              :disabled="day > today"
+              :tabindex="day === monthFocus ? 0 : -1"
+              :aria-label="cellLabel(day)"
+              @click="pick(day, $event)"
+            ><span>{{ Number(day.slice(8)) }}</span></button>
+          </template>
         </template>
-      </template>
+      </div>
     </div>
 
     <div class="foot">
@@ -264,6 +277,9 @@ function pick(day: string, e: MouseEvent) {
 .cal {
   padding: 20px 24px;
 }
+.calendar-date, .month-list { display: flex; flex-direction: column; gap: 8px; margin-bottom: 16px; }
+.calendar-date input { width: 100%; min-width: 0; }
+.month-list button { display: flex; flex-wrap: wrap; justify-content: space-between; gap: 8px; padding: 12px; text-align: start; }
 .head {
   display: flex;
   align-items: center;
@@ -375,28 +391,46 @@ h2 {
   }
 }
 
-/* ---- 月历 ---- */
+/* ---- 月历 (392px 最小安全布局，7列触控目标不小于 48px；488px 容器下优先 56px) ---- */
+.mc-wrap {
+  width: 100%;
+  overflow-x: auto;
+  -webkit-overflow-scrolling: touch;
+}
 .mc {
+  min-width: 392px;
   display: grid;
-  grid-template-columns: repeat(7, minmax(0, 1fr));
-  gap: 4px;
+  grid-template-columns: repeat(7, minmax(48px, 1fr));
+  gap: 8px;
 }
 .mc-head {
   padding-bottom: 4px;
   color: var(--text-3);
-  font-size: 12px;
+  font-size: 14px;
   text-align: center;
 }
 .mc-cell {
   aspect-ratio: 1;
-  max-height: 52px;
-  border-radius: var(--radius);
+  min-width: 48px;
+  min-height: 48px;
+  border-radius: 2px;
   color: var(--text-2);
-  font-size: 13px;
+  font-size: 14px;
   font-weight: 500;
   font-variant-numeric: tabular-nums;
   display: grid;
   place-items: center;
+  border: 1px solid var(--border, #555555);
+}
+@media (min-width: 488px) {
+  .mc {
+    grid-template-columns: repeat(7, minmax(56px, 1fr));
+    gap: 12px;
+  }
+  .mc-cell {
+    min-width: 56px;
+    min-height: 56px;
+  }
 }
 .mc-cell.l4 {
   color: var(--on-brand);

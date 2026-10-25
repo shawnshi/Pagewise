@@ -7,6 +7,7 @@ import android.graphics.Canvas
 import android.graphics.Paint
 import android.text.InputType
 import android.view.View
+import android.view.ViewGroup
 import android.widget.Button
 import android.widget.EditText
 import android.widget.LinearLayout
@@ -19,6 +20,8 @@ import java.util.Locale
 
 /** UI-only state, retained on reader/book return. Statistics and goals retain their existing canonical owners. */
 internal class NativeStatsUiState {
+    var view = "overview"
+    val positions = mutableMapOf<String, Int>()
     var period = "month"
     var anchor = ""
     var kind = "all"
@@ -49,11 +52,30 @@ internal class NativeStatsPanel(
     private val bars: (List<Pair<String, Double>>) -> View,
     private val repaint: () -> Unit,
     private val recoverSettings: () -> Unit,
+    initialEnglish: Boolean = false,
 ) {
+    private val ui =
+        NativeStatsSettingsUi(
+            activity,
+            ink,
+            if (ink ==
+                android.graphics.Color.WHITE
+            ) {
+                android.graphics.Color.BLACK
+            } else {
+                android.graphics.Color.WHITE
+            },
+        )
     private val root = LinearLayout(activity).apply { orientation = LinearLayout.VERTICAL }
+    private var dayBody: LinearLayout? = null
+    private var dayDialog: AlertDialog? = null
     private val status = text("")
     private var current = JSONObject()
-    private var english = false
+    private var english = initialEnglish
+    private var confirmed = false
+    private val goalButtons = mutableListOf<View>()
+    private var recoveryRow: NativeActionFlow? = null
+    private val retryButton by lazy { button(tr("重试读取", "Retry loading")) { load() } }
     private var closed = false
     private var saving = false
     private var epoch = 0L
@@ -69,28 +91,13 @@ internal class NativeStatsPanel(
     private fun text(
         value: String,
         size: Float = 16f,
-    ) = TextView(activity).apply {
-        this.text = value
-        textSize = size
-        setTextColor(ink)
-        setPadding(dp(4), dp(8), dp(4), dp(8))
-    }
+    ) = ui.text(value, size)
 
     private fun button(
         value: String,
         action: () -> Unit,
-    ) = Button(activity).apply {
-        text = value
-        isAllCaps = false
-        minHeight = dp(48)
-        setTextColor(ink)
-        setOnClickListener {
-            if (!closed &&
-                !saving
-            ) {
-                action()
-            }
-        }
+    ) = ui.button(value) {
+        if (!closed && !saving) action()
     }
 
     private fun duration(seconds: Double): String {
@@ -139,6 +146,9 @@ internal class NativeStatsPanel(
         dayBookOffset: Int = 0,
     ) {
         val token = ++epoch
+        confirmed = false
+        goalButtons.forEach { it.isEnabled = false }
+        (retryButton.parent as? ViewGroup)?.removeView(retryButton)
         if (root.childCount == 0) root.addView(status)
         status.text = tr("正在读取已确认的阅读记录…", "Loading confirmed reading records…")
         request("action.statisticsGet", payload(selected, dayBookOffset)) { result, error ->
@@ -147,7 +157,7 @@ internal class NativeStatsPanel(
                 if (error != null || result == null ||
                     !result.optBoolean("ok")
                 ) {
-                    status.text = error ?: "invalid_statistics_response"
+                    showReadFailure(error ?: "invalid_statistics_response")
                     return@runOnUiThread
                 }
                 try {
@@ -156,61 +166,145 @@ internal class NativeStatsPanel(
                     if (state.anchor.isEmpty()) state.anchor = result.getString("today")
                     if (state.calendarMonth.isEmpty()) state.calendarMonth = state.anchor.take(7)
                     draw(result)
+                    confirmed = true
                     if (selected != null) showDay(result.getJSONObject("selectedDay"))
                 } catch (_: org.json.JSONException) {
-                    status.text = "invalid_statistics_response"
+                    showReadFailure("invalid_statistics_response")
                 }
                 repaint()
             }
         }
     }
 
+    private fun showReadFailure(code: String) {
+        confirmed = false
+        goalButtons.forEach { it.isEnabled = false }
+        status.text = tr(
+            "阅读统计读取失败。页面可能包含上次结果，不代表最新状态；没有把错误当作零条记录。",
+            "Statistics could not be loaded. Any retained results are not current; this error is not an empty history.",
+        ) + "\n" + code
+        if (retryButton.parent == null) root.addView(retryButton, 1)
+        repaint()
+    }
+
     private fun controls(
         parent: LinearLayout,
         values: List<Pair<String, () -> Unit>>,
     ) {
-        val row = LinearLayout(activity)
+        val row = NativeActionFlow(activity)
         values.forEach { (title, action) -> row.addView(button(title, action)) }
-        parent.addView(android.widget.HorizontalScrollView(activity).apply { addView(row) })
+        parent.addView(row)
     }
 
     private fun recoveryEntry() {
-        root.addView(button(tr("核对设置提交 / 恢复", "Inspect settings / recovery")) { recoverSettings() })
+        val row = NativeActionFlow(activity)
+        row.addView(button(tr("核对设置提交 / 恢复", "Inspect settings / recovery")) { recoverSettings() })
+        recoveryRow = row
+        root.addView(row)
     }
 
     private fun draw(result: JSONObject) {
+        goalButtons.clear()
         root.removeAllViews()
         status.text = ""
         root.addView(status)
         recoveryEntry()
+        val tabs = NativeActionFlow(activity)
+        for ((id, label) in listOf("overview" to tr("概览", "Overview"), "trend" to tr("趋势", "Trends"), "calendar" to tr("年历", "Calendar"))) {
+            tabs.addView(
+                ui.button(label, state.view == id) {
+                    if (!closed && !saving && state.view != id) {
+                        val scroll = generateSequence(root.parent) { it.parent }.filterIsInstance<ScrollView>().firstOrNull()
+                        state.positions[state.view] = scroll?.scrollY ?: 0
+                        state.view = id
+                        draw(current)
+                        root.post { if (!closed) scroll?.scrollTo(0, state.positions[id] ?: 0) }
+                    }
+                },
+            )
+        }
+        root.addView(tabs)
+        val background = ui.paper
+        val dashboard = NativeStatsOverviewLayout(activity)
+        val todayCard = ui.card(emphatic = true)
+        val weekCard = ui.card(tr("本周记录", "This week"))
+        val marksCard = ui.card(tr("阅读档案", "Reading register"))
+        val trendCard = ui.card(tr("区间趋势", "Period trends"))
+        val calendarCard = ui.card(tr("阅读年历", "Reading calendar"))
+        val rankCard = ui.card(tr("本期书目排行", "Period book ranking"))
+        val daysCard = ui.card(tr("逐日记录", "Daily records"))
+        if (state.view == "overview") {
+            dashboard.addView(todayCard)
+            dashboard.addView(weekCard)
+            dashboard.addView(marksCard)
+            root.addView(dashboard)
+        } else if (state.view == "trend") {
+            root.addView(trendCard)
+            root.addView(rankCard)
+            root.addView(daysCard)
+        } else {
+            root.addView(calendarCard)
+        }
         val today = result.getString("today")
         val overview = result.getJSONObject("overview")
         val period = result.getJSONObject("period")
-        root.addView(text(tr("今天", "Today") + ": " + duration(overview.getDouble("todaySeconds")), 28f))
-        root.addView(
+        val how =
+            NativeUi.iconTextButton(activity, tr("如何计时", "How timing works"), "info", ink, background) {
+                if (!closed && !saving && dialog?.isShowing != true) {
+                    dialog =
+                        AlertDialog
+                            .Builder(activity)
+                            .setTitle(tr("如何计时", "How timing works"))
+                            .setMessage(
+                                tr(
+                                    "阅读时长来自现有阅读计时记录，不由本页重新计算。每天累计至少 60 秒计为活跃日；较早的累计差额不伪装成逐日记录。阅读目标、重置和导入仍由原有所有者处理。",
+                                    "This page reads existing timing records. An active day requires at least 60 seconds; older cumulative differences are not fabricated as daily records. Goals, reset and imports retain their existing owners.",
+                                ),
+                            ).setPositiveButton(tr("返回", "Back"), null)
+                            .create()
+                            .also { it.show() }
+                }
+            }
+        recoveryRow?.addView(how)
+        if (overview.getJSONObject("milestones").optDouble("totalSeconds", 0.0) <= 0 && result.optDouble("legacySeconds", 0.0) <= 0) {
+            root.removeView(dashboard)
+            root.removeView(trendCard)
+            root.removeView(calendarCard)
+            root.removeView(rankCard)
+            root.removeView(daysCard)
+            val empty = ui.card(emphatic = true)
+            empty.addView(text(tr("还没有阅读记录", "No reading records yet"), 20f))
+            empty.addView(text(tr("从藏书打开一本书后，阅读记录将在这里汇总。", "Open a book from Library to start accumulating reading records."), 14f))
+            empty.addView(button(tr("前往藏书", "Go to Library")) { navigate("/library") })
+            empty.addView(button(tr("设置阅读目标", "Set reading goal")) { editGoal() }.also { goalButtons.add(it) })
+            root.addView(empty)
+            return
+        }
+        todayCard.addView(ui.metric(duration(overview.getDouble("todaySeconds")), tr("今天已记录", "Recorded today")))
+        todayCard.addView(
             text(
                 tr("昨天", "Yesterday") + ": " + duration(overview.getDouble("yesterdaySeconds")) + " · " + tr("连续阅读", "Current streak") +
                     " ${overview.getJSONObject("streak").getInt("current")} " +
                     tr("天", "days"),
             ),
         )
-        root.addView(button(tr("每日目标", "Daily goal") + ": ${result.getInt("goalMinutes")} min") { editGoal() })
+        todayCard.addView(
+            button(tr("每日目标", "Daily goal") + ": ${result.getInt("goalMinutes")} min") { editGoal() }.also { goalButtons.add(it) },
+        )
         val week = overview.getJSONArray("week")
         val todayWeek =
             (0 until week.length()).map { week.getJSONObject(it) }.firstOrNull { it.getBoolean("isToday") }
                 ?: throw org.json.JSONException("missing_today")
-        root.addView(
-            android.widget.ProgressBar(activity, null, android.R.attr.progressBarStyleHorizontal).apply {
-                max = 100
-                progress = (todayWeek.getDouble("ratio") * 100).toInt().coerceIn(0, 100)
-                progressTintList =
-                    android.content.res.ColorStateList
-                        .valueOf(ink)
-                contentDescription = tr("今日目标进度", "Today's goal progress") + ": $progress%"
-            },
-            LinearLayout.LayoutParams(-1, dp(12)),
-        )
-        root.addView(
+        if (result.getInt("goalMinutes") > 0) {
+            todayCard.addView(
+                NativeStatsGoalRule(activity, ui, todayWeek.getDouble("ratio")).apply {
+                    contentDescription =
+                        tr("今日目标进度", "Today's goal progress") + ": ${(todayWeek.getDouble("ratio") * 100).toInt().coerceIn(0, 100)}%"
+                },
+                LinearLayout.LayoutParams(-1, dp(12)),
+            )
+        }
+        todayCard.addView(
             text(
                 if (result.getInt("goalMinutes") <=
                     0
@@ -226,7 +320,7 @@ internal class NativeStatsPanel(
         )
         result.optJSONObject("continueBook")?.let { recent ->
             if (!recent.isNull("readerPath")) {
-                root.addView(
+                todayCard.addView(
                     button(tr("继续阅读：", "Continue: ") + recent.getString("title")) {
                         navigate(recent.getString("readerPath"))
                     },
@@ -234,16 +328,16 @@ internal class NativeStatsPanel(
             }
         }
         if (result.optDouble("legacySeconds") > 0 && overview.getJSONObject("milestones").getDouble("totalSeconds") <= 0) {
-            root.addView(
+            todayCard.addView(
                 text(
                     tr("书目保留累计阅读时间：", "Books retain cumulative reading time: ") + duration(result.getDouble("legacySeconds")) +
                         tr("；不虚构每日分布。", "; no daily distribution is fabricated."),
                 ),
             )
         }
-        root.addView(text(tr("本周（点击日期查看书目）", "This week (tap for books)"), 20f))
+        weekCard.addView(text(tr("本周（点击日期查看书目）", "This week (tap for books)"), 20f))
         controls(
-            root,
+            weekCard,
             (0 until week.length()).map { i ->
                 val d = week.getJSONObject(i)
                 (
@@ -255,7 +349,7 @@ internal class NativeStatsPanel(
             },
         )
         controls(
-            root,
+            trendCard,
             listOf(
                 tr("周", "Week") to {
                     state.changePeriod("week")
@@ -277,7 +371,7 @@ internal class NativeStatsPanel(
             ),
         )
         controls(
-            root,
+            trendCard,
             listOf(
                 tr("上一期", "Previous") to { shift(-1) },
                 tr("当前期", "Current") to
@@ -297,7 +391,10 @@ internal class NativeStatsPanel(
                 tr("下一期", "Next") to { shift(1) },
                 tr("类型", "Kind") to
                     {
-                        choose(listOf("all", "book", "paper")) {
+                        choose(
+                            listOf("all", "book", "paper"),
+                            listOf(tr("全部类型", "All kinds"), tr("图书", "Books"), tr("论文记录", "Paper records")),
+                        ) {
                             state.kind = it
                             state.offset = 0
                             state.bookOffset = 0
@@ -314,8 +411,19 @@ internal class NativeStatsPanel(
                     },
             ),
         )
-        root.addView(text(period.getString("from") + " — " + period.getString("to") + " [${state.kind}]", 18f))
-        root.addView(
+        trendCard.addView(
+            text(
+                period.getString("from") + " — " + period.getString("to") + " · " +
+                    when (state.kind) {
+                        "all" -> tr("全部类型", "All kinds")
+                        "book" -> tr("图书", "Books")
+                        "paper" -> tr("论文记录", "Paper records")
+                        else -> tr("类型未识别", "Unknown kind")
+                    },
+                18f,
+            ),
+        )
+        trendCard.addView(
             text(
                 duration(period.getDouble("seconds")) + " · ${period.getInt("activeDays")} " + tr("活跃日", "active days") +
                     " · ${period.getInt("bookCount")} " +
@@ -323,7 +431,7 @@ internal class NativeStatsPanel(
                 22f,
             ),
         )
-        root.addView(
+        trendCard.addView(
             text(
                 tr(
                     "活跃日平均（每天至少 60 秒）",
@@ -332,7 +440,7 @@ internal class NativeStatsPanel(
             ),
         )
         period.optJSONObject("comparison")?.let { c ->
-            root.addView(
+            trendCard.addView(
                 text(
                     tr("上期同期", "Previous comparable interval") + ": " + duration(c.getDouble("prevSeconds")) +
                         if (c.isNull("deltaRatio")) "" else " · ${String.format(Locale.ROOT, "%+.1f%%", c.getDouble("deltaRatio") * 100)}",
@@ -343,7 +451,7 @@ internal class NativeStatsPanel(
         if (trend.length() >
             0
         ) {
-            root.addView(
+            trendCard.addView(
                 bars(
                     (0 until trend.length()).map {
                         val item = trend.getJSONObject(it)
@@ -351,17 +459,29 @@ internal class NativeStatsPanel(
                             item.getDouble("seconds")
                     },
                 ),
-                LinearLayout.LayoutParams(-1, dp(176)),
+                LinearLayout.LayoutParams(
+                    -1,
+                    dp(
+                        (
+                            176 *
+                                activity.resources.configuration.fontScale
+                                    .coerceAtLeast(1f)
+                        ).toInt(),
+                    ),
+                ),
             )
         }
         val cal = result.getJSONObject("calendar")
-        root.addView(text(tr("年度日历", "Year calendar") + " · " + state.heatmapYear, 22f))
+        calendarCard.addView(ui.heading(if (state.heatmapYear == "recent") tr("最近一年", "Recent year") else state.heatmapYear))
         controls(
-            root,
+            calendarCard,
             listOf(
                 tr("选择年度范围", "Choose year scope") to {
                     val years = period.getJSONArray("years")
-                    choose(listOf("recent") + (0 until years.length()).map { years.getInt(it).toString() }) {
+                    choose(
+                        listOf("recent") + (0 until years.length()).map { years.getInt(it).toString() },
+                        listOf(tr("最近一年", "Recent year")) + (0 until years.length()).map { years.getInt(it).toString() },
+                    ) {
                         state.heatmapYear = it
                         load()
                     }
@@ -370,15 +490,25 @@ internal class NativeStatsPanel(
             ),
         )
         val heat = cal.getJSONArray("heatmap")
-        root.addView(
-            android.widget.HorizontalScrollView(activity).apply {
-                addView(YearHeatmap(heat), android.widget.FrameLayout.LayoutParams(dp(heat.length() * 9), dp(68)))
-            },
+        calendarCard.addView(
+            ui.note(
+                tr(
+                    "深浅表示已有记录；活跃日至少 60 秒，目标着色按当前目标。具体日期通过月历或选日查看。",
+                    "Shades summarize recorded time. Active days require 60s; goal shading uses your current goal. Use calendar/day selection for details.",
+                ),
+            ),
         )
-        calendar(cal)
+        calendarCard.addView(
+            NativeStatsResponsive(
+                activity,
+                YearHeatmap(heat),
+                ui.note(tr("此宽度下请使用月历或选日查看记录。", "Use calendar or day selection at this width.")),
+                heat.length() * 12 + 36,
+            ),
+        )
+        calendar(cal, calendarCard)
         val marks = overview.getJSONObject("milestones")
-        root.addView(text(tr("里程碑", "Milestones"), 22f))
-        root.addView(
+        marksCard.addView(
             text(
                 tr("累计", "Total") + ": " + duration(marks.getDouble("totalSeconds")) + " · ${marks.getInt("activeDays")} " +
                     tr("阅读天", "active days") +
@@ -389,47 +519,46 @@ internal class NativeStatsPanel(
             ),
         )
         marks.optJSONObject("bestDay")?.let {
-            root.addView(
+            marksCard.addView(
                 button(
                     tr("单日最长", "Best day") + ": ${it.getString("day")} · ${duration(it.getDouble("seconds"))}",
                 ) { load(it.getString("day")) },
             )
         }
-        marks.optJSONObject("topBook")?.let { addBook(root, it, tr("读得最久", "Top book") + ": ") }
-        root.addView(text(tr("本期书目排行", "Period book ranking"), 22f))
+        marks.optJSONObject("topBook")?.let { addBook(marksCard, it, tr("读得最久", "Top book") + ": ") }
         val books = result.getJSONObject("books")
         val items = books.getJSONArray("items")
-        for (i in 0 until items.length()) addBook(root, items.getJSONObject(i))
+        for (i in 0 until items.length()) addBook(rankCard, items.getJSONObject(i))
         pager(books, state.bookOffset, {
             state.bookOffset = it
             load()
-        })
-        root.addView(text(tr("逐日记录", "Daily records"), 22f))
+        }, rankCard)
         val days = result.getJSONObject("days")
         val rows = days.getJSONArray("items")
-        if (days.getInt("total") == 0) root.addView(text(tr("此范围没有已记录的阅读时间。", "No recorded reading time in this range.")))
+        if (days.getInt("total") == 0) daysCard.addView(text(tr("此范围没有已记录的阅读时间。", "No recorded reading time in this range.")))
         for (i in 0 until rows.length()) {
             val d = rows.getJSONObject(i)
-            root.addView(button("${d.getString("day")}  ${duration(d.getDouble("seconds"))}") { load(d.getString("day")) })
+            daysCard.addView(button("${d.getString("day")}  ${duration(d.getDouble("seconds"))}") { load(d.getString("day")) })
         }
         pager(days, state.offset, {
             state.offset = it
             load()
-        })
+        }, daysCard)
     }
 
     private fun pager(
         dto: JSONObject,
         offset: Int,
         move: (Int) -> Unit,
+        parent: LinearLayout = root,
     ) {
         val total = dto.getInt("total")
         val limit = dto.getInt("limit")
-        root.addView(text("${if (total == 0) 0 else offset + 1}–${(offset + limit).coerceAtMost(total)} / $total", 13f))
-        val row = LinearLayout(activity)
+        parent.addView(text("${if (total == 0) 0 else offset + 1}–${(offset + limit).coerceAtMost(total)} / $total", 13f))
+        val row = NativeActionFlow(activity)
         row.addView(button(tr("上页", "Previous page")) { move((offset - limit).coerceAtLeast(0)) }.apply { isEnabled = offset > 0 })
         row.addView(button(tr("下页", "Next page")) { move(offset + limit) }.apply { isEnabled = offset + limit < total })
-        root.addView(row)
+        parent.addView(row)
     }
 
     private fun addBook(
@@ -444,18 +573,31 @@ internal class NativeStatsPanel(
         ) {
             parent.addView(text(title))
         } else {
-            parent.addView(button(title) { navigate("/book/${android.net.Uri.encode(id)}") })
+            parent.addView(
+                ui.settingRow(prefix + book.getString("title"), duration(book.getDouble("seconds"))) {
+                    if (!closed &&
+                        !saving
+                    ) {
+                        navigate("/book/${android.net.Uri.encode(id)}")
+                    }
+                },
+            )
         }
     }
 
-    private fun calendar(data: JSONObject) {
-        root.addView(text(tr("月历", "Calendar") + " · " + data.getString("month"), 22f))
-        controls(root, listOf(tr("上月", "Previous month") to { shiftMonth(-1) }, tr("下月", "Next month") to { shiftMonth(1) }))
+    private fun calendar(
+        data: JSONObject,
+        parent: LinearLayout = root,
+    ) {
+        parent.addView(ui.heading(tr("月历", "Calendar") + " · " + data.getString("month")))
+        controls(parent, listOf(tr("上月", "Previous month") to { shiftMonth(-1) }, tr("下月", "Next month") to { shiftMonth(1) }))
+        val grid = ui.column()
+        val list = ui.column()
         val header = LinearLayout(activity)
-        (1..7).forEach {
-            header.addView(text(it.toString()).apply { gravity = android.view.Gravity.CENTER }, LinearLayout.LayoutParams(0, -2, 1f))
+        listOf(tr("一", "Mon"), tr("二", "Tue"), tr("三", "Wed"), tr("四", "Thu"), tr("五", "Fri"), tr("六", "Sat"), tr("日", "Sun")).forEach {
+            header.addView(ui.note(it).apply { gravity = android.view.Gravity.CENTER }, LinearLayout.LayoutParams(0, -2, 1f))
         }
-        root.addView(header)
+        grid.addView(header)
         val rows = data.getJSONArray("rows")
         for (r in 0 until rows.length()) {
             val row = LinearLayout(activity)
@@ -466,22 +608,19 @@ internal class NativeStatsPanel(
                         text("")
                     } else {
                         val d = cells.getJSONObject(c)
-                        button(
-                            d.getString("day").takeLast(2) + "\n" + duration(d.getDouble("seconds")),
-                        ) { load(d.getString("day")) }.apply {
-                            minWidth =
-                                0
-                            ; minimumWidth = 0
-                            textSize = 12f
-                            setPadding(0, dp(4), 0, dp(4))
-                            contentDescription =
-                                d.getString("day") + ": " + duration(d.getDouble("seconds"))
+                        val day = d.getString("day")
+                        list.addView(ui.settingRow(day, duration(d.getDouble("seconds"))) { if (!closed && !saving) load(day) })
+                        button(day.takeLast(2)) { load(day) }.apply {
+                            minimumWidth = dp(48)
+                            minWidth = dp(48)
+                            contentDescription = day + ": " + duration(d.getDouble("seconds"))
                         }
                     }
-                row.addView(cell, LinearLayout.LayoutParams(0, -2, 1f))
+                row.addView(cell, LinearLayout.LayoutParams(0, -2, 1f).apply { if (c < cells.length() - 1) marginEnd = dp(4) })
             }
-            root.addView(row)
+            grid.addView(row)
         }
+        parent.addView(NativeStatsResponsive(activity, grid, list, 392))
     }
 
     private fun shift(delta: Int) {
@@ -523,17 +662,20 @@ internal class NativeStatsPanel(
 
     private fun choose(
         options: List<String>,
+        labels: List<String> = options,
         action: (String) -> Unit,
     ) {
         if (options.isEmpty()) return
         dialog?.dismiss()
+        dayBody = null
+        dayDialog = null
         dialog =
             AlertDialog
-                .Builder(
-                    activity,
-                ).setItems(options.toTypedArray()) { _, index -> action(options[index]) }
+                .Builder(activity)
+                .setItems(labels.toTypedArray()) { _, index -> action(options[index]) }
                 .setNegativeButton(tr("取消", "Cancel"), null)
                 .show()
+                .also { it.window?.setWindowAnimations(0) }
     }
 
     private fun range() {
@@ -573,32 +715,44 @@ internal class NativeStatsPanel(
     private inner class YearHeatmap(
         private val columns: JSONArray,
     ) : View(activity) {
-        private val paint = Paint(Paint.ANTI_ALIAS_FLAG).apply { color = ink }
+        private val paint = Paint(Paint.ANTI_ALIAS_FLAG)
 
         init {
             contentDescription =
                 tr("年度阅读日历，具体日期可通过月历或选择日期查看。", "Year reading calendar; use month/day controls for accessible day details.")
         }
 
+        override fun onMeasure(
+            widthMeasureSpec: Int,
+            heightMeasureSpec: Int,
+        ) {
+            setMeasuredDimension(MeasureSpec.getSize(widthMeasureSpec), resolveSize(dp(100), heightMeasureSpec))
+        }
+
         override fun onDraw(canvas: Canvas) {
             super.onDraw(canvas)
-            val size = dp(9).toFloat()
+            if (columns.length() == 0) return
+            val size = minOf(dp(12).toFloat(), width.toFloat() / columns.length())
             for (x in 0 until columns.length()) {
                 val column = columns.getJSONArray(x)
                 for (y in 0 until column.length()) {
                     if (!column.isNull(y)) {
                         val seconds = column.getJSONObject(y).getDouble("seconds")
-                        paint.alpha =
-                            if (seconds <= 0) {
-                                25
-                            } else if (seconds < 60) {
-                                85
-                            } else if (seconds < current.getInt("goalMinutes") * 60) {
-                                165
-                            } else {
-                                255
+                        paint.color =
+                            when {
+                                seconds <= 0 -> ui.paper
+                                seconds < 60 -> ui.selectedSurface
+                                seconds < current.getInt("goalMinutes") * 60 -> ui.secondary
+                                else -> ui.primary
                             }
+                        paint.style = Paint.Style.FILL
                         canvas.drawRect(x * size + 1, y * size + 1, (x + 1) * size - 1, (y + 1) * size - 1, paint)
+                        if (seconds <= 0) {
+                            paint.color = ui.secondary
+                            paint.style = Paint.Style.STROKE
+                            paint.strokeWidth = 1f
+                            canvas.drawRect(x * size + 1, y * size + 1, (x + 1) * size - 1, (y + 1) * size - 1, paint)
+                        }
                     }
                 }
             }
@@ -606,41 +760,46 @@ internal class NativeStatsPanel(
     }
 
     private fun showDay(day: JSONObject) {
-        val form = LinearLayout(activity).apply { orientation = LinearLayout.VERTICAL }
-        form.addView(text(day.getString("day") + " · " + duration(day.getDouble("seconds")), 22f))
+        val reuse = dayBody != null && dialog === dayDialog && dayDialog?.isShowing == true
+        val focusTitle = if (reuse) (dayDialog?.currentFocus as? Button)?.text?.toString() else null
+        val form = if (reuse) dayBody!! else ui.column().also { dayBody = it }
+        form.removeAllViews()
+        form.addView(ui.metric(duration(day.getDouble("seconds")), day.getString("day")))
         val books = day.getJSONArray("books")
         for (i in 0 until books.length()) addBook(form, books.getJSONObject(i))
         val offset = day.getInt("offset")
-        val limit = day.getInt("limit")
         val total = day.getInt("totalBooks")
-        form.addView(text("${if (total == 0) 0 else offset + 1}–${(offset + limit).coerceAtMost(total)} / $total"))
-        val pager = LinearLayout(activity)
-        pager.addView(
-            button(tr("上页", "Previous page")) { load(day.getString("day"), (offset - limit).coerceAtLeast(0)) }.apply {
-                isEnabled =
-                    offset > 0
-            },
-        )
-        pager.addView(
-            button(tr("下页", "Next page")) { load(day.getString("day"), offset + limit) }.apply {
-                isEnabled =
-                    offset + limit < total
-            },
-        )
-        form.addView(pager)
-        dialog?.dismiss()
-        dialog =
-            AlertDialog
-                .Builder(
+        val limit = day.getInt("limit")
+        pager(JSONObject().put("total", total).put("limit", limit), offset, { load(day.getString("day"), it) }, form)
+        if (books.length() == 0) form.addView(ui.note(tr("当天没有已记录的阅读时间。", "No recorded reading time on this day.")))
+        if (focusTitle != null) {
+            form.post {
+                fun find(view: View): Button? {
+                    if (view is Button && view.text.toString() == focusTitle && view.isEnabled) return view
+                    if (view is android.view.ViewGroup) for (i in 0 until view.childCount) find(view.getChildAt(i))?.let { return it }
+                    return null
+                }
+                (find(form) ?: dayDialog?.getButton(AlertDialog.BUTTON_NEGATIVE))?.requestFocusFromTouch()
+            }
+        }
+        if (!reuse) {
+            dialog?.dismiss()
+            dayDialog =
+                NativeStatsSettingsDialog(
                     activity,
-                ).setView(ScrollView(activity).apply { addView(form) })
-                .setPositiveButton(tr("关闭", "Close"), null)
-                .show()
+                    tr("当日详情", "Day details"),
+                    form,
+                    ui,
+                    listOf(AlertDialog.BUTTON_NEGATIVE to tr("返回", "Back")),
+                ).also { it.show() }
+            dialog = dayDialog
+        }
     }
 
     private fun editGoal() {
+        if (!confirmed || closed || saving) return
         val input =
-            EditText(activity).apply {
+            ui.field().apply {
                 inputType = InputType.TYPE_CLASS_NUMBER
                 setText(current.getInt("goalMinutes").toString())
                 hint =
@@ -653,17 +812,19 @@ internal class NativeStatsPanel(
                 addView(input)
                 addView(error)
             }
-        val alert =
-            AlertDialog
-                .Builder(
-                    activity,
-                ).setTitle(
-                    tr("每日目标（0 为不设目标）", "Daily goal (0 disables goal)"),
-                ).setView(form)
-                .setNegativeButton(tr("取消", "Cancel"), null)
-                .setNeutralButton(tr("核对恢复", "Recovery"), null)
-                .setPositiveButton(tr("保存", "Save"), null)
-                .create()
+        dayBody = null
+        val alert: AlertDialog =
+            NativeStatsSettingsDialog(
+                activity,
+                tr("每日目标（0 为不设目标）", "Daily goal (0 disables goal)"),
+                form,
+                ui,
+                listOf(
+                    AlertDialog.BUTTON_NEGATIVE to tr("取消", "Cancel"),
+                    AlertDialog.BUTTON_NEUTRAL to tr("核对恢复", "Recovery"),
+                    AlertDialog.BUTTON_POSITIVE to tr("保存", "Save"),
+                ),
+            )
         dialog = alert
         alert.setCanceledOnTouchOutside(false)
         alert.setOnShowListener {
@@ -672,7 +833,7 @@ internal class NativeStatsPanel(
                 if (saving) return@setOnClickListener
                 val value = input.text.toString().toIntOrNull()
                 if (value == null || value !in 0..1440) {
-                    error.text = "invalid_setting_value"
+                    error.text = tr("请输入 0–1440 之间的整数分钟。", "Enter whole minutes from 0 to 1440.")
                     return@setOnClickListener
                 }
                 saving = true

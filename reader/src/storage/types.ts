@@ -147,17 +147,39 @@ export interface LocalFileRef {
 export const isLocalFileRef = (v: unknown): v is LocalFileRef =>
   !!v && typeof v === 'object' && (v as { kind?: unknown }).kind === 'local-file'
 
+/** Canonical fields used to guard a user-confirmed introduction replacement. */
+export interface BookDescriptionSnapshot {
+  readonly id: string
+  readonly title: string
+  readonly author: string
+  readonly publisher: string
+  readonly publicationDate: string
+  readonly description: string
+}
+
+/** Snapshot guarding a user-requested status-only change; never changes CFI or progress. */
+export interface BookReadingStatusSnapshot {
+  readonly readingStatus: ReadingStatus | null
+  readonly lastReadAt: number | null
+  readonly progress: number | null
+}
+
 export interface LibraryStorage {
   /** 后端名称, 设置页展示 */
   readonly kind: 'indexeddb' | 'filesystem'
   init(): Promise<void>
 
   listBooks(): Promise<BookMeta[]>
+  /** Bounded recommendation metadata projection; does not decode book text or annotations. */
+  listRecommendationBooks?(): Promise<BookMeta[]>
   getBook(id: string): Promise<BookMeta | undefined>
   addBook(meta: NewBookMeta, file: Blob, cover?: Blob): Promise<string>
   /** Registers a read-only source document without copying its contents. */
   addReferencedBook(meta: NewBookMeta & { sourceRef: BookSourceRef }, cover?: Blob): Promise<string>
   updateBook(id: string, patch: Partial<Omit<BookMeta, 'id'>>): Promise<void>
+  /** Atomic metadata/old-description CAS; absence is unsupported, never an unsafe updateBook fallback. */
+  updateBookDescription?(id: string, expected: BookDescriptionSnapshot, description: string): Promise<void>
+  updateBookReadingStatus?(id: string, expected: BookReadingStatusSnapshot, status: ReadingStatus): Promise<void>
   /**
    * 原子累加累计阅读秒数并返回新值。可选: 不支持的实现回退到读-改-写。
    * 两个并发计时冲账不能互相覆盖。

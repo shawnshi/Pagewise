@@ -55,7 +55,15 @@ export function createNativeLibraryActions(injected: Partial<Dependencies> = {})
     },
     librarySessionGet: async () => ({ ok: true, session: deps.session(), defaults: DEFAULT_LIBRARY_SESSION, categories: BOOK_CATEGORIES }),
     librarySessionSave: async p => {
-      const patch = sessionPatch(p.session); deps.saveSession(patch)
+      const patch = sessionPatch(p.session)
+      if (p.selectionToken !== undefined) {
+        if (typeof p.selectionToken !== 'string') throw stateError('invalid_payload')
+        const selection = selections.get(p.selectionToken)
+        if (!selection || selection.expires < deps.now()) throw stateError('stale_library_selection')
+        if (typeof patch.lastViewedBookId !== 'string' || !selection.ids.includes(patch.lastViewedBookId)) throw stateError('book_not_found')
+        patch.orderedBookIds = selection.ids.slice(0, 10_000)
+      }
+      deps.saveSession(patch)
       // Existing session owner can retain memory-only state on storage failure; never call this a durable book/settings receipt.
       return { ok: true, session: deps.session(), durability: 'existing-session-owner-not-a-book-settings-receipt' }
     },
@@ -91,7 +99,7 @@ export function createNativeLibraryActions(injected: Partial<Dependencies> = {})
       facet('audienceFilter', b => b.classification?.facets?.audience ? [b.classification.facets.audience] : [])
       facet('workCountryFilter', b => b.classification?.facets?.workCountry ? [b.classification.facets.workCountry] : [])
       facet('workPeriodFilter', b => b.classification?.facets?.workPeriod ? [b.classification.facets.workPeriod] : [])
-      const view = result.items.map(b => ({ id: b.id, title: b.title, author: b.author, format: b.format, language: b.language, source: b.source, tags: b.tags,
+      const view = result.items.map(b => ({ id: b.id, title: b.title, author: b.author, publisher: b.publisher ?? '', publicationDate: b.publicationDate ?? '', format: b.format, language: b.language, source: b.source, tags: b.tags,
         classification: b.classification, progress: b.progress, readingSeconds: b.readingSeconds, readingStatus: b.readingStatus,
         effectiveReadingStatus: resolveReadingStatus(b).effective ?? 'unmarked', fileAvailability: b.fileAvailability ?? 'unknown',
         addedAt: b.addedAt, lastReadAt: b.lastReadAt, pinnedAt: b.pinnedAt, hasCover: b.hasCover, supported: isSupportedBookFormat(b.format),

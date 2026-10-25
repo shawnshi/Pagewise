@@ -1,5 +1,6 @@
 <script setup lang="ts">
 import { computed, nextTick, onBeforeUnmount, ref, watch } from 'vue'
+import { useSettings } from '../../stores/settings'
 import { t } from '../../i18n'
 import type { BookMeta } from '../../storage'
 import { addDays, type DayEntry } from '../../services/readingStats'
@@ -21,6 +22,14 @@ const props = defineProps<{
   returnFocus?: HTMLElement | null
 }>()
 const emit = defineEmits<{ close: []; navigate: [day: string]; open: [book: BookMeta] }>()
+
+const settings = useSettings()
+
+function isEinkOrReduced(): boolean {
+  const isEink = settings.readingMode?.eink?.enabled || (typeof document !== 'undefined' && document.documentElement.classList.contains('pagewise-eink'))
+  const reduce = typeof window !== 'undefined' && window.matchMedia?.('(prefers-reduced-motion: reduce)')?.matches
+  return Boolean(isEink || reduce)
+}
 
 const panel = ref<HTMLElement>()
 const closeBtn = ref<HTMLButtonElement>()
@@ -82,17 +91,18 @@ function onKey(e: KeyboardEvent) {
   }
 }
 
-// 手机底部面板: 按住顶部往下拖可关闭 (只动 transform)
+// 手机底部面板: 按住顶部往下拖可关闭 (墨水屏模式下禁止拖拽跟随与回弹)
 const dragY = ref(0)
 let dragStart: number | null = null
 function onDragStart(e: PointerEvent) {
+  if (isEinkOrReduced()) return
   if (e.pointerType === 'mouse' || !window.matchMedia('(max-width: 720px)').matches) return
   if ((e.target as HTMLElement).closest('button')) return
   dragStart = e.clientY
   ;(e.currentTarget as HTMLElement).setPointerCapture?.(e.pointerId)
 }
 function onDragMove(e: PointerEvent) {
-  if (dragStart == null) return
+  if (isEinkOrReduced() || dragStart == null) return
   dragY.value = Math.max(0, e.clientY - dragStart)
 }
 function onDragEnd() {
@@ -119,8 +129,8 @@ onBeforeUnmount(() => document.documentElement.classList.remove('lr-sheet-open')
           role="dialog"
           aria-modal="true"
           aria-labelledby="stats-day-title"
-          :class="{ dragging: dragY > 0 }"
-          :style="dragY ? { transform: `translateY(${dragY}px)` } : undefined"
+          :class="{ dragging: dragY > 0 && !isEinkOrReduced() }"
+          :style="dragY && !isEinkOrReduced() ? { transform: `translateY(${dragY}px)` } : undefined"
         >
           <header
             class="dd-head"

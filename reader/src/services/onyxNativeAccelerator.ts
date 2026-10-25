@@ -156,9 +156,9 @@ class OnyxNativeAcceleratorService {
     const clampedProgress = Math.max(0, Math.min(1, progress))
     const clampedSeconds = Math.max(0, Math.round(readingDeltaSeconds))
     try {
-      const fn = this.bridge(host)?.stageReadingCheckpoint
-      if (typeof fn === 'function') {
-        return Boolean(fn(bookId, cfi || '', clampedProgress, clampedSeconds))
+      const bridge = this.bridge(host)
+      if (typeof bridge?.stageReadingCheckpoint === 'function') {
+        return Boolean(bridge.stageReadingCheckpoint(bookId, cfi || '', clampedProgress, clampedSeconds))
       }
     } catch {
       // Ignore bridge error

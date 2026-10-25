@@ -1,6 +1,26 @@
 import { jsonObject, stateError, type JsonObject } from './nativeState.ts'
 export type NativeVisibilitySend = (action: string, payload: JsonObject) => Promise<unknown>
 export interface NativeVisibilityResult { applied: boolean; obsolete?: boolean }
+
+const obscuredRoots = new WeakMap<HTMLElement, { aria: string | null; inert: string | null }>()
+function webAccessibilityHidden(hidden: boolean) {
+  if (typeof document === 'undefined') return
+  const root = document.getElementById('app')
+  if (!root) return
+  if (hidden) {
+    if (!obscuredRoots.has(root)) obscuredRoots.set(root, { aria: root.getAttribute('aria-hidden'), inert: root.getAttribute('inert') })
+    root.setAttribute('aria-hidden', 'true')
+    root.setAttribute('inert', '')
+  } else {
+    const original = obscuredRoots.get(root)
+    if (!original) return
+    for (const [name, value] of [['aria-hidden', original.aria], ['inert', original.inert]] as const) {
+      if (value === null) root.removeAttribute(name)
+      else root.setAttribute(name, value)
+    }
+    obscuredRoots.delete(root)
+  }
+}
 /** Module-wide page owner, not a component-local epoch. Dispatch is ordered; delayed native ACKs don't block newer intentions. */
 export function createNativePageVisibility(session: string, send: NativeVisibilitySend, timeoutMs = 35_000) {
   if (!session || !(timeoutMs > 0)) throw stateError('native_protocol_mismatch')
@@ -25,6 +45,7 @@ export function createNativePageVisibility(session: string, send: NativeVisibili
       const reply = bounded(kind, payload).then(value => {
         if (current !== intent) return obsolete()
         if (value.applied !== true || value.visible !== (kind === 'show')) throw stateError('stale_native_visibility')
+        webAccessibilityHidden(kind === 'show')
         return { applied: true }
       })
       // Serialize dispatch, NOT the physical completion of an old draft/visibility request.

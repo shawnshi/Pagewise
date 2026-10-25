@@ -13,6 +13,9 @@ import { saveBookClassification } from './bookTagActions.ts'
 import { saveNoteDraft, loadNoteDraft, listDrafts, discardNoteDraft } from './noteDrafts.ts'
 import { ARCHIVE_LIMITS } from './boundedArchive.ts'
 import { SUPPORTED_EXTS } from './format.ts'
+import { getBookRecommendationActions } from './bookRecommendationActions.ts'
+import { createBookIntroductionActions } from './bookIntroductionActions.ts'
+import type { BookIntroductionOptions } from './bookIntroduction.ts'
 
 export type NativeManagementHandler = (payload: Record<string, unknown>) => Promise<Record<string, unknown>>
 type Folder = Pick<ReturnType<typeof useFolderLibrary>, 'status' | 'rescan' | 'relinkCandidates' | 'relink'>
@@ -29,6 +32,7 @@ export interface NativeManagementDependencies {
   openRead(path: string): Promise<ReadHandle>
   importUris(paths: string[], source?: string): Promise<ImportResult[]>
   generate(book: BookMeta): Promise<BookClassification>
+  generateIntroduction(book: BookMeta, options: BookIntroductionOptions): Promise<string>
   exportArchive(): Promise<'saved' | 'cancelled'>
   restore(file: File): Promise<RestoreProgress>
   draftEnv?: DraftEnv
@@ -65,6 +69,7 @@ const defaults: NativeManagementDependencies = {
   openRead: async path => (await import('@tauri-apps/plugin-fs')).open(path, { read: true }),
   importUris: async (paths, source) => (await import('./nativeBookImport.ts')).importNativeUriFiles(paths, source),
   generate: async book => (await import('./bookTagging.ts')).generateBookClassification(book),
+  generateIntroduction: async (book, options) => (await import('./bookIntroduction.ts')).generateBookIntroduction(book, options),
   async exportArchive() {
     const { exportLibraryArchiveToDevice } = await import('./archiveExport')
     const { exportBackupToSink, LIBRARY_ARCHIVE_EXTENSION } = await import('./backup')
@@ -188,7 +193,12 @@ export function createNativeManagementActions(injected: Partial<NativeManagement
     }
   }
 
+  const introduction = createBookIntroductionActions({ storage: deps.storage, generate: deps.generateIntroduction, ready, now: deps.now, token: deps.token })
   return {
+    ...getBookRecommendationActions(),
+    bookIntroductionGenerate: wrap('bookIntroductionGenerate', introduction.bookIntroductionGenerate, false),
+    bookIntroductionSave: wrap('bookIntroductionSave', introduction.bookIntroductionSave, false),
+    bookIntroductionCancel: wrap('bookIntroductionCancel', introduction.bookIntroductionCancel, false),
     importBooks: wrap('importBooks', async () => {
       const paths = await deps.pick('books')
       if (!paths?.length) return { cancelled: true }
@@ -334,7 +344,9 @@ export function createNativeManagementActions(injected: Partial<NativeManagement
     noteDraftDiscard: wrap('noteDraftDiscard', async p => {
       if (p.confirmDiscard !== true) throw fail('confirmation_required')
       // Orphaned drafts remain explicitly discardable even after their annotation was removed.
-      const ctx = { bookId: text(p, 'bookId'), contextId: `anno:${text(p, 'id')}` }
+      const contextId = p.contextId === undefined ? `anno:${text(p, 'id')}` : text(p, 'contextId')
+      if (p.contextId !== undefined && (p.id !== undefined || !contextId.startsWith('sel:') || contextId.length === 4)) throw fail('invalid_payload')
+      const ctx = { bookId: text(p, 'bookId'), contextId }
       const result = discardNoteDraft(ctx, deps.draftEnv)
       return { ok: result.success, code: result.success ? 'draft_discarded' : 'draft_discard_failed' }
     }, false),

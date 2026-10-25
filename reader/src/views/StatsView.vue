@@ -101,6 +101,28 @@ function navigateDay(day: string) {
 
 // ---- 计时说明 ----
 const showHow = ref(false)
+
+// ---- 本地子视图: 概览 / 趋势 / 日历 (保留组件状态, 无重复计算) ----
+type StatsSubView = 'overview' | 'trends' | 'calendar'
+const activeSubView = ref<StatsSubView>('overview')
+const subViews = computed<{ id: StatsSubView; label: string }[]>(() => [
+  { id: 'overview', label: settings.language === 'en' ? 'Overview' : '概览' },
+  { id: 'trends', label: settings.language === 'en' ? 'Trends' : '趋势' },
+  { id: 'calendar', label: settings.language === 'en' ? 'Calendar' : '日历' },
+])
+function onSubViewKey(event: KeyboardEvent) {
+  const views = subViews.value
+  const focused = (event.target as HTMLElement).dataset.tab
+  const current = views.findIndex(view => view.id === (focused ?? activeSubView.value))
+  const index = event.key === 'Home' ? 0 : event.key === 'End' ? views.length - 1
+    : event.key === 'ArrowRight' ? (current + 1) % views.length
+    : event.key === 'ArrowLeft' ? (current + views.length - 1) % views.length : -1
+  if (index < 0) return
+  event.preventDefault()
+  activeSubView.value = views[index].id
+  ;(event.currentTarget as HTMLElement).querySelector<HTMLElement>(`[data-tab="${views[index].id}"]`)?.focus()
+}
+
 </script>
 
 <template>
@@ -149,12 +171,12 @@ const showHow = ref(false)
               :y="8 + ri * 23"
               width="18"
               height="18"
-              rx="4"
+              rx="2"
               :class="`art-l${lv}`"
             />
           </g>
-          <rect x="4" y="80" width="64" height="6" rx="3" class="art-line" />
-          <rect x="4" y="92" width="40" height="6" rx="3" class="art-line soft" />
+          <rect x="4" y="80" width="64" height="6" rx="2" class="art-line" />
+          <rect x="4" y="92" width="40" height="6" rx="2" class="art-line soft" />
         </svg>
         <p class="empty-title">{{ t('stats.emptyTitle') }}</p>
         <p class="empty-desc">{{ t('stats.emptyDesc') }}</p>
@@ -167,48 +189,81 @@ const showHow = ref(false)
       </div>
     </section>
 
-    <div v-else class="layout">
-      <TodayCard
-        class="a-today"
-        :today="today"
-        :today-seconds="todaySeconds"
-        :yesterday-seconds="yesterdaySeconds"
-        :goal-minutes="goalMinutes"
-        :streak="streak.current"
-        :today-active="todaySeconds >= ACTIVE_DAY_SECONDS"
-        :yesterday-active="yesterdaySeconds >= ACTIVE_DAY_SECONDS"
-        :continue-book="continueBook"
-        @set-goal="setGoal"
-        @open="openBook"
-      />
-      <div class="side">
-        <WeekStrip class="a-week" :days="week" :goal-minutes="goalMinutes" :today="today" @select="openDay" />
-        <Milestones
-          class="a-ms"
+    <!-- 具备数据时的三分子视图导航 -->
+    <div v-else class="stats-wrapper">
+      <nav class="stats-subnav segmented" role="tablist" :aria-label="t('stats.title')" @keydown="onSubViewKey">
+        <button
+          v-for="v in subViews"
+          :key="v.id"
+          type="button"
+          role="tab"
+          :data-tab="v.id"
+          :id="`stats-tab-${v.id}`"
+          :aria-controls="`stats-panel-${v.id}`"
+          :tabindex="activeSubView === v.id ? 0 : -1"
+          class="subnav-btn"
+          :class="{ active: activeSubView === v.id }"
+          :aria-selected="activeSubView === v.id"
+          @click="activeSubView = v.id"
+        >
+          {{ v.label }}
+        </button>
+      </nav>
+
+      <!-- 1. 概览视图: 今日数据、本周条带与里程碑 (保留 DOM 状态) -->
+      <div v-show="activeSubView === 'overview'" class="view-panel view-overview" role="tabpanel" id="stats-panel-overview" aria-labelledby="stats-tab-overview">
+        <div class="overview-layout">
+          <TodayCard
+            class="a-today"
+            :today="today"
+            :today-seconds="todaySeconds"
+            :yesterday-seconds="yesterdaySeconds"
+            :goal-minutes="goalMinutes"
+            :streak="streak.current"
+            :today-active="todaySeconds >= ACTIVE_DAY_SECONDS"
+            :yesterday-active="yesterdaySeconds >= ACTIVE_DAY_SECONDS"
+            :continue-book="continueBook"
+            @set-goal="setGoal"
+            @open="openBook"
+          />
+          <div class="side">
+            <WeekStrip class="a-week" :days="week" :goal-minutes="goalMinutes" :today="today" @select="openDay" />
+            <Milestones
+              class="a-ms"
+              :daily="daily"
+              :today="today"
+              :books-by-id="booksById"
+              :legacy-seconds="legacySeconds"
+              @select-day="openDay"
+              @open="openBook"
+            />
+          </div>
+        </div>
+      </div>
+
+      <!-- 2. 趋势视图: 周/月/年趋势与书籍分布 (保留状态与已筛选条件) -->
+      <div v-show="activeSubView === 'trends'" class="view-panel view-trends" role="tabpanel" id="stats-panel-trends" aria-labelledby="stats-tab-trends">
+        <TrendCard
+          class="a-trend"
           :daily="daily"
           :today="today"
+          :goal-minutes="goalMinutes"
           :books-by-id="booksById"
-          :legacy-seconds="legacySeconds"
           @select-day="openDay"
           @open="openBook"
         />
       </div>
-      <TrendCard
-        class="a-trend"
-        :daily="daily"
-        :today="today"
-        :goal-minutes="goalMinutes"
-        :books-by-id="booksById"
-        @select-day="openDay"
-        @open="openBook"
-      />
-      <ReadingCalendar
-        class="a-cal"
-        :daily="daily"
-        :today="today"
-        :selected-day="lastPicked"
-        @select="openDay"
-      />
+
+      <!-- 3. 日历视图: 宽卡热力图 / 窄卡月历 (保留聚焦与月份位置) -->
+      <div v-show="activeSubView === 'calendar'" class="view-panel view-calendar" role="tabpanel" id="stats-panel-calendar" aria-labelledby="stats-tab-calendar">
+        <ReadingCalendar
+          class="a-cal"
+          :daily="daily"
+          :today="today"
+          :selected-day="lastPicked"
+          @select="openDay"
+        />
+      </div>
     </div>
 
     <DayDetailSheet
@@ -227,6 +282,51 @@ const showHow = ref(false)
 </template>
 
 <style scoped>
+
+
+.stats-subnav {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-bottom: 20px;
+}
+.subnav-btn {
+  min-height: 48px;
+  min-width: 96px;
+  padding: 8px 16px;
+  font-size: 16px;
+  font-weight: 500;
+  border: 1px solid var(--border, #555555);
+  background: var(--bg, #FFFFFF);
+  color: var(--text, #000000);
+  cursor: pointer;
+  border-radius: 2px;
+}
+.subnav-btn.active {
+  background: var(--eink-selected-surface, #DDDDDD) !important;
+  color: var(--text, #000000) !important;
+  border-color: var(--border, #555555) !important;
+}
+:root[data-theme='dark'] .subnav-btn.active {
+  background: var(--eink-selected-surface, #2A2A2A) !important;
+  color: var(--text, #FFFFFF) !important;
+}
+
+.overview-layout {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr);
+  grid-template-areas: 'today' 'week' 'ms';
+  gap: 16px;
+}
+@media (min-width: 960px) {
+  .overview-layout {
+    grid-template-columns: minmax(0, 1fr) minmax(320px, 360px);
+    grid-template-areas:
+      'today side'
+      'today side';
+    align-items: start;
+  }
+}
 .stats {
   max-width: 1160px;
   margin: 0 auto;
@@ -364,3 +464,5 @@ h1 {
   }
 }
 </style>
+
+<style src="../styles/stats-settings.css"></style>
