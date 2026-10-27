@@ -20,14 +20,15 @@
   --brand-soft: #f0f0f0;
   --on-brand: #ffffff;
 
-  /* 16 级灰阶墨水屏安全设计令牌 (Carta 1200 / 1300 Calibrated) */
-  --eink-surface-pure: #ffffff;      /* 纸白 100% */
-  --eink-surface-subtle: #f0f0f0;    /* 晨雾灰 94% */
-  --eink-surface-container: #d6d6d6; /* 水泥浅灰 84% */
-  --eink-border-hairline: #9e9e9e;   /* 铅笔深灰 62% */
-  --eink-text-secondary: #5a5a5a;    /* 碳素中灰 35% */
-  --eink-text-primary: #121212;      /* 浓墨深黑 7% */
-  --eink-solid-black: #000000;       /* 纯黑印墨 0% */
+  /* 16 级灰阶墨水屏安全设计令牌 (Carta 1200 / 1300 4-Bit 0x11 Step Calibrated) */
+  --eink-surface-pure: #ffffff;      /* Y15 纸白 100% */
+  --eink-surface-subtle: #eeeeee;    /* Y14 装裱浅灰 93% */
+  --eink-surface-container: #dddddd; /* Y13 轻选中灰 87% */
+  --eink-border-hairline: #bbbbbb;   /* Y11 细分割线 73% */
+  --eink-text-muted: #777777;        /* Y7 辅助/占位灰 47% */
+  --eink-text-secondary: #444444;    /* Y4 次级元数据灰 27% */
+  --eink-text-primary: #111111;      /* Y1 浓墨正文 7% */
+  --eink-solid-black: #000000;       /* Y0 纯黑印墨 0% */
 
   /* 兼容既有令牌映射 */
   --eink-paper: var(--eink-surface-pure);
@@ -46,30 +47,30 @@
   /* 表面与文字 */
   --bg: #ffffff;
   --card: #ffffff;
-  --surface-2: #f0f0f0;   /* 悬停 / 次级面板 */
-  --surface-3: #d6d6d6;   /* 按下 / 轨道 */
-  --text: #121212;
-  --text-2: #5a5a5a;
-  --text-3: #757575;      /* 次级印刷文案 */
-  --border: #9e9e9e;
+  --surface-2: #eeeeee;   /* 悬停 / 次级衬底面板 */
+  --surface-3: #dddddd;   /* 按下 / 激活槽 */
+  --text: #111111;
+  --text-2: #444444;
+  --text-3: #777777;      /* 次级印刷文案 */
+  --border: #bbbbbb;
   --border-strong: #000000;
-  --overlay: #121212;     /* 避免半透明抖动点阵 */
-  --skeleton: #f0f0f0;
+  --overlay: #111111;     /* 避免半透明抖动点阵 */
+  --skeleton: #eeeeee;
   --skeleton-shine: #ffffff;
 
   /* 状态 - 墨水屏克制表达 */
   --danger: #000000;
-  --danger-soft: #f0f0f0;
+  --danger-soft: #eeeeee;
   --success: #000000;
-  --success-soft: #f0f0f0;
+  --success-soft: #eeeeee;
   --warning: #000000;
-  --warning-soft: #f0f0f0;
+  --warning-soft: #eeeeee;
 
-  /* 圆角 - 典藏硬质微圆角 (规制为 0dp 与 2dp) */
-  --radius-sm: 2px;
-  --radius: 2px;
-  --radius-lg: 2px;
-  --radius-xl: 4px;
+  /* 圆角 - 典藏硬质直角/微切角 (规制为 0dp 与 2dp) */
+  --radius-sm: 0px;
+  --radius: 0px;
+  --radius-lg: 0px;
+  --radius-xl: 2px;
   --radius-pill: 2px;
 
   /* 间距 (4pt 节奏) */
@@ -109,34 +110,43 @@
 
 :root[data-theme='dark'] {
   color-scheme: dark;
-  --brand: #5b8dff;
-  --brand-hover: #79a2ff;
-  --brand-active: #4a7af0;
-  --brand-light: #1c2a47;
-  --brand-soft: color-mix(in srgb, var(--brand) 16%, transparent);
-  --on-brand: #ffffff;
+  --eink-surface-pure: #000000;
+  --eink-surface-subtle: #222222;
+  --eink-surface-container: #333333;
+  --eink-border-hairline: #555555;
+  --eink-text-muted: #999999;
+  --eink-text-secondary: #cccccc;
+  --eink-text-primary: #eeeeee;
+  --eink-solid-black: #ffffff;
 
-  --bg: #121417;
-  --card: #1b1e23;
-  --surface-2: #23272e;
-  --surface-3: #2c313a;
-  --text: #e8eaee;
-  --text-2: #b0b7c2;
-  --text-3: #858e9b;
-  --border: #2b3038;
-  --border-strong: #3b414c;
-  --overlay: rgba(0, 0, 0, 0.6);
-  --skeleton: #262a31;
-  --skeleton-shine: rgba(255, 255, 255, 0.06);
+  --brand: #ffffff;
+  --brand-hover: #eeeeee;
+  --brand-active: #ffffff;
+  --brand-light: #222222;
+  --brand-soft: #222222;
+  --on-brand: #000000;
 
-  --danger: #ff6b6b;
-  --success: #4ade80;
-  --warning: #f5a524;
+  --bg: #000000;
+  --card: #000000;
+  --surface-2: #222222;
+  --surface-3: #333333;
+  --text: #eeeeee;
+  --text-2: #cccccc;
+  --text-3: #999999;
+  --border: #555555;
+  --border-strong: #ffffff;
+  --overlay: #000000;
+  --skeleton: #222222;
+  --skeleton-shine: #333333;
 
-  --shadow-sm: 0 1px 2px rgba(0, 0, 0, 0.3);
-  --shadow: 0 2px 8px rgba(0, 0, 0, 0.35);
-  --shadow-md: 0 4px 14px rgba(0, 0, 0, 0.4);
-  --shadow-lg: 0 8px 28px rgba(0, 0, 0, 0.5);
+  --danger: #ffffff;
+  --success: #ffffff;
+  --warning: #ffffff;
+
+  --shadow-sm: none;
+  --shadow: none;
+  --shadow-md: none;
+  --shadow-lg: none;
 }
 
 /* 旧内核回退 (Chrome < 111 / Safari < 16.2 不支持 color-mix): 自定义属性里的 color-mix 在使用处
@@ -800,25 +810,26 @@ input[type='range'] {
 
 /* ---- WisePage 典藏级墨水屏设计系统 (Carta 1200 / 300 PPI) ---- */
 
-/* 1. 物理装裱式封面框 */
+/* 1. 物理装裱式封面框 (3:4 Passepartout Frame) */
 .archival-cover-plate {
   position: relative;
   display: inline-block;
-  aspect-ratio: 1 / 1.414;
+  aspect-ratio: 3 / 4;
   background-color: var(--eink-surface-subtle);
-  border: 1px solid var(--eink-border-hairline);
+  border: 1px solid var(--eink-solid-black);
   box-sizing: border-box;
   overflow: hidden;
-  padding: 2px;
+  padding: 3px;
 }
 .archival-cover-plate img {
   width: 100%;
   height: 100%;
   object-fit: cover;
   display: block;
+  border: 1px solid var(--eink-border-hairline);
 }
 
-/* 2. 精装书口阅读进度刻度规 (Fore-edge Gauge) */
+/* 2. 精装书口阅读进度刻度规 (Fore-edge Page-Stack Gauge with 25/50/75% Ticks) */
 .fore-edge-gauge {
   display: flex;
   align-items: center;
@@ -828,9 +839,24 @@ input[type='range'] {
 .fore-edge-track {
   position: relative;
   flex: 1;
-  height: 4px;
+  height: 6px;
   background-color: var(--eink-surface-subtle);
-  border: 1px solid var(--eink-border-hairline);
+  background-image: linear-gradient(
+    to right,
+    transparent calc(25% - 0.5px),
+    var(--eink-border-hairline) calc(25% - 0.5px),
+    var(--eink-border-hairline) calc(25% + 0.5px),
+    transparent calc(25% + 0.5px),
+    transparent calc(50% - 0.5px),
+    var(--eink-border-hairline) calc(50% - 0.5px),
+    var(--eink-border-hairline) calc(50% + 0.5px),
+    transparent calc(50% + 0.5px),
+    transparent calc(75% - 0.5px),
+    var(--eink-border-hairline) calc(75% - 0.5px),
+    var(--eink-border-hairline) calc(75% + 0.5px),
+    transparent calc(75% + 0.5px)
+  );
+  border: 1px solid var(--eink-solid-black);
   box-sizing: border-box;
 }
 .fore-edge-fill {
@@ -849,14 +875,15 @@ input[type='range'] {
 }
 .fore-edge-text {
   font-family: var(--font-mono);
-  font-size: 11px;
+  font-size: 12px;
   font-weight: 500;
   color: var(--eink-text-secondary);
   font-feature-settings: "tnum" 1;
+  font-variant-numeric: tabular-nums;
   white-space: nowrap;
 }
 
-/* 3. 牛津双线规矩分割线 (Oxford Rule) */
+/* 3. 牛津双线规矩分割线 (Oxford Rule) & 尾花 (Colophon Tailpiece) */
 .oxford-rule {
   width: 100%;
   display: flex;
@@ -868,20 +895,35 @@ input[type='range'] {
   content: '';
   display: block;
   width: 100%;
-  height: 1.5px;
-  background-color: var(--eink-text-primary);
+  height: 2px;
+  background-color: var(--eink-solid-black);
 }
 .oxford-rule::after {
   content: '';
   display: block;
   width: 100%;
-  height: 0.5px;
+  height: 1px;
   background-color: var(--eink-border-hairline);
 }
+.colophon-tailpiece {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 4px;
+  padding: 16px 0 8px;
+  color: var(--eink-text-secondary);
+  font-family: var(--font-mono);
+  font-size: 11px;
+  letter-spacing: 0.08em;
+  user-select: none;
+}
 
-/* 4. 数字藏书票样式卡片 (Ex Libris Badge) */
+/* 4. 数字藏书票样式卡片 (Ex Libris Double-Rule Frame) */
 .ex-libris-card {
   border: 2px solid var(--eink-solid-black);
+  outline: 1px solid var(--eink-border-hairline);
+  outline-offset: -5px;
   padding: 16px 20px;
   background: var(--eink-surface-pure);
   position: relative;
@@ -897,12 +939,12 @@ input[type='range'] {
   text-align: center;
 }
 .ex-libris-header {
-  font-family: var(--font-serif);
-  font-size: 13px;
-  letter-spacing: 0.25em;
+  font-family: var(--font-mono);
+  font-size: 11px;
+  letter-spacing: 0.16em;
   text-transform: uppercase;
-  color: var(--eink-text-primary);
-  font-weight: 700;
+  color: var(--eink-text-secondary);
+  font-weight: 600;
   margin-bottom: 6px;
 }
 .ex-libris-title {
@@ -916,13 +958,58 @@ input[type='range'] {
   font-family: var(--font-mono);
   font-size: 11px;
   color: var(--eink-text-secondary);
+  font-feature-settings: "tnum" 1;
   margin-top: 4px;
+}
+.archival-call-number {
+  display: inline-flex;
+  align-items: center;
+  font-family: var(--font-mono);
+  font-size: 11px;
+  font-weight: 500;
+  color: var(--eink-text-primary);
+  background: var(--eink-surface-subtle);
+  border: 1px solid var(--eink-border-hairline);
+  padding: 1px 6px;
+  letter-spacing: 0.04em;
 }
 
 /* 5. 墨水屏即时反相触控类 */
 .eink-tap-invert:active {
   background-color: var(--eink-solid-black) !important;
   color: var(--eink-surface-pure) !important;
+}
+
+/* 6. 沉浸式阅读器与 AI 伴读层墨水屏专属规整 */
+.pagewise-eink .bar, .lr-eink .bar {
+  border-color: var(--eink-solid-black) !important;
+  border-width: 1px !important;
+  background: var(--card) !important;
+  box-shadow: none !important;
+  backdrop-filter: none !important;
+}
+.pagewise-eink .fs-exit, .lr-eink .fs-exit {
+  background: var(--card) !important;
+  border: 1px solid var(--eink-solid-black) !important;
+  box-shadow: none !important;
+  backdrop-filter: none !important;
+  opacity: 1 !important;
+}
+.pagewise-eink .dj-card, .lr-eink .dj-card {
+  border: 2px solid var(--eink-solid-black) !important;
+  background: var(--card) !important;
+  box-shadow: none !important;
+  border-radius: 0 !important;
+}
+.pagewise-eink .reading-assistant-panel, .lr-eink .reading-assistant-panel {
+  border: 2px solid var(--eink-solid-black) !important;
+  box-shadow: none !important;
+  border-radius: 0 !important;
+}
+.pagewise-eink .assistant-modal, .lr-eink .assistant-modal {
+  border: 2px solid var(--eink-solid-black) !important;
+  box-shadow: none !important;
+  border-radius: 0 !important;
 }
 
 

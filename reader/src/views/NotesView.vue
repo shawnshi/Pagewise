@@ -415,7 +415,7 @@ function formatTime(ts: number): string {
           :aria-selected="currentFilter === 'thoughts'"
           @click="currentFilter = 'thoughts'"
         >
-          {{ t("uiV02.copy.想法 (") }}{{ countStats.thoughts }})
+          💡 {{ t("uiV02.copy.想法 (") }}{{ countStats.thoughts }})
         </button>
         <button
           role="tab"
@@ -423,7 +423,7 @@ function formatTime(ts: number): string {
           :aria-selected="currentFilter === 'highlights'"
           @click="currentFilter = 'highlights'"
         >
-          {{ tr('reader.highlight', '划线') }} ({{ countStats.highlights }})
+          ✏️ {{ tr('reader.highlight', '划线') }} ({{ countStats.highlights }})
         </button>
         <button
           role="tab"
@@ -431,7 +431,7 @@ function formatTime(ts: number): string {
           :aria-selected="currentFilter === 'bookmarks'"
           @click="currentFilter = 'bookmarks'"
         >
-          {{ tr('reader.bookmarksTab', '书签') }} ({{ countStats.bookmarks }})
+          📌 {{ tr('reader.bookmarksTab', '书签') }} ({{ countStats.bookmarks }})
         </button>
       </div>
     </div>
@@ -598,8 +598,11 @@ function formatTime(ts: number): string {
             </div>
 
             <!-- 常规展示状态 -->
-            <div v-else class="thought-display">
-              <p v-if="note.note" class="thought-text">{{ note.note }}</p>
+            <div v-else class="thought-display" :class="{ 'has-thought': !!note.note }">
+              <div v-if="note.note" class="thought-box">
+                <span class="thought-tag">💡 想法</span>
+                <p class="thought-text">{{ note.note }}</p>
+              </div>
               <p v-else-if="note.kind !== 'bookmark'" class="thought-placeholder" @click="startEditing(note)">
                 {{ t("uiV02.copy.+ 添加想法…") }}
               </p>
@@ -926,6 +929,31 @@ function formatTime(ts: number): string {
 .thought-container {
   display: flex;
   flex-direction: column;
+}
+
+.thought-box {
+  background: var(--surface-2);
+  border: 1px solid var(--border);
+  border-radius: 2px;
+  padding: 8px 12px;
+  margin-top: 6px;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.thought-tag {
+  font-family: var(--font-mono);
+  font-size: 11px;
+  font-weight: 600;
+  color: var(--text-2);
+}
+
+.note-time {
+  font-family: var(--font-mono);
+  font-size: 11px;
+  font-variant-numeric: tabular-nums;
+  color: var(--text-2);
 }
 
 .thought-text {

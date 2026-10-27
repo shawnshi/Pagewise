@@ -424,9 +424,11 @@ internal class NativeBookRecommendationsPanel(
                 root.addView(
                     text(
                         (if (key == "related") tr("相关阅读", "Related reading") else tr("拓展阅读", "Extended reading")) + " (${rows.length()})",
-                        18f,
+                        17f,
                         true,
-                    ),
+                    ).apply {
+                        typeface = NativeUi.editorialTypeface(true)
+                    },
                 )
                 if (rows.length() ==
                     0
@@ -485,13 +487,25 @@ internal class NativeBookRecommendationsPanel(
         val panel = NativeUi.card(activity, surface, 14)
         val identity = LinearLayout(activity).apply { orientation = LinearLayout.HORIZONTAL }
         if (book.optBoolean("hasCover")) {
-            identity.addView(
+            val coverFrame =
+                android.widget.FrameLayout(activity).apply {
+                    background =
+                        NativeUi.shape(activity, surface).apply {
+                            setColor(NativeUi.mutedSurface(surface))
+                        }
+                    setPadding(NativeUi.dp(activity, 3), NativeUi.dp(activity, 3), NativeUi.dp(activity, 3), NativeUi.dp(activity, 3))
+                }
+            coverFrame.addView(
                 ImageView(activity).apply {
                     scaleType = ImageView.ScaleType.CENTER_CROP
                     importantForAccessibility =
                         View.IMPORTANT_FOR_ACCESSIBILITY_NO
                     cover(this, id)
                 },
+                android.widget.FrameLayout.LayoutParams(-1, -1),
+            )
+            identity.addView(
+                coverFrame,
                 LinearLayout.LayoutParams(NativeUi.dp(activity, 58), NativeUi.dp(activity, 78)).apply {
                     marginEnd =
                         NativeUi.dp(activity, 12)
@@ -499,8 +513,25 @@ internal class NativeBookRecommendationsPanel(
             )
         }
         val info = LinearLayout(activity).apply { orientation = LinearLayout.VERTICAL }
-        info.addView(text(book.getString("title"), 17f, true).apply { setTextIsSelectable(true) })
-        info.addView(text(book.optString("author").ifBlank { tr("未知作者", "Unknown author") }))
+        val titleAndAuthor =
+            LinearLayout(activity).apply {
+                orientation = LinearLayout.HORIZONTAL
+                gravity = android.view.Gravity.CENTER_VERTICAL
+            }
+        titleAndAuthor.addView(
+            text(book.getString("title"), 16f, true).apply {
+                typeface = NativeUi.editorialTypeface(true)
+                setTextIsSelectable(true)
+            },
+        )
+        val authorText = book.optString("author").ifBlank { tr("未知作者", "Unknown author") }
+        titleAndAuthor.addView(
+            text(" · $authorText", 13f).apply {
+                setTextColor(NativeUi.secondary(surface))
+                setTextIsSelectable(true)
+            },
+        )
+        info.addView(titleAndAuthor)
         val state =
             when (book.optString("readingStatus")) {
                 "wanted" -> tr("想读", "Want to read")
@@ -520,18 +551,23 @@ internal class NativeBookRecommendationsPanel(
         }
         identity.addView(info, LinearLayout.LayoutParams(0, -2, 1f))
         panel.addView(identity)
-        panel.addView(text(tr("来源", "From") + ": " + card.getString("sourceTitle")))
         panel.addView(
-            text(
-                card.getString("reason") +
-                    if (card.optString("reasonKind") ==
-                        "ai"
-                    ) {
-                        tr("〔AI，未核验〕", " [AI, unverified]")
-                    } else {
-                        ""
-                    },
-            ).apply { setTextIsSelectable(true) },
+            text(tr("来源", "From") + ": 《" + card.getString("sourceTitle") + "》").apply {
+                textSize = 13f
+                setTextColor(NativeUi.secondary(surface))
+            },
+        )
+        val aiSuffix =
+            if (card.optString("reasonKind") == "ai") {
+                tr("〔AI，未核验〕", " [AI, unverified]")
+            } else {
+                ""
+            }
+        panel.addView(
+            text(tr("推荐理由", "Recommendation reason") + ": " + card.getString("reason") + aiSuffix).apply {
+                textSize = 13f
+                setTextIsSelectable(true)
+            },
         )
         val wanted =
             button(

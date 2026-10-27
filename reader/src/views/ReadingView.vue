@@ -215,7 +215,7 @@ function getProgress(book: BookMeta) {
         >
           {{ t('uiV02.status.abandoned') }} ({{ abandonedBooks.length }})
         </button>
-        <button type="button" class="segmented-btn" :class="{ active: currentTab === 'recommendations' }" :disabled="recommendationWriting" role="tab" :aria-selected="currentTab === 'recommendations'" @click="currentTab = 'recommendations'">{{ t('recommendations.tab') }}<template v-if="recommendationCount != null"> ({{ recommendationCount }})</template></button>
+        <button type="button" class="segmented-btn" :class="{ active: currentTab === 'recommendations' }" :disabled="recommendationWriting" :aria-pressed="currentTab === 'recommendations'" @click="currentTab = 'recommendations'">{{ t('recommendations.tab') }}<template v-if="recommendationCount != null"> ({{ recommendationCount }})</template></button>
       </nav>
     </header>
 
@@ -233,9 +233,10 @@ function getProgress(book: BookMeta) {
 
     <div v-else class="book-list">
       <article
-        v-for="book in visibleBooks"
+        v-for="(book, index) in visibleBooks"
         :key="book.id"
         class="card reading-card"
+        :class="{ 'hero-reading-card': currentTab === 'reading' && index === 0 }"
         tabindex="0"
         role="button"
         :aria-label="t('uiV02.copy.\u67E5\u770B\u8BE6\u60C5\uFF1A{v0}', { v0: book.title })"
@@ -243,7 +244,7 @@ function getProgress(book: BookMeta) {
         @keydown.enter.prevent="openDetail(book)"
         @keydown.space.prevent="openDetail(book)"
       >
-        <div class="card-cover">
+        <div class="card-cover archival-cover-plate">
           <img v-if="coverUrls[book.id]" :src="coverUrls[book.id]" alt="" class="cover-image" loading="lazy" decoding="async" />
           <div v-else class="cover-fallback">
             <span>{{ book.title }}</span>
@@ -252,6 +253,10 @@ function getProgress(book: BookMeta) {
         </div>
 
         <div class="card-body">
+          <div v-if="currentTab === 'reading' && index === 0" class="hero-active-badge">
+            <span>EX LIBRIS · 焦点在读</span>
+            <span v-if="book.readingSeconds" class="hero-active-time">已读 {{ formatReadingTime(book.readingSeconds) }}</span>
+          </div>
           <div class="card-header-row">
             <h2 class="book-title">{{ book.title }}</h2>
             <span
@@ -396,6 +401,30 @@ function getProgress(book: BookMeta) {
   background: var(--eink-surface-pure);
   box-shadow: none;
   outline: none;
+}
+.hero-reading-card {
+  border: 2px solid var(--eink-solid-black) !important;
+  outline: 1px solid var(--eink-border-hairline) !important;
+  outline-offset: -5px;
+  background: var(--card) !important;
+  padding: 22px 24px;
+}
+.hero-active-badge {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  font-family: var(--font-mono);
+  font-size: 11px;
+  font-weight: 600;
+  letter-spacing: 0.08em;
+  color: var(--text-2);
+  margin-bottom: 6px;
+  padding-bottom: 4px;
+  border-bottom: 1px solid var(--border);
+}
+.hero-active-time {
+  font-weight: 500;
+  font-variant-numeric: tabular-nums;
 }
 .reading-card:hover {
   border-color: var(--eink-solid-black);

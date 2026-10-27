@@ -23,7 +23,7 @@ import java.util.Base64
 fun main() {
  val light=nativeEinkPalette(0xFFFFFFFF.toInt());val dark=nativeEinkPalette(0xFF000000.toInt())
  fun values(p:NativeEinkPalette)=listOf(p.background,p.surface,p.outline,p.divider,p.primary,p.secondary,p.disabled,p.highlight)
- check(values(light)==listOf(0xFFFFFFFF,0xFFFAFAFA,0xFF000000,0xFFD4D4D4,0xFF000000,0xFF4A4A4A,0xFF8C8C8C,0xFFDCDCDC).map{it.toInt()})
+ check(values(light)==listOf(0xFFFFFFFF,0xFFEEEEEE,0xFF000000,0xFFBBBBBB,0xFF111111,0xFF444444,0xFF777777,0xFFDDDDDD).map{it.toInt()})
  for(p in listOf(light,dark)) for(c in values(p)) {check(c ushr 24==255);check((c ushr 16 and 255)==(c ushr 8 and 255));check((c ushr 8 and 255)==(c and 255))}
  check(dark.primary!=dark.background && dark.outline!=dark.background)
  var metrics=0

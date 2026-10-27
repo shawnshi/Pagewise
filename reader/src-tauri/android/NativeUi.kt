@@ -37,6 +37,14 @@ internal object NativeUi {
 
     fun disabled(background: Int) = nativeEinkPalette(background).disabled
 
+    fun activeSubtle(background: Int) = nativeEinkPalette(background).highlight
+
+    fun editorialTypeface(bold: Boolean = true): Typeface =
+        Typeface.create(Typeface.SERIF, if (bold) Typeface.BOLD else Typeface.NORMAL)
+
+    fun monoTypeface(bold: Boolean = false): Typeface =
+        Typeface.create(Typeface.MONOSPACE, if (bold) Typeface.BOLD else Typeface.NORMAL)
+
     fun shape(
         context: Context,
         background: Int,
@@ -45,7 +53,18 @@ internal object NativeUi {
         GradientDrawable().apply {
             setColor(surface(background))
             if (outlined) setStroke(dp(context, 1), border(background))
-            cornerRadius = dp(context, 2).toFloat()
+            cornerRadius = 0f
+        }
+
+    fun hairlineShape(
+        context: Context,
+        background: Int,
+        sunken: Boolean = false,
+    ): GradientDrawable =
+        GradientDrawable().apply {
+            setColor(if (sunken) mutedSurface(background) else surface(background))
+            setStroke(dp(context, 1), divider(background))
+            cornerRadius = 0f
         }
 
     private fun actionable(
@@ -60,11 +79,11 @@ internal object NativeUi {
             addState(
                 intArrayOf(android.R.attr.state_pressed),
                 shape(context, background).apply {
-                    setColor(mutedSurface(background))
+                    setColor(activeSubtle(background))
                     setStroke(dp(context, 2), ink)
                 },
             )
-            addState(intArrayOf(), shape(context, background, outlined).apply { if (selected) setColor(mutedSurface(background)) })
+            addState(intArrayOf(), shape(context, background, outlined).apply { if (selected) setColor(activeSubtle(background)) })
         }
     }
 
@@ -141,11 +160,19 @@ internal object NativeUi {
             val fill =
                 GradientDrawable().apply {
                     setColor(ink)
-                    cornerRadius = dp(context, 4).toFloat()
+                    cornerRadius = 0f
                 }
             this.background =
                 StateListDrawable().apply {
                     addState(intArrayOf(-android.R.attr.state_enabled), shape(context, background))
+                    addState(
+                        intArrayOf(android.R.attr.state_pressed),
+                        GradientDrawable().apply {
+                            setColor(surface(background))
+                            setStroke(dp(context, 2), ink)
+                            cornerRadius = 0f
+                        },
+                    )
                     addState(
                         intArrayOf(android.R.attr.state_focused),
                         fill.constantState!!.newDrawable().mutate().apply {
@@ -302,13 +329,169 @@ internal object NativeUi {
     fun card(
         context: Context,
         background: Int,
-        padding: Int = 24,
+        padding: Int = 16,
     ): LinearLayout =
         LinearLayout(context).apply {
             orientation = LinearLayout.VERTICAL
             this.background = shape(context, background)
             setPadding(dp(context, padding), dp(context, padding), dp(context, padding), dp(context, padding))
+            layoutParams = LinearLayout.LayoutParams(-1, -2).apply { bottomMargin = dp(context, 14) }
+        }
+
+    /** Ex Libris Double-Rule Archival Card: 2dp outer border + 3dp paper margin + 1dp inner hairline frame. */
+    fun exLibrisCard(
+        context: Context,
+        background: Int,
+        headerLabel: String = "",
+        badgeLabel: String = "",
+        padding: Int = 16,
+    ): LinearLayout {
+        val outer =
+            GradientDrawable().apply {
+                setColor(surface(background))
+                setStroke(dp(context, 2), border(background))
+                cornerRadius = 0f
+            }
+        val inner =
+            GradientDrawable().apply {
+                setColor(surface(background))
+                setStroke(dp(context, 1), divider(background))
+                cornerRadius = 0f
+            }
+        val inset = dp(context, 3)
+        val framed =
+            android.graphics.drawable.LayerDrawable(arrayOf(outer, inner)).apply {
+                setLayerInset(1, inset, inset, inset, inset)
+            }
+        return LinearLayout(context).apply {
+            orientation = LinearLayout.VERTICAL
+            this.background = framed
+            val p = dp(context, padding)
+            setPadding(p, dp(context, 12), p, p)
             layoutParams = LinearLayout.LayoutParams(-1, -2).apply { bottomMargin = dp(context, 16) }
+            if (headerLabel.isNotEmpty() || badgeLabel.isNotEmpty()) {
+                addView(
+                    LinearLayout(context).apply {
+                        orientation = LinearLayout.HORIZONTAL
+                        gravity = Gravity.CENTER_VERTICAL
+                        setPadding(0, 0, 0, dp(context, 8))
+                        addView(
+                            TextView(context).apply {
+                                text = headerLabel
+                                textSize = 11f
+                                typeface = monoTypeface(true)
+                                fontFeatureSettings = "tnum"
+                                setTextColor(secondary(background))
+                                importantForAccessibility = View.IMPORTANT_FOR_ACCESSIBILITY_NO
+                            },
+                            LinearLayout.LayoutParams(0, -2, 1f),
+                        )
+                        if (badgeLabel.isNotEmpty()) {
+                            addView(
+                                TextView(context).apply {
+                                    text = badgeLabel
+                                    textSize = 11f
+                                    typeface = monoTypeface(true)
+                                    fontFeatureSettings = "tnum"
+                                    setTextColor(border(background))
+                                    this.background = shape(context, background)
+                                    setPadding(dp(context, 6), dp(context, 2), dp(context, 6), dp(context, 2))
+                                    importantForAccessibility = View.IMPORTANT_FOR_ACCESSIBILITY_NO
+                                },
+                            )
+                        }
+                    },
+                )
+                addView(
+                    View(context).apply {
+                        setBackgroundColor(divider(background))
+                        importantForAccessibility = View.IMPORTANT_FOR_ACCESSIBILITY_NO
+                    },
+                    LinearLayout.LayoutParams(-1, dp(context, 1)).apply { bottomMargin = dp(context, 10) },
+                )
+            }
+        }
+    }
+
+    /** Page-stack fore-edge progress gauge with 25% / 50% / 75% tick marks and tabular percentage. */
+    fun foreEdgeProgressBar(
+        context: Context,
+        percent: Int,
+        ink: Int,
+        background: Int,
+        barWidthDp: Int = 108,
+    ): View {
+        val clamped = percent.coerceIn(0, 100)
+        return object : View(context) {
+            private val paint = android.graphics.Paint(android.graphics.Paint.ANTI_ALIAS_FLAG)
+
+            init {
+                importantForAccessibility = IMPORTANT_FOR_ACCESSIBILITY_NO
+                layoutParams = LinearLayout.LayoutParams(dp(context, barWidthDp), dp(context, 8))
+            }
+
+            override fun onDraw(canvas: Canvas) {
+                super.onDraw(canvas)
+                val w = width.toFloat()
+                val h = height.toFloat()
+                val stroke = dp(context, 1).toFloat().coerceAtLeast(1f)
+                paint.style = android.graphics.Paint.Style.FILL
+                paint.color = mutedSurface(background)
+                canvas.drawRect(0f, 0f, w, h, paint)
+                if (clamped > 0) {
+                    paint.color = ink
+                    canvas.drawRect(0f, 0f, w * (clamped / 100f), h, paint)
+                }
+                paint.color = divider(background)
+                paint.strokeWidth = stroke
+                for (q in intArrayOf(25, 50, 75)) {
+                    val x = w * (q / 100f)
+                    canvas.drawLine(x, 0f, x, h, paint)
+                }
+                paint.style = android.graphics.Paint.Style.STROKE
+                paint.color = border(background)
+                paint.strokeWidth = stroke
+                val half = stroke / 2f
+                canvas.drawRect(half, half, w - half, h - half, paint)
+            }
+        }
+    }
+
+    /** Printer's ornament / colophon tailpiece at the end of a catalog page. */
+    fun colophonTailpiece(
+        context: Context,
+        caption: String,
+        background: Int,
+    ): LinearLayout =
+        LinearLayout(context).apply {
+            orientation = LinearLayout.VERTICAL
+            gravity = Gravity.CENTER_HORIZONTAL
+            setPadding(0, dp(context, 14), 0, dp(context, 8))
+            importantForAccessibility = View.IMPORTANT_FOR_ACCESSIBILITY_NO
+            addView(
+                TextView(context).apply {
+                    text = "──────  ◇  ──────"
+                    textSize = 11f
+                    typeface = monoTypeface(false)
+                    setTextColor(disabled(background))
+                    gravity = Gravity.CENTER
+                    importantForAccessibility = View.IMPORTANT_FOR_ACCESSIBILITY_NO
+                },
+            )
+            if (caption.isNotEmpty()) {
+                addView(
+                    TextView(context).apply {
+                        text = caption
+                        textSize = 11f
+                        typeface = monoTypeface(false)
+                        fontFeatureSettings = "tnum"
+                        setTextColor(secondary(background))
+                        gravity = Gravity.CENTER
+                        setPadding(0, dp(context, 2), 0, 0)
+                        importantForAccessibility = View.IMPORTANT_FOR_ACCESSIBILITY_NO
+                    },
+                )
+            }
         }
 
     fun styleTab(
@@ -324,15 +507,15 @@ internal object NativeUi {
             view.background =
                 GradientDrawable().apply {
                     setColor(ink)
-                    cornerRadius = dp(context, 2).toFloat()
+                    cornerRadius = 0f
                 }
             view.setTextColor(surface(background))
         } else {
             view.background =
                 GradientDrawable().apply {
                     setColor(surface(background))
-                    setStroke(dp(context, 1), border(background))
-                    cornerRadius = dp(context, 2).toFloat()
+                    setStroke(dp(context, 1), divider(background))
+                    cornerRadius = 0f
                 }
             view.setTextColor(secondary(background))
         }
@@ -345,10 +528,10 @@ internal object NativeUi {
     ): TextView =
         TextView(context).apply {
             text = label
-            textSize = 18f
-            setTypeface(null, Typeface.BOLD)
+            textSize = 17f
+            typeface = editorialTypeface(true)
             setTextColor(ink)
-            setPadding(0, dp(context, 20), 0, dp(context, 10))
+            setPadding(0, dp(context, 16), 0, dp(context, 8))
         }
 
     fun settingRow(
@@ -360,16 +543,29 @@ internal object NativeUi {
         click: () -> Unit,
     ): View =
         NativeSettingRow(context).apply {
+            val fill = shape(context, background, false)
+            val rule = GradientDrawable().apply { setColor(divider(background)) }
+            this.background =
+                android.graphics.drawable.LayerDrawable(arrayOf(fill, rule)).apply {
+                    setLayerHeight(1, dp(context, 1))
+                    setLayerGravity(1, Gravity.BOTTOM)
+                }
             setPadding(0, dp(context, 6), 0, dp(context, 6))
             addView(
                 TextView(context).apply {
                     text = label
-                    textSize = 14f
+                    textSize = 15f
                     setTextColor(ink)
                     setPadding(0, dp(context, 8), dp(context, 12), dp(context, 8))
                 },
             )
-            addView(button(context, value.ifEmpty { "—" }, ink, background, click).apply { contentDescription = "$label: $value" })
+            addView(
+                button(context, value.ifEmpty { "—" }, ink, background, click).apply {
+                    contentDescription = "$label: $value"
+                    typeface = monoTypeface(false)
+                    fontFeatureSettings = "tnum"
+                },
+            )
         }
 }
 
@@ -593,9 +789,9 @@ internal class NativeBookHero(
             for (i in 0 until identity.childCount) {
                 val child = identity.getChildAt(i)
                 if (child is NativeActionFlow) child.centerRows = narrow
-                (child as? TextView)?.apply {
-                    textAlignment = if (narrow) TEXT_ALIGNMENT_CENTER else TEXT_ALIGNMENT_VIEW_START
-                    gravity = Gravity.TOP or if (narrow) Gravity.CENTER_HORIZONTAL else Gravity.START
+                if (child is TextView && child !is Button) {
+                    child.textAlignment = if (narrow) TEXT_ALIGNMENT_CENTER else TEXT_ALIGNMENT_VIEW_START
+                    child.gravity = Gravity.TOP or if (narrow) Gravity.CENTER_HORIZONTAL else Gravity.START
                 }
             }
         }

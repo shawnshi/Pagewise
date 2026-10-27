@@ -103,10 +103,38 @@ internal class NativeSettingsPanel(
         val root = column()
         val status = text(tr("正在加载设置定义…", "Loading settings schema…"))
         root.addView(status)
-        root.addView(button(tr("核对未保存设置 / 恢复", "Inspect unsaved settings / recovery")) { recovery() })
+        val recRow =
+            LinearLayout(activity).apply {
+                orientation = LinearLayout.HORIZONTAL
+                gravity = android.view.Gravity.END
+                layoutParams = LinearLayout.LayoutParams(-1, -2).apply { bottomMargin = ui.dp(8) }
+            }
+        recRow.addView(
+            button(tr("核对未保存设置 / 恢复", "Inspect unsaved settings / recovery")) { recovery() }.apply {
+                minHeight = ui.dp(36)
+                minimumHeight = ui.dp(36)
+                textSize = 12f
+                setPadding(ui.dp(12), ui.dp(4), ui.dp(12), ui.dp(4))
+            },
+        )
+        root.addView(recRow)
         perform("settingsSchema", JSONObject(), { schema ->
             root.removeAllViews()
-            root.addView(button(tr("核对未保存设置 / 恢复", "Inspect unsaved settings / recovery")) { recovery() })
+            val recRowSettled =
+                LinearLayout(activity).apply {
+                    orientation = LinearLayout.HORIZONTAL
+                    gravity = android.view.Gravity.END
+                    layoutParams = LinearLayout.LayoutParams(-1, -2).apply { bottomMargin = ui.dp(8) }
+                }
+            recRowSettled.addView(
+                button(tr("核对未保存设置 / 恢复", "Inspect unsaved settings / recovery")) { recovery() }.apply {
+                    minHeight = ui.dp(36)
+                    minimumHeight = ui.dp(36)
+                    textSize = 12f
+                    setPadding(ui.dp(12), ui.dp(4), ui.dp(12), ui.dp(4))
+                },
+            )
+            root.addView(recRowSettled)
             providers = schema.getJSONArray("providers")
             val fields = schema.getJSONArray("fields")
             for ((group, title) in listOf(
@@ -126,6 +154,47 @@ internal class NativeSettingsPanel(
                 section.addView(ui.heading(title))
                 extraSections[group]?.let { section.addView(it) }
                 if (extraSections.containsKey(group)) continue
+                if (group == "reading") {
+                    val sandbox =
+                        ui.column().apply {
+                            background = ui.shape(ui.paper, ui.hairline, 1)
+                            setPadding(ui.dp(16), ui.dp(12), ui.dp(16), ui.dp(12))
+                            layoutParams = LinearLayout.LayoutParams(-1, -2).apply { bottomMargin = ui.dp(14) }
+                            addView(
+                                LinearLayout(activity).apply {
+                                    orientation = LinearLayout.HORIZONTAL
+                                    addView(
+                                        TextView(activity).apply {
+                                            text = "👁 " + tr("中英文混排实时校准沙盒", "Typography Calibration Sandbox")
+                                            textSize = 11f
+                                            typeface = NativeUi.monoTypeface(true)
+                                            setTextColor(ui.primary)
+                                        },
+                                        LinearLayout.LayoutParams(0, -2, 1f),
+                                    )
+                                    addView(
+                                        TextView(activity).apply {
+                                            text = "16sp · 1.6x · CJK-Latin"
+                                            textSize = 11f
+                                            typeface = NativeUi.monoTypeface(false)
+                                            setTextColor(ui.secondary)
+                                        },
+                                    )
+                                },
+                            )
+                            addView(
+                                TextView(activity).apply {
+                                    text = "在现代数字阅读（Digital Typography）中，中文方块字与拉丁字母（如 Pagewise 渲染引擎）混排时，基线对齐、中西文自动盘古间距（CJK-Latin Spacing）与标点挤压决定了长时间阅读的视觉舒适度。"
+                                    textSize = 15f
+                                    typeface = NativeUi.editorialTypeface(false)
+                                    setLineSpacing(0f, 1.45f)
+                                    setTextColor(ui.body)
+                                    setPadding(0, ui.dp(8), 0, 0)
+                                },
+                            )
+                        }
+                    section.addView(sandbox)
+                }
                 if (group == "ai") {
                     section.addView(
                         ui.settingRow(
@@ -278,15 +347,18 @@ internal class NativeSettingsPanel(
                 restoring = false
             }
         }
-        content.addView(
+        val backToDirBtn =
             button(tr("返回设置目录", "Settings directory")) {
                 if (!closed && !busy) {
                     state.directory = true
                     layout.directory = true
                     navScroll.requestFocus()
                 }
-            },
-        )
+            }
+        layout.onWideChanged = { isWide ->
+            backToDirBtn.visibility = if (isWide) View.GONE else View.VISIBLE
+        }
+        content.addView(backToDirBtn)
         for ((id, caption) in captions) {
             val action = ui.button(caption, selected = state.group == id) { select(id) }
             action.contentDescription = tr("设置分类：", "Settings category: ") + caption

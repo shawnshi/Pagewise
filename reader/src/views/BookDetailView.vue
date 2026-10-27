@@ -253,9 +253,9 @@ const recommendationCount = ref<number | null>(null)
     </div>
 
     <div v-else class="detail-content">
-      <!-- 顶部信息卡片 -->
-      <section class="card hero-card">
-        <div class="cover-wrapper">
+      <!-- 顶部信息卡片 (Ex Libris 双线馆藏著录卡) -->
+      <section class="card hero-card ex-libris-card">
+        <div class="cover-wrapper archival-cover-plate">
           <img v-if="coverUrl" :src="coverUrl" alt="" class="cover-img" />
           <div v-else class="cover-placeholder">
             <span>{{ book.title }}</span>
@@ -264,8 +264,9 @@ const recommendationCount = ref<number | null>(null)
         </div>
 
         <div class="meta-section">
+          <div class="ex-libris-header">EX LIBRIS · 馆藏著录卡</div>
           <h1 class="book-title">{{ book.title }}</h1>
-          <p v-if="book.author || book.publisher || book.publicationDate" class="book-author">{{ [book.author, book.publisher, book.publicationDate].filter(Boolean).join(' · ') }}</p>
+          <p v-if="book.author || book.publicationDate" class="book-author">{{ [book.author, book.publicationDate].filter(Boolean).join(' · ') }}</p>
 
           <div class="status-row">
             <span class="label">{{ t("uiV02.copy.阅读状态：") }}</span>
@@ -308,10 +309,6 @@ const recommendationCount = ref<number | null>(null)
               <AppIcon name="delete" :size="16" aria-hidden="true" />
               <span>{{ t('book.removeFromLibrary') }}</span>
             </button>
-            <div v-else class="source-managed-notice" :title="t('book.sourceManagedHint')">
-              <AppIcon name="folder" :size="16" aria-hidden="true" />
-              <span>{{ t('book.sourceManaged') }}</span>
-            </div>
           </div>
         </div>
       </section>
@@ -493,20 +490,23 @@ const recommendationCount = ref<number | null>(null)
   gap: 28px;
   padding: 24px;
   margin-bottom: 20px;
-  border: 1px solid var(--border);
-  border-radius: var(--radius);
+  border: 2px solid var(--eink-solid-black);
+  outline: 1px solid var(--eink-border-hairline);
+  outline-offset: -5px;
+  border-radius: 0;
   background: var(--card);
   box-shadow: none;
 }
 .cover-wrapper {
   position: relative;
   width: 140px;
-  height: 198px;
-  aspect-ratio: 1 / 1.414;
+  height: 188px;
+  aspect-ratio: 3 / 4;
   flex-shrink: 0;
-  border-radius: 2px;
+  border-radius: 0;
   overflow: hidden;
-  border: 1px solid var(--border);
+  border: 1px solid var(--eink-solid-black);
+  padding: 3px;
   background: var(--surface-2);
   box-shadow: none;
 }

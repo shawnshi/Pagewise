@@ -38,7 +38,10 @@ const topBook = computed(() => {
 
 <template>
   <section class="card ms" aria-labelledby="stats-ms-title">
-    <h2 id="stats-ms-title">{{ t('stats.milestonesTitle') }}</h2>
+    <div class="ms-head">
+      <h2 id="stats-ms-title">{{ t('stats.milestonesTitle') }}</h2>
+      <span class="ms-eyebrow">MILESTONES · 核心指标</span>
+    </div>
     <dl class="facts">
       <div class="fact">
         <dt>{{ t('stats.msTotal') }}</dt>
@@ -95,15 +98,28 @@ const topBook = computed(() => {
 .ms {
   padding: 18px 20px 20px;
 }
-h2 {
-  font-size: 15px;
-  font-weight: 650;
+.ms-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
   margin-bottom: 14px;
+}
+.ms-head h2 {
+  font-family: var(--font-serif);
+  font-size: 16px;
+  font-weight: 700;
+  margin: 0;
+}
+.ms-eyebrow {
+  font-family: var(--font-mono);
+  font-size: 10px;
+  letter-spacing: 0.08em;
+  color: var(--text-2);
 }
 .facts {
   display: grid;
   grid-template-columns: repeat(2, minmax(0, 1fr));
-  gap: 18px 16px;
+  gap: 12px;
 }
 .ms {
   container-type: inline-size;
@@ -111,8 +127,12 @@ h2 {
 .fact {
   display: flex;
   flex-direction: column;
-  gap: 2px;
+  gap: 4px;
   min-width: 0;
+  padding: 12px 14px;
+  border: 1px solid var(--border);
+  background: var(--surface-2);
+  border-radius: 2px;
 }
 /* 读屏顺序: 标签 → 数值; 视觉上数值在上 */
 .fact .v {
@@ -121,7 +141,9 @@ h2 {
 }
 dt {
   color: var(--text-2);
-  font-size: 12px;
+  font-size: 11px;
+  font-family: var(--font-mono);
+  font-weight: 600;
 }
 @container (min-width: 560px) {
   .facts {
@@ -134,7 +156,8 @@ dt {
   line-height: 1.2;
 }
 .n {
-  font-size: 22px;
+  font-family: var(--font-serif);
+  font-size: 24px;
   font-weight: 700;
   letter-spacing: -0.02em;
   font-variant-numeric: tabular-nums;

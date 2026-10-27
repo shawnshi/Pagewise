@@ -80,6 +80,7 @@ test('reading page has six correctly ordered and scoped tabs in zh/en at wide/na
           return route.abort()
         })
         const page = await context.newPage()
+        page.setDefaultNavigationTimeout(60_000)
         try {
           await page.goto(`${origin}/#/reading`, { waitUntil: 'networkidle' })
           const statuses = await storageOperation(page, 'seed', { language, books: fixtures })

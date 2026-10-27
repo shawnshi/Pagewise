@@ -91,6 +91,7 @@ internal class NativeLibraryPanel(
     private val repaint: () -> Unit,
     private val onFailure: () -> Unit = {},
     private val onSummary: (String?) -> Unit = {},
+    private val onRecommendations: (() -> Unit)? = null,
 ) {
     private val main = Handler(Looper.getMainLooper())
     private val root = column()
@@ -291,7 +292,8 @@ internal class NativeLibraryPanel(
                 gravity = android.view.Gravity.CENTER_VERTICAL
                 background =
                     NativeUi.shape(activity, inputBg).apply {
-                        cornerRadius = NativeUi.dp(activity, 2).toFloat()
+                        setColor(NativeUi.mutedSurface(inputBg))
+                        cornerRadius = 0f
                         setStroke(NativeUi.dp(activity, 1), NativeUi.border(inputBg))
                     }
                 setPadding(NativeUi.dp(activity, 12), NativeUi.dp(activity, 2), NativeUi.dp(activity, 8), NativeUi.dp(activity, 2))
@@ -708,8 +710,7 @@ internal class NativeLibraryPanel(
         )
         if (reading) {
             val counts = result.getJSONObject("tabCounts")
-            tabs(
-                root,
+            val readingTabs =
                 listOf(
                     "reading" to tr("在读", "Reading"),
                     "recent" to tr("最近", "Recent"),
@@ -725,7 +726,20 @@ internal class NativeLibraryPanel(
                             state.selected.clear()
                             load()
                         }
-                },
+                } + (
+                    if (onRecommendations != null) {
+                        listOf(
+                            tr("推荐", "Recommendations") to {
+                                onRecommendations.invoke()
+                            },
+                        )
+                    } else {
+                        emptyList()
+                    }
+                )
+            tabs(
+                root,
+                readingTabs,
                 listOf("reading", "recent", "wanted", "paused", "finished", "abandoned").indexOf(state.tab),
             )
         }
@@ -738,7 +752,14 @@ internal class NativeLibraryPanel(
                     count > 0
                 }
             if (categories.isNotEmpty()) {
-                root.addView(text(tr("类别（全库数量）", "Categories (library totals)"), 13f))
+                val bg = if (ink == android.graphics.Color.BLACK) android.graphics.Color.WHITE else android.graphics.Color.BLACK
+                root.addView(
+                    text(tr("类别（全库数量）", "Categories (library totals)"), 12f).apply {
+                        typeface = NativeUi.monoTypeface(true)
+                        setTextColor(NativeUi.secondary(bg))
+                        setPadding(0, NativeUi.dp(activity, 2), 0, NativeUi.dp(activity, 4))
+                    },
+                )
                 tabs(
                     root,
                     listOf(
@@ -768,8 +789,32 @@ internal class NativeLibraryPanel(
         if (state.manage) management(result, items)
         if (items.length() == 0) {
             val emptyLibrary = result.getInt("allCount") == 0
-            root.addView(text(if (emptyLibrary) tr("还没有藏书", "Your library is empty") else tr("没有匹配记录。", "No matching records."), 18f, true))
-            root.addView(
+            val bg = if (ink == android.graphics.Color.BLACK) android.graphics.Color.WHITE else android.graphics.Color.BLACK
+            val emptyCard =
+                column().apply {
+                    background = NativeUi.hairlineShape(activity, bg, true)
+                    setPadding(NativeUi.dp(activity, 20), NativeUi.dp(activity, 20), NativeUi.dp(activity, 20), NativeUi.dp(activity, 20))
+                    layoutParams =
+                        LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT).apply {
+                            topMargin = NativeUi.dp(activity, 12)
+                            bottomMargin = NativeUi.dp(activity, 12)
+                        }
+                }
+            emptyCard.addView(
+                TextView(activity).apply {
+                    text = "INDEX // EMPTY"
+                    textSize = 11f
+                    typeface = NativeUi.monoTypeface(true)
+                    setTextColor(NativeUi.secondary(bg))
+                    importantForAccessibility = View.IMPORTANT_FOR_ACCESSIBILITY_NO
+                },
+            )
+            emptyCard.addView(
+                text(if (emptyLibrary) tr("还没有藏书", "Your library is empty") else tr("没有匹配记录。", "No matching records."), 18f, true).apply {
+                    typeface = NativeUi.editorialTypeface(true)
+                },
+            )
+            emptyCard.addView(
                 text(
                     if (emptyLibrary) {
                         tr(
@@ -779,8 +824,11 @@ internal class NativeLibraryPanel(
                     } else {
                         tr("试试其他关键词、筛选条件或阅读状态。", "Try another search, filter or reading status.")
                     },
-                ),
+                ).apply {
+                    setTextColor(NativeUi.secondary(bg))
+                },
             )
+            root.addView(emptyCard)
         }
         val metadataQueue = java.util.ArrayDeque<() -> Unit>()
         val advance: () -> Unit = { if (!closed && token == epoch && metadataQueue.isNotEmpty()) metadataQueue.removeFirst().invoke() }
@@ -860,8 +908,15 @@ internal class NativeLibraryPanel(
         main.post { advance() }
         val page = result.getInt("page")
         val pages = result.getInt("totalPages")
+        val panelBg = if (ink == android.graphics.Color.BLACK) android.graphics.Color.WHITE else android.graphics.Color.BLACK
         if (reading) {
-            root.addView(text("${items.length()} / ${result.getInt("total")} " + tr("项", "items")))
+            root.addView(
+                text("${items.length()} / ${result.getInt("total")} " + tr("项", "items"), 13f).apply {
+                    typeface = NativeUi.monoTypeface(false)
+                    fontFeatureSettings = "tnum"
+                    setTextColor(NativeUi.secondary(panelBg))
+                },
+            )
             if (page < pages) {
                 root.addView(
                     button(tr("显示更多", "Load more")) {
@@ -869,6 +924,9 @@ internal class NativeLibraryPanel(
                         load()
                     },
                 )
+            }
+            if (result.getInt("total") > 0) {
+                root.addView(NativeUi.colophonTailpiece(activity, "READING LEDGER · ${result.getInt("total")}", panelBg))
             }
             return
         }
@@ -884,8 +942,9 @@ internal class NativeLibraryPanel(
             TextView(activity).apply {
                 text = "$page / $pages · " + tr("共", "Total ") + "${result.getInt("total")} " + tr("册", "items")
                 textSize = 13f
-                setTextColor(NativeUi.secondary(if (ink == android.graphics.Color.BLACK) android.graphics.Color.WHITE else android.graphics.Color.BLACK))
+                setTextColor(NativeUi.secondary(panelBg))
                 setTypeface(android.graphics.Typeface.MONOSPACE, android.graphics.Typeface.NORMAL)
+                fontFeatureSettings = "tnum"
             }
         pagingBar.addView(pageInfo, LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f))
         val pagerButtons =
@@ -918,6 +977,7 @@ internal class NativeLibraryPanel(
         )
         pagingBar.addView(pagerButtons)
         root.addView(pagingBar)
+        root.addView(NativeUi.colophonTailpiece(activity, "EX LIBRIS CATALOG · ${result.getInt("total")}", panelBg))
     }
 
     private fun filterTitle(key: String) =

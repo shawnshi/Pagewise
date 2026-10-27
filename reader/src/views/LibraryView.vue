@@ -979,6 +979,10 @@ async function clearSelectedTags() {
       </template>
       <RouterLink to="/settings?section=library-display">{{ t('library.displaySettings') }}</RouterLink>
     </nav>
+    <div v-if="library.loaded && filtered.length" class="colophon-tailpiece" aria-hidden="true">
+      <span>──────  ◇  ──────</span>
+      <span>EX LIBRIS CATALOG · {{ query.total }}</span>
+    </div>
 
     <!-- 批量管理操作栏 -->
     <div v-if="manageMode" class="batch-bar card" role="toolbar" :aria-label="t('library.manage')">
@@ -1215,19 +1219,22 @@ async function clearSelectedTags() {
   gap: 0;
 }
 .empty {
-  padding: 64px 24px;
+  padding: 56px 24px;
   text-align: center;
   display: flex;
   flex-direction: column;
   align-items: center;
   gap: 12px;
+  border: 1px dashed var(--eink-border-hairline);
+  background: var(--card);
 }
 .empty-icon {
   color: var(--text-3);
 }
 .empty-title {
-  font-size: 16px;
-  font-weight: 600;
+  font-family: var(--font-serif);
+  font-size: 17px;
+  font-weight: 700;
   margin: 0;
 }
 .hint {
@@ -1241,7 +1248,11 @@ async function clearSelectedTags() {
   align-items: center;
   justify-content: flex-end;
   gap: 12px;
-  margin-top: 24px;
+  margin-top: 20px;
+  padding-top: 12px;
+  border-top: 1px solid var(--eink-border-hairline);
+  font-family: var(--font-mono);
+  font-variant-numeric: tabular-nums;
   font-size: 13px;
   color: var(--text-2);
 }

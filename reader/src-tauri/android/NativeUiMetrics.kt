@@ -117,25 +117,56 @@ internal data class NativeEinkPalette(
 private val nativeEinkLight =
     NativeEinkPalette(
         0xFFFFFFFF.toInt(),
-        0xFFF4F4F4.toInt(),
+        0xFFEEEEEE.toInt(),
         0xFF000000.toInt(),
-        0xFFD0D0D0.toInt(),
-        0xFF000000.toInt(),
-        0xFF555555.toInt(),
-        0xFF8C8C8C.toInt(),
-        0xFFE0E0E0.toInt(),
+        0xFFBBBBBB.toInt(),
+        0xFF111111.toInt(),
+        0xFF444444.toInt(),
+        0xFF777777.toInt(),
+        0xFFDDDDDD.toInt(),
     )
 private val nativeEinkDark =
     NativeEinkPalette(
         0xFF000000.toInt(),
-        0xFF111111.toInt(),
+        0xFF222222.toInt(),
         0xFFFFFFFF.toInt(),
-        0xFF4A4A4A.toInt(),
-        0xFFFFFFFF.toInt(),
-        0xFFD4D4D4.toInt(),
-        0xFF8C8C8C.toInt(),
+        0xFF555555.toInt(),
+        0xFFEEEEEE.toInt(),
+        0xFFCCCCCC.toInt(),
+        0xFF999999.toInt(),
         0xFF333333.toInt(),
     )
+
+private val archivalCallNumbers =
+    mapOf(
+        "philosophy-religion" to ("哲学与宗教" to "PHI"),
+        "psychology-cognition" to ("心理与认知" to "PSY"),
+        "computer-ai" to ("计算机与AI" to "CSI"),
+        "biography-memoir" to ("传记与回忆" to "BIO"),
+        "history-society" to ("历史与社会" to "HIS"),
+        "economics-management" to ("经济与管理" to "ECO"),
+        "science-nature" to ("科学与自然" to "SCI"),
+        "literature-language" to ("文学与语言" to "LIT"),
+        "art-design" to ("艺术与设计" to "ART"),
+        "life-health" to ("生活与健康" to "LIF"),
+        "unclassified" to ("未分类" to "UNC"),
+    )
+
+internal fun nativeCategoryCallNumber(
+    raw: String,
+    english: Boolean = false,
+): String {
+    val trimmed = raw.trim()
+    if (trimmed.isEmpty()) return if (english) "Unclassified [UNC]" else "未分类 [UNC]"
+    val entry = archivalCallNumbers[trimmed]
+    if (entry != null) {
+        return if (english) "$trimmed [${entry.second}]" else "${entry.first} [${entry.second}]"
+    }
+    for ((_, pair) in archivalCallNumbers) {
+        if (trimmed == pair.first) return "${pair.first} [${pair.second}]"
+    }
+    return trimmed
+}
 
 internal fun nativeEinkPalette(background: Int): NativeEinkPalette =
     if ((background ushr 16 and 255) > 128) nativeEinkLight else nativeEinkDark

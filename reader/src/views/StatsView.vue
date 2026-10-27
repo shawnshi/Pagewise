@@ -129,16 +129,6 @@ function onSubViewKey(event: KeyboardEvent) {
   <div class="stats">
     <header class="page-head">
       <h1>{{ t('stats.title') }}</h1>
-      <button
-        type="button"
-        class="btn btn-ghost btn-sm how-btn"
-        :aria-expanded="showHow"
-        aria-controls="stats-how"
-        @click="showHow = !showHow"
-      >
-        <svg viewBox="0 0 24 24" width="16" height="16" aria-hidden="true"><path fill="currentColor" d="M12 2a10 10 0 1 1 0 20 10 10 0 0 1 0-20zm0 2a8 8 0 1 0 0 16 8 8 0 0 0 0-16zm0 7a1 1 0 0 1 1 1v4a1 1 0 1 1-2 0v-4a1 1 0 0 1 1-1zm0-4a1.25 1.25 0 1 1 0 2.5A1.25 1.25 0 0 1 12 7z" /></svg>
-        {{ t('stats.howTitle') }}
-      </button>
     </header>
     <div v-if="showHow" id="stats-how" class="how">
       <ul>

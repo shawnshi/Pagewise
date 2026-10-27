@@ -197,8 +197,17 @@ internal class NativeStatsPanel(
     }
 
     private fun recoveryEntry() {
-        val row = NativeActionFlow(activity)
-        row.addView(button(tr("核对设置提交 / 恢复", "Inspect settings / recovery")) { recoverSettings() })
+        val row =
+            NativeActionFlow(activity).apply {
+                visibility = View.GONE
+            }
+        row.addView(
+            button(tr("核对设置提交 / 恢复", "Inspect settings / recovery")) { recoverSettings() }.apply {
+                textSize = 12f
+                minHeight = NativeUi.dp(activity, 36)
+                minimumHeight = NativeUi.dp(activity, 36)
+            },
+        )
         recoveryRow = row
         root.addView(row)
     }
@@ -208,7 +217,6 @@ internal class NativeStatsPanel(
         root.removeAllViews()
         status.text = ""
         root.addView(status)
-        recoveryEntry()
         val tabs = NativeActionFlow(activity)
         for ((id, label) in listOf("overview" to tr("概览", "Overview"), "trend" to tr("趋势", "Trends"), "calendar" to tr("年历", "Calendar"))) {
             tabs.addView(
@@ -224,6 +232,7 @@ internal class NativeStatsPanel(
             )
         }
         root.addView(tabs)
+        recoveryEntry()
         val background = ui.paper
         val dashboard = NativeStatsOverviewLayout(activity)
         val todayCard = ui.card(emphatic = true)
@@ -264,6 +273,8 @@ internal class NativeStatsPanel(
                             .create()
                             .also { it.show() }
                 }
+            }.apply {
+                visibility = View.GONE
             }
         recoveryRow?.addView(how)
         if (overview.getJSONObject("milestones").optDouble("totalSeconds", 0.0) <= 0 && result.optDouble("legacySeconds", 0.0) <= 0) {
@@ -272,12 +283,48 @@ internal class NativeStatsPanel(
             root.removeView(calendarCard)
             root.removeView(rankCard)
             root.removeView(daysCard)
-            val empty = ui.card(emphatic = true)
-            empty.addView(text(tr("还没有阅读记录", "No reading records yet"), 20f))
-            empty.addView(text(tr("从藏书打开一本书后，阅读记录将在这里汇总。", "Open a book from Library to start accumulating reading records."), 14f))
-            empty.addView(button(tr("前往藏书", "Go to Library")) { navigate("/library") })
-            empty.addView(button(tr("设置阅读目标", "Set reading goal")) { editGoal() }.also { goalButtons.add(it) })
+            val empty =
+                ui.card(emphatic = true).apply {
+                    setPadding(NativeUi.dp(activity, 24), NativeUi.dp(activity, 20), NativeUi.dp(activity, 24), NativeUi.dp(activity, 20))
+                }
+            empty.addView(
+                TextView(activity).apply {
+                    text = "INDEX // EMPTY LEDGER"
+                    textSize = 11f
+                    typeface = NativeUi.monoTypeface(true)
+                    setTextColor(ui.secondary)
+                    importantForAccessibility = View.IMPORTANT_FOR_ACCESSIBILITY_NO
+                },
+            )
+            empty.addView(
+                text(tr("还没有阅读记录", "No reading records yet"), 18f).apply {
+                    typeface = NativeUi.editorialTypeface(true)
+                    setPadding(0, dp(4), 0, dp(4))
+                },
+            )
+            empty.addView(
+                text(tr("从藏书打开一本书后，阅读记录将在这里汇总。", "Open a book from Library to start accumulating reading records."), 13f).apply {
+                    setTextColor(ui.secondary)
+                    setPadding(0, 0, 0, dp(14))
+                },
+            )
+            val actions =
+                LinearLayout(activity).apply {
+                    orientation = LinearLayout.HORIZONTAL
+                }
+            actions.addView(
+                NativeUi.primaryButton(activity, tr("前往藏书", "Go to Library"), ink, background) { navigate("/library") },
+                LinearLayout.LayoutParams(-2, -2).apply { marginEnd = dp(8) },
+            )
+            actions.addView(
+                button(tr("设置阅读目标", "Set reading goal")) { editGoal() }.apply {
+                    minHeight = dp(44)
+                    minimumHeight = dp(44)
+                }.also { goalButtons.add(it) },
+            )
+            empty.addView(actions)
             root.addView(empty)
+            root.addView(NativeUi.colophonTailpiece(activity, "READING REGISTER · NO DATA", background))
             return
         }
         todayCard.addView(ui.metric(duration(overview.getDouble("todaySeconds")), tr("今天已记录", "Recorded today")))
@@ -289,7 +336,16 @@ internal class NativeStatsPanel(
             ),
         )
         todayCard.addView(
-            button(tr("每日目标", "Daily goal") + ": ${result.getInt("goalMinutes")} min") { editGoal() }.also { goalButtons.add(it) },
+            button(tr("每日目标", "Daily goal") + ": ${result.getInt("goalMinutes")} min") { editGoal() }
+                .apply {
+                    typeface = NativeUi.monoTypeface(false)
+                    fontFeatureSettings = "tnum"
+                    layoutParams =
+                        LinearLayout.LayoutParams(ViewGroup.LayoutParams.WRAP_CONTENT, ViewGroup.LayoutParams.WRAP_CONTENT).apply {
+                            topMargin = dp(4)
+                            bottomMargin = dp(8)
+                        }
+                }.also { goalButtons.add(it) },
         )
         val week = overview.getJSONArray("week")
         val todayWeek =
@@ -321,9 +377,20 @@ internal class NativeStatsPanel(
         result.optJSONObject("continueBook")?.let { recent ->
             if (!recent.isNull("readerPath")) {
                 todayCard.addView(
-                    button(tr("继续阅读：", "Continue: ") + recent.getString("title")) {
-                        navigate(recent.getString("readerPath"))
-                    },
+                    NativeUi
+                        .primaryButton(
+                            activity,
+                            tr("继续阅读：", "Continue: ") + recent.getString("title"),
+                            ink,
+                            background,
+                        ) {
+                            navigate(recent.getString("readerPath"))
+                        }.apply {
+                            layoutParams =
+                                LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT).apply {
+                                    topMargin = dp(6)
+                                }
+                        },
                 )
             }
         }
@@ -335,7 +402,7 @@ internal class NativeStatsPanel(
                 ),
             )
         }
-        weekCard.addView(text(tr("本周（点击日期查看书目）", "This week (tap for books)"), 20f))
+        weekCard.addView(ui.note(tr("本周（点击日期查看书目）", "This week (tap for books)")))
         controls(
             weekCard,
             (0 until week.length()).map { i ->
@@ -508,21 +575,44 @@ internal class NativeStatsPanel(
         )
         calendar(cal, calendarCard)
         val marks = overview.getJSONObject("milestones")
-        marksCard.addView(
-            text(
-                tr("累计", "Total") + ": " + duration(marks.getDouble("totalSeconds")) + " · ${marks.getInt("activeDays")} " +
-                    tr("阅读天", "active days") +
-                    " · " +
-                    tr("最长连续", "Longest streak") +
-                    " ${marks.getInt("longestStreak")} " +
-                    tr("天", "days"),
-            ),
-        )
+        val grid =
+            ui.column().apply {
+                val row1 =
+                    LinearLayout(activity).apply {
+                        orientation = LinearLayout.HORIZONTAL
+                        val f1 = ui.factBox(tr("累计时长", "Total time"), duration(marks.getDouble("totalSeconds")), tr("全部馆藏", "All books"))
+                        val f2 = ui.factBox(tr("活跃阅读日", "Active days"), "${marks.getInt("activeDays")} " + tr("天", "days"), tr("每天至少60秒", "Min 60s/day"))
+                        addView(f1, LinearLayout.LayoutParams(0, -2, 1f).apply { marginEnd = dp(8) })
+                        addView(f2, LinearLayout.LayoutParams(0, -2, 1f))
+                    }
+                val row2 =
+                    LinearLayout(activity).apply {
+                        orientation = LinearLayout.HORIZONTAL
+                        layoutParams = LinearLayout.LayoutParams(-1, -2).apply { topMargin = dp(8) }
+                        val bestDaySec = marks.optJSONObject("bestDay")?.getDouble("seconds") ?: 0.0
+                        val bestDayDate = marks.optJSONObject("bestDay")?.getString("day") ?: "—"
+                        val f3 = ui.factBox(tr("最长连续", "Longest streak"), "${marks.getInt("longestStreak")} " + tr("天", "days"), tr("打卡记录", "Streak record"))
+                        val f4 = ui.factBox(tr("单日最长", "Best day"), if (bestDaySec > 0) duration(bestDaySec) else "—", bestDayDate)
+                        addView(f3, LinearLayout.LayoutParams(0, -2, 1f).apply { marginEnd = dp(8) })
+                        addView(f4, LinearLayout.LayoutParams(0, -2, 1f))
+                    }
+                addView(row1)
+                addView(row2)
+            }
+        marksCard.addView(grid)
         marks.optJSONObject("bestDay")?.let {
             marksCard.addView(
                 button(
                     tr("单日最长", "Best day") + ": ${it.getString("day")} · ${duration(it.getDouble("seconds"))}",
-                ) { load(it.getString("day")) },
+                ) { load(it.getString("day")) }.apply {
+                    typeface = NativeUi.monoTypeface(false)
+                    fontFeatureSettings = "tnum"
+                    layoutParams =
+                        LinearLayout.LayoutParams(ViewGroup.LayoutParams.WRAP_CONTENT, ViewGroup.LayoutParams.WRAP_CONTENT).apply {
+                            topMargin = dp(4)
+                            bottomMargin = dp(6)
+                        }
+                },
             )
         }
         marks.optJSONObject("topBook")?.let { addBook(marksCard, it, tr("读得最久", "Top book") + ": ") }

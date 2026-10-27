@@ -75,6 +75,7 @@ internal class NativeClassificationEditor(
                 .setNegativeButton("关闭", null)
                 .create()
         dialog = window
+        window.window?.setWindowAnimations(0)
         window.setOnDismissListener { closed = true }
         window.setOnShowListener {
             window.getButton(AlertDialog.BUTTON_POSITIVE).setOnClickListener { save() }

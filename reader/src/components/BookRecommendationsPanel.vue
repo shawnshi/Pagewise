@@ -134,13 +134,16 @@ defineExpose({isWriting:()=>writing.value,reload:()=>load(true)})
       <div class="recommendation-identity">
        <div class="recommendation-cover" aria-hidden="true"><img v-if="covers[card.book.id]" :src="covers[card.book.id]" alt=""><span v-else>{{ card.book.format.toUpperCase() }}</span></div>
        <div class="recommendation-meta">
-        <button type="button" class="recommendation-title" :disabled="writing" @click="emit('navigate', card.book.id)">{{ card.book.title }}</button>
-        <p>{{ card.book.author || tr('未知作者','Unknown author') }}</p><p>{{ status(card) }}<template v-if="card.book.progress != null"> · {{ Math.round(card.book.progress * 100) }}%</template></p>
+        <div class="recommendation-title-row">
+          <button type="button" class="recommendation-title" :disabled="writing" @click="emit('navigate', card.book.id)">{{ card.book.title }}</button>
+          <span class="recommendation-author">· {{ card.book.author || tr('未知作者','Unknown author') }}</span>
+        </div>
+        <p class="recommendation-status">{{ status(card) }}<template v-if="card.book.progress != null"> · {{ Math.round(card.book.progress * 100) }}%</template></p>
         <p v-if="card.recordCount > 1">{{ tr('同题名／明确分卷记录','Same-title / explicitly numbered records') }}：{{ card.recordCount }}</p>
        </div>
       </div>
       <p class="recommendation-source">{{ tr('来源','From') }}：《{{ card.sourceTitle }}》</p>
-      <p class="recommendation-reason">{{ card.reason }} <span v-if="card.reasonKind === 'ai'">{{ tr('〔AI，未核验〕','[AI, unverified]') }}</span></p>
+      <p class="recommendation-reason"><span>{{ tr('推荐理由','Recommendation reason') }}：</span>{{ card.reason }} <span v-if="card.reasonKind === 'ai'">{{ tr('〔AI，未核验〕','[AI, unverified]') }}</span></p>
       <div class="recommendation-actions">
        <button type="button" :disabled="writing" @click="emit('navigate', card.book.id)">{{ tr('查看详情','View details') }}</button>
        <button type="button" :disabled="busy || unknown || !canAddWanted || card.book.readingStatus === 'wanted'" @click="mutate('wanted',card)">{{ card.book.readingStatus === 'wanted' ? tr('已在想读','Already wanted') : tr('加入想读','Want to read') }}</button>
@@ -175,7 +178,10 @@ h3 {font-size:1.1rem;margin:12px 0;}
 .recommendation-cover {width:64px;min-width:64px;height:88px;border:1px solid currentColor;display:grid;place-items:center;font-size:12px;}
 .recommendation-cover img {width:100%;height:100%;object-fit:cover;}
 .recommendation-meta {flex:1;min-width:0;}
-.recommendation-title {border:0;text-align:start;font-weight:600;padding:0;display:block;width:100%;}
+.recommendation-title-row { display: flex; flex-wrap: wrap; align-items: baseline; gap: 6px; }
+.recommendation-author { font-size: 0.85rem; opacity: 0.75; }
+.recommendation-status { font-size: 0.85rem; opacity: 0.8; margin: 2px 0; }
+.recommendation-title {border:0;text-align:start;font-weight:600;padding:0;display:inline-block;width:auto;}
 p {line-height:1.6;overflow-wrap:anywhere;margin:6px 0;}
 .recommendation-source,.recommendation-basis {font-size:.9rem;}
 .recommendation-reason {margin-block:12px;}

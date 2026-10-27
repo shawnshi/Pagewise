@@ -65,7 +65,10 @@ internal class NativeNoteEditor(
             TextView(activity).apply {
                 text = before.optString("text")
                 setTextIsSelectable(true)
-                textSize = 16f
+                textSize = 15f
+                typeface = NativeUi.editorialTypeface(false)
+                setBackgroundColor(android.graphics.Color.parseColor("#EEEEEE"))
+                setPadding(NativeUi.dp(activity, 12), NativeUi.dp(activity, 8), NativeUi.dp(activity, 12), NativeUi.dp(activity, 8))
             },
         )
         form.addView(editor)
@@ -81,6 +84,7 @@ internal class NativeNoteEditor(
                 .setNeutralButton("放弃本次输入", null)
                 .create()
         dialog = window
+        window.window?.setWindowAnimations(0)
         // Neither outside taps nor Android 13+ default dialog cancellation may bypass the durable leave barrier.
         window.setCancelable(false)
         window.setCanceledOnTouchOutside(false)

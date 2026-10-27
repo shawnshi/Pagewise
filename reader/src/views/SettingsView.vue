@@ -64,6 +64,9 @@ const navSections = computed(() => [
 const libraryPageSize = ref(loadLibrarySession()?.pageSize ?? 12)
 watch(libraryPageSize, value => { saveLibrarySession({ pageSize: value, page: 1 }) })
 const activeSection = ref('general')
+const previewFontSize = ref(16)
+const previewLineHeight = ref(1.75)
+const previewSerif = ref(true)
 const rootEl = ref<HTMLElement>()
 const navEl = ref<HTMLElement>()
 let scroller: HTMLElement | null = null
@@ -415,6 +418,34 @@ const APPEARANCE_OPTIONS = [
 
     <section v-show="activeSection === 'reading'" id="settings-reading" class="card section" aria-labelledby="settings-reading-heading">
       <h2 id="settings-reading-heading" tabindex="-1">{{ t('settings.reading') }}</h2>
+
+      <!-- 中英文混排实时校准沙盒 (Live Typography Sandbox) -->
+      <div class="typo-sandbox" style="border: 1px solid var(--border); background: var(--surface-2); border-radius: 2px; padding: 16px; margin: 16px 0;">
+        <div class="typo-sandbox-head" style="display: flex; justify-content: space-between; align-items: center; font-size: 11px; margin-bottom: 8px;">
+          <span style="font-weight: 700; font-family: var(--font-mono); letter-spacing: 0.04em;">👁 中英文混排实时校准沙盒 (readerTypography.ts)</span>
+          <span style="font-family: var(--font-mono); color: var(--text-2);">字号 {{ previewFontSize }}px · 行高 {{ previewLineHeight }} · 盘古间距 已启用</span>
+        </div>
+        <p class="typo-sample" :style="{ fontSize: `${previewFontSize}px`, lineHeight: previewLineHeight, margin: '8px 0', fontFamily: previewSerif ? 'var(--font-serif)' : 'var(--font)' }">
+          在现代数字阅读（Digital Typography）中，中文方块字与拉丁字母（如 Pagewise 使用的 <code>foliate-js</code> 排版引擎）混排时，基线对齐、中西文自动盘古间距（CJK-Latin Spacing）与标点挤压决定了长时间阅读的视觉舒适度。
+        </p>
+        <div class="typo-controls" style="display: grid; grid-template-columns: repeat(auto-fit, minmax(180px, 1fr)); gap: 16px; margin-top: 12px; padding-top: 10px; border-top: 1px dashed var(--border);">
+          <div class="typo-control-group">
+            <div style="display: flex; justify-content: space-between; font-size: 12px; margin-bottom: 4px;">
+              <span>正文字号调节</span>
+              <span style="font-family: var(--font-mono); font-weight: 600;">{{ previewFontSize }}px</span>
+            </div>
+            <input v-model.number="previewFontSize" type="range" min="13" max="24" step="1" style="width: 100%; accent-color: var(--brand);" />
+          </div>
+          <div class="typo-control-group">
+            <div style="display: flex; justify-content: space-between; font-size: 12px; margin-bottom: 4px;">
+              <span>行高倍率</span>
+              <span style="font-family: var(--font-mono); font-weight: 600;">{{ previewLineHeight }}x</span>
+            </div>
+            <input v-model.number="previewLineHeight" type="range" min="1.3" max="2.2" step="0.05" style="width: 100%; accent-color: var(--brand);" />
+          </div>
+        </div>
+      </div>
+
       <div class="row">
         <div class="row-text"><div class="row-title">{{ t('settings.pdfRenderer') }}</div><div class="row-desc">{{ t('settings.pdfRendererDesc') }}</div></div>
         <div class="segmented" role="group" :aria-label="t('settings.pdfRenderer')">

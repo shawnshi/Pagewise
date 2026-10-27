@@ -26,9 +26,11 @@ internal class NativeStatsSettingsUi(
 ) {
     private val dark = ink == Color.WHITE
     val primary = if (dark) Color.WHITE else Color.BLACK
-    val body = Color.parseColor(if (dark) "#DDDDDD" else "#222222")
-    val secondary = Color.parseColor(if (dark) "#AAAAAA" else "#555555")
-    val selectedSurface = Color.parseColor(if (dark) "#222222" else "#DDDDDD")
+    val body = Color.parseColor(if (dark) "#EEEEEE" else "#111111")
+    val secondary = Color.parseColor(if (dark) "#CCCCCC" else "#444444")
+    val hairline = Color.parseColor(if (dark) "#555555" else "#BBBBBB")
+    val sunkenSurface = Color.parseColor(if (dark) "#222222" else "#EEEEEE")
+    val selectedSurface = Color.parseColor(if (dark) "#333333" else "#DDDDDD")
 
     fun dp(value: Int) = NativeUi.dp(context, value)
 
@@ -58,9 +60,12 @@ internal class NativeStatsSettingsUi(
             setPadding(dp(12), dp(12), dp(12), dp(12))
         }
 
-    fun note(value: String) = text(value, 14f).apply { setTextColor(secondary) }
+    fun note(value: String) = text(value, 13f).apply { setTextColor(secondary) }
 
-    fun heading(value: String) = text(value, 18f, true)
+    fun heading(value: String) =
+        text(value, 18f, true).apply {
+            typeface = NativeUi.editorialTypeface(true)
+        }
 
     fun column() = LinearLayout(context).apply { orientation = LinearLayout.VERTICAL }
 
@@ -69,10 +74,15 @@ internal class NativeStatsSettingsUi(
         label: String,
     ): View =
         column().apply {
-            addView(note(label))
             addView(
-                text(value, 40f).apply {
-                    typeface = Typeface.MONOSPACE
+                note("EX LIBRIS · $label").apply {
+                    typeface = NativeUi.monoTypeface(true)
+                    fontFeatureSettings = "tnum"
+                },
+            )
+            addView(
+                text(value, 36f).apply {
+                    typeface = NativeUi.editorialTypeface(true)
                     fontFeatureSettings = "'tnum' 1"
                     text =
                         SpannableString(value).apply {
@@ -85,13 +95,47 @@ internal class NativeStatsSettingsUi(
             )
         }
 
-    private fun shape(
+    fun factBox(
+        title: String,
+        value: String,
+        hint: String = "",
+    ): View =
+        column().apply {
+            background = shape(paper, hairline, 1)
+            setPadding(dp(12), dp(10), dp(12), dp(10))
+            addView(
+                note(title).apply {
+                    textSize = 11f
+                    typeface = NativeUi.monoTypeface(true)
+                    fontFeatureSettings = "tnum"
+                    setPadding(0, 0, 0, dp(2))
+                },
+            )
+            addView(
+                text(value, 20f, true).apply {
+                    typeface = NativeUi.editorialTypeface(true)
+                    fontFeatureSettings = "tnum"
+                    setPadding(0, 0, 0, dp(2))
+                },
+            )
+            if (hint.isNotEmpty()) {
+                addView(
+                    note(hint).apply {
+                        textSize = 11f
+                        typeface = NativeUi.monoTypeface(false)
+                        setPadding(0, 0, 0, 0)
+                    },
+                )
+            }
+        }
+
+    fun shape(
         fill: Int,
         stroke: Int,
         width: Int = 1,
     ) = GradientDrawable().apply {
         setColor(fill)
-        cornerRadius = dp(2).toFloat()
+        cornerRadius = 0f
         setStroke(dp(width), stroke)
     }
 
@@ -143,9 +187,19 @@ internal class NativeStatsSettingsUi(
         emphatic: Boolean = false,
     ): LinearLayout =
         column().apply {
-            setPadding(dp(24), dp(16), dp(24), dp(16))
-            background = shape(paper, if (emphatic) primary else secondary, if (emphatic) 2 else 1)
-            layoutParams = ViewGroup.MarginLayoutParams(-1, -2).apply { bottomMargin = dp(24) }
+            setPadding(dp(20), dp(16), dp(20), dp(16))
+            if (emphatic) {
+                val outer = shape(paper, primary, 2)
+                val inner = shape(paper, hairline, 1)
+                val inset = dp(3)
+                background =
+                    android.graphics.drawable.LayerDrawable(arrayOf(outer, inner)).apply {
+                        setLayerInset(1, inset, inset, inset, inset)
+                    }
+            } else {
+                background = shape(paper, primary, 1)
+            }
+            layoutParams = ViewGroup.MarginLayoutParams(-1, -2).apply { bottomMargin = dp(20) }
             if (title != null) addView(heading(title))
         }
 
@@ -227,6 +281,7 @@ internal class NativeSettingsPageLayout(
         }
     var wide: Boolean = false
         private set
+    var onWideChanged: ((Boolean) -> Unit)? = null
 
     init {
         addView(navigation)
@@ -251,6 +306,7 @@ internal class NativeSettingsPageLayout(
             }
         // The controller keeps 24dp insets on either side of the 960dp window breakpoint.
         wide = width >= NativeUi.dp(context, 912)
+        onWideChanged?.invoke(wide)
         navigation.visibility = if (wide || directory) View.VISIBLE else View.GONE
         content.visibility = if (wide || !directory) View.VISIBLE else View.GONE
         val navWidth = if (wide) NativeUi.dp(context, 232) else width
@@ -498,9 +554,26 @@ internal class NativeStatsGoalRule(
 
     override fun onDraw(canvas: android.graphics.Canvas) {
         super.onDraw(canvas)
-        paint.color = ui.selectedSurface
-        canvas.drawRect(0f, 0f, width.toFloat(), height.toFloat(), paint)
+        val w = width.toFloat()
+        val h = height.toFloat()
+        val stroke = ui.dp(1).toFloat().coerceAtLeast(1f)
+        paint.style = android.graphics.Paint.Style.FILL
+        paint.color = ui.sunkenSurface
+        canvas.drawRect(0f, 0f, w, h, paint)
+        if (fraction > 0.0) {
+            paint.color = ui.primary
+            canvas.drawRect(0f, 0f, (w * fraction).toFloat(), h, paint)
+        }
+        paint.color = ui.hairline
+        paint.strokeWidth = stroke
+        for (q in intArrayOf(25, 50, 75)) {
+            val x = w * (q / 100f)
+            canvas.drawLine(x, 0f, x, h, paint)
+        }
+        paint.style = android.graphics.Paint.Style.STROKE
         paint.color = ui.primary
-        canvas.drawRect(0f, 0f, (width * fraction).toFloat(), height.toFloat(), paint)
+        paint.strokeWidth = stroke
+        val half = stroke / 2f
+        canvas.drawRect(half, half, w - half, h - half, paint)
     }
 }
