@@ -86,12 +86,12 @@ onBeforeUnmount(() => window.removeEventListener('keydown', onKey))
 }
 .dj-skim-title h2 {
   margin: 0;
-  font-size: 18px;
-  font-weight: 600;
+  font-size: 20px;
+  font-weight: 700;
 }
 .dj-skim-disclaimer {
   margin: 4px 0 0;
-  font-size: 13px;
+  font-size: 14px;
   color: var(--text-2);
 }
 .dj-skim-body {
@@ -117,13 +117,14 @@ onBeforeUnmount(() => window.removeEventListener('keydown', onKey))
 }
 .dj-skim-sec h3 {
   margin: 0 0 var(--space-2);
-  font-size: 16px;
-  font-weight: 600;
+  font-size: 18px;
+  font-weight: 700;
 }
 .dj-skim-summary {
   margin: 0 0 var(--space-3);
-  line-height: 1.7;
-  color: var(--text-2);
+  font-size: 16px;
+  line-height: 1.75;
+  color: var(--text);
 }
 .dj-skim-keys {
   margin: 0;
@@ -136,14 +137,15 @@ onBeforeUnmount(() => window.removeEventListener('keydown', onKey))
 .dj-skim-key {
   display: flex;
   flex-direction: column;
-  gap: 2px;
+  gap: 3px;
   width: 100%;
   text-align: left;
   border: none;
   border-left: 2px solid var(--border-strong);
   background: var(--card);
   border-radius: 0 var(--radius) var(--radius) 0;
-  padding: var(--space-2) var(--space-3);
+  padding: 10px 14px;
+  min-height: 48px;
   font: inherit;
   color: var(--text);
   cursor: pointer;

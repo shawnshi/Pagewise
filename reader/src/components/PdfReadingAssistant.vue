@@ -162,10 +162,14 @@ async function send() {
 .pdf-ai-header, .pdf-ai-actions { display: flex; align-items: center; justify-content: space-between; gap: 8px; }
 .pdf-ai-field { display: flex; flex-direction: column; gap: 6px; margin: 12px 0; }
 .pdf-ai-field textarea { width: 100%; resize: vertical; min-height: 64px; white-space: pre-wrap; }
-.pdf-ai-scope, .pdf-ai-hint { font-size: 13px; line-height: 1.6; margin: 10px 0; }
+.pdf-ai-scope, .pdf-ai-hint { font-size: 14px; line-height: 1.6; margin: 10px 0; }
 .pdf-ai-messages { max-height: 32vh; overflow-y: auto; }
 .pdf-ai-message { padding: 10px 0; border-bottom: 1px solid var(--border); }
-.pdf-ai-message p { margin: 6px 0; white-space: pre-wrap; overflow-wrap: anywhere; line-height: 1.7; }
+.pdf-ai-message strong { font-size: 15px; }
+.pdf-ai-message p { margin: 6px 0; white-space: pre-wrap; overflow-wrap: anywhere; line-height: 1.75; font-size: 15px; }
+.pdf-ai-field span { font-size: 14px; font-weight: 600; }
+.pdf-ai-field textarea { width: 100%; resize: vertical; min-height: 64px; white-space: pre-wrap; font-size: 15px; }
+.pdf-ai-actions button { min-height: 48px; font-size: 14px; font-weight: 600; }
 .pdf-ai-message small, .pdf-ai-error { font-weight: 600; }
 .pdf-ai-error { border-inline-start: 3px solid currentColor; padding-inline-start: 8px; }
 .pdf-reading-assistant button { min-height: 48px; }

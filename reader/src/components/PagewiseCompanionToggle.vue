@@ -296,12 +296,13 @@ function openOutline() {
   min-width: 0;
 }
 .dj-title {
-  font-weight: 600;
+  font-size: 16px;
+  font-weight: 700;
   color: var(--text);
 }
 .dj-sub {
-  font-size: 12px;
-  color: var(--text-3);
+  font-size: 13px;
+  color: var(--text-2);
 }
 .dj-switch {
   position: relative;
@@ -363,7 +364,8 @@ function openOutline() {
   flex-wrap: wrap;
 }
 .dj-label {
-  font-size: 13px;
+  font-size: 14px;
+  font-weight: 600;
   color: var(--text-2);
 }
 .dj-kinds {
@@ -375,10 +377,10 @@ function openOutline() {
   display: inline-flex;
   align-items: center;
   gap: 6px;
-  font-size: 13px;
+  font-size: 14px;
   color: var(--text);
   cursor: pointer;
-  min-height: 32px;
+  min-height: 38px;
 }
 /* 图例: 线型区分类型 (不只靠颜色) */
 .dj-kind-sample {
@@ -408,7 +410,8 @@ function openOutline() {
 .dj-select {
   width: auto;
   min-width: 140px;
-  height: 32px;
+  height: 40px;
+  font-size: 14px;
   padding-block: 0;
 }
 .dj-actions {
@@ -426,7 +429,7 @@ function openOutline() {
   display: flex;
   align-items: center;
   gap: var(--space-2);
-  font-size: 12px;
+  font-size: 13px;
   color: var(--text-2);
   margin: 0;
   flex-wrap: wrap;

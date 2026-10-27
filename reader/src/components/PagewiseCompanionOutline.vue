@@ -114,8 +114,8 @@ const title = (s: { title: string; section: number }) => s.title || t('companion
 .dj-outline-hint {
   margin: 0;
   padding: var(--space-2) var(--space-4) 0;
-  font-size: 12px;
-  color: var(--text-3);
+  font-size: 13px;
+  color: var(--text-2);
 }
 .dj-outline-body {
   flex: 1;
@@ -125,7 +125,7 @@ const title = (s: { title: string; section: number }) => s.title || t('companion
 }
 .dj-outline-empty {
   color: var(--text-3);
-  font-size: 13px;
+  font-size: 14px;
 }
 .dj-tree,
 .dj-gists,
@@ -146,17 +146,18 @@ const title = (s: { title: string; section: number }) => s.title || t('companion
 .dj-sec-title {
   border: none;
   background: none;
-  padding: 4px 0;
+  padding: 6px 0;
   font: inherit;
-  font-weight: 600;
+  font-size: 16px;
+  font-weight: 700;
   color: var(--text);
   cursor: pointer;
   text-align: left;
 }
 .dj-sec-summary {
-  margin: 2px 0 var(--space-2);
-  font-size: 13px;
-  line-height: 1.6;
+  margin: 4px 0 var(--space-2);
+  font-size: 14px;
+  line-height: 1.65;
   color: var(--text-2);
 }
 .dj-gists > li {
@@ -170,11 +171,11 @@ const title = (s: { title: string; section: number }) => s.title || t('companion
   width: 100%;
   border: none;
   background: none;
-  padding: 5px 6px;
+  padding: 7px 8px;
   border-radius: var(--radius-sm);
   font: inherit;
-  font-size: 13px;
-  line-height: 1.5;
+  font-size: 15px;
+  line-height: 1.6;
   text-align: left;
   color: var(--text);
   cursor: pointer;

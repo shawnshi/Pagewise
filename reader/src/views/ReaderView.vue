@@ -3674,9 +3674,9 @@ onBeforeRouteLeave(async () => {
 
 <template>
   <div class="reader" :class="[{ 'bars-on': barsVisible, 'portrait-scroll': portraitView && effectiveFlow === 'scrolled' }, modes.shellClass.value]" :data-reader-theme="themeColors.bg === '#000000' ? 'dark' : 'light'" :style="{ background: themeColors.bg, color: themeColors.fg }">
-    <!-- 工具栏隐藏时: 鼠标移到上下边缘呼出 -->
-    <div v-if="!barsVisible" class="bar-peek top" @mouseenter="showBars()" />
-    <div v-if="!barsVisible" class="bar-peek bottom" @mouseenter="showBars()" />
+    <!-- 工具栏隐藏时: 鼠标/触摸轻点上下边缘呼出 -->
+    <div v-if="!barsVisible" class="bar-peek top" aria-hidden="true" @mouseenter="showBars()" @click="showBars()" @pointerdown.stop="showBars()" />
+    <div v-if="!barsVisible" class="bar-peek bottom" aria-hidden="true" @mouseenter="showBars()" @click="showBars()" @pointerdown.stop="showBars()" />
 
     <!-- 全屏时右上角悬浮退出按钮 -->
     <button
@@ -4393,13 +4393,14 @@ onBeforeRouteLeave(async () => {
   opacity: 1;
   color: var(--text);
 }
-/* 工具栏隐藏时的边缘呼出热区 */
+/* 工具栏隐藏时的边缘呼出热区: 扩大至 60px 并置顶, 触屏与墨水屏轻点即呼出 */
 .bar-peek {
   position: absolute;
   left: 0;
   right: 0;
-  height: 14px;
-  z-index: 9;
+  height: 60px;
+  z-index: 18;
+  cursor: pointer;
 }
 .bar-peek.top {
   top: 0;

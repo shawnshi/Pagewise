@@ -49,34 +49,34 @@ const label = computed(() => t(data.value?.mode === 'recap' ? 'companion.chapter
   justify-content: space-between;
 }
 .dj-chapter-label {
-  font-size: 12px;
-  font-weight: 600;
-  color: var(--text-2);
+  font-size: 14px;
+  font-weight: 700;
+  color: var(--text);
 }
 .dj-chapter-text {
   margin: 0;
-  font-size: 14px;
-  line-height: 1.65;
+  font-size: 16px;
+  line-height: 1.7;
 }
 .dj-chapter-points {
   margin: 0;
   padding-left: 1.4em;
   display: flex;
   flex-direction: column;
-  gap: 2px;
+  gap: 4px;
 }
 .dj-chapter-point {
   border: none;
   background: none;
-  padding: 4px 0;
+  padding: 6px 0;
   text-align: left;
   font: inherit;
-  font-size: 13px;
-  line-height: 1.5;
+  font-size: 15px;
+  line-height: 1.6;
   color: var(--text);
   cursor: pointer;
   text-decoration: underline dotted var(--border-strong);
-  text-underline-offset: 3px;
+  text-underline-offset: 4px;
 }
 .dj-chapter-point:hover {
   color: var(--brand);
@@ -88,7 +88,7 @@ const label = computed(() => t(data.value?.mode === 'recap' ? 'companion.chapter
 }
 .dj-chapter-source {
   margin: 0;
-  font-size: 11px;
+  font-size: 13px;
   color: var(--text-3);
 }
 </style>

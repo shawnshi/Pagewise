@@ -321,8 +321,9 @@ onBeforeUnmount(() => {
   display: inline-flex;
   align-items: center;
   gap: 6px;
-  font-size: 12px;
-  color: var(--text-3);
+  font-size: 14px;
+  font-weight: 600;
+  color: var(--text-2);
 }
 /* 与正文标记相同的线型图例: 实线 / 点线 / 圆点 */
 .dj-mark {
@@ -341,35 +342,36 @@ onBeforeUnmount(() => {
   background: var(--text-2);
 }
 .dj-card-term {
-  font-weight: 600;
-  font-size: 15px;
+  font-family: var(--font-serif);
+  font-weight: 700;
+  font-size: 18px;
   margin: 0;
   display: flex;
   align-items: center;
   gap: var(--space-2);
 }
 .dj-card-label {
-  font-size: 12px;
-  color: var(--text-3);
+  font-size: 14px;
+  color: var(--text-2);
   margin: 0;
 }
 .dj-card-text {
   margin: 0;
-  line-height: 1.6;
-  font-size: 14px;
+  line-height: 1.7;
+  font-size: 16px;
 }
 .dj-card-tr {
   margin: 0;
   padding: var(--space-2) var(--space-3);
   background: var(--surface-2);
   border-radius: var(--radius);
-  line-height: 1.6;
-  font-size: 14px;
+  line-height: 1.7;
+  font-size: 16px;
 }
 .dj-card-muted,
 .dj-card-source {
   margin: 0;
-  font-size: 12px;
+  font-size: 13px;
   color: var(--text-3);
 }
 .dj-card-actions {
@@ -378,7 +380,13 @@ onBeforeUnmount(() => {
   display: flex;
   flex-wrap: wrap;
   gap: var(--space-2);
-  margin-top: var(--space-1);
+  margin-top: var(--space-2);
+}
+.dj-card-actions button {
+  min-height: 44px;
+  font-size: 14px;
+  font-weight: 600;
+  padding: 6px 14px;
 }
 @media (max-width: 600px) {
   .dj-card {
