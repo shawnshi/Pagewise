@@ -273,11 +273,12 @@ function getProgress(book: BookMeta) {
             <span v-for="tag in book.tags.slice(0, 3)" :key="tag" class="tag-chip-mini">{{ tag }}</span>
           </div>
 
-          <div v-if="getProgress(book) != null" class="progress-container">
-            <div class="progress-bar-track" role="progressbar" :aria-valuenow="getProgress(book)!" aria-valuemin="0" aria-valuemax="100">
-              <div class="progress-bar-fill" :style="{ width: `${getProgress(book)}%` }" />
+          <div v-if="getProgress(book) != null" class="fore-edge-gauge">
+            <div class="fore-edge-track" role="progressbar" :aria-valuenow="getProgress(book)!" aria-valuemin="0" aria-valuemax="100">
+              <div class="fore-edge-fill" :style="{ width: `${getProgress(book)}%` }" />
+              <div class="fore-edge-notch" :style="{ left: `${getProgress(book)}%` }" />
             </div>
-            <span class="progress-label">{{ getProgress(book) }}%</span>
+            <span class="fore-edge-text">{{ getProgress(book) }}%</span>
           </div>
 
           <div class="meta-row">
@@ -316,8 +317,8 @@ function getProgress(book: BookMeta) {
 
 <style scoped>
 .reading-view {
-  padding: 20px 24px 40px;
-  max-width: 960px;
+  padding: 24px 32px 48px;
+  max-width: 1040px;
   margin: 0 auto;
 }
 .reading-header {
@@ -327,10 +328,12 @@ function getProgress(book: BookMeta) {
   margin-bottom: 24px;
 }
 .view-title {
-  font-size: 22px;
+  font-family: var(--font-serif);
+  font-size: 24px;
   font-weight: 700;
   margin: 0;
   color: var(--text);
+  letter-spacing: -0.01em;
 }
 .view-subtitle {
   font-size: 13px;
@@ -339,10 +342,11 @@ function getProgress(book: BookMeta) {
 }
 .segmented {
   display: inline-flex;
-  background: var(--surface-2);
+  background: var(--card);
   padding: 3px;
   border-radius: var(--radius);
-  gap: 2px;
+  border: 1px solid var(--border);
+  gap: 4px;
   align-self: flex-start;
   max-width: 100%;
   overflow-x: auto;
@@ -351,22 +355,23 @@ function getProgress(book: BookMeta) {
   flex-shrink: 0;
   white-space: nowrap;
   background: transparent;
-  border: none;
+  border: 1px solid transparent;
   padding: 6px 14px;
-  border-radius: calc(var(--radius) - 2px);
+  border-radius: var(--radius-sm);
   font-size: 13px;
-  font-weight: 600;
+  font-weight: 500;
   color: var(--text-2);
   cursor: pointer;
-  transition: background var(--dur-fast), color var(--dur-fast);
 }
 .segmented-btn:hover {
   color: var(--text);
+  border-color: var(--border);
 }
 .segmented-btn.active {
-  background: var(--card);
-  color: var(--brand);
-  box-shadow: var(--shadow-sm);
+  background: var(--eink-ink) !important;
+  color: var(--eink-paper) !important;
+  border-color: var(--eink-ink) !important;
+  font-weight: 600;
 }
 .book-list {
   display: flex;
@@ -376,38 +381,48 @@ function getProgress(book: BookMeta) {
 .load-more {
   align-self: center;
   min-height: 44px;
-  margin-top: 4px;
+  margin-top: 12px;
+  padding: 0 24px;
+  border: 1px solid var(--border-strong);
 }
 .reading-card {
   display: flex;
   align-items: center;
-  gap: 18px;
-  padding: 16px;
+  gap: 20px;
+  padding: 18px 20px;
   cursor: pointer;
-  border-radius: var(--radius);
+  border-radius: 2px;
+  border: 1px solid var(--eink-border-hairline);
+  background: var(--eink-surface-pure);
+  box-shadow: none;
   outline: none;
-  transition: transform var(--dur-fast), box-shadow var(--dur-fast);
 }
 .reading-card:hover {
-  transform: translateY(-1px);
-  box-shadow: var(--shadow-md);
+  border-color: var(--eink-solid-black);
+  background: var(--eink-surface-subtle);
 }
 .reading-card:focus-visible {
-  box-shadow: var(--ring), var(--shadow-md);
+  outline: 2px solid var(--eink-solid-black);
+  outline-offset: 2px;
 }
 .card-cover {
   position: relative;
   width: 72px;
-  aspect-ratio: 3 / 4.2;
+  height: 102px;
+  aspect-ratio: 1 / 1.414;
   flex-shrink: 0;
-  border-radius: var(--radius-sm);
+  border-radius: 2px;
   overflow: hidden;
-  background: var(--surface-2);
+  border: 1px solid var(--eink-border-hairline);
+  background: var(--eink-surface-subtle);
+  box-sizing: border-box;
+  padding: 1px;
 }
 .cover-image {
   width: 100%;
   height: 100%;
   object-fit: cover;
+  display: block;
 }
 .cover-fallback {
   width: 100%;
@@ -417,20 +432,21 @@ function getProgress(book: BookMeta) {
   align-items: center;
   justify-content: center;
   text-align: center;
+  font-family: var(--font-serif);
   font-size: 11px;
   font-weight: 600;
   color: var(--text-2);
 }
 .cover-format {
   position: absolute;
-  top: 4px;
-  left: 4px;
-  background: rgba(0, 0, 0, 0.7);
-  color: #fff;
+  top: 3px;
+  left: 3px;
+  background: var(--eink-ink);
+  color: var(--eink-paper);
   font-size: 9px;
-  font-weight: 600;
+  font-weight: 700;
   padding: 1px 4px;
-  border-radius: 3px;
+  border-radius: 2px;
 }
 .card-body {
   flex: 1;
@@ -445,8 +461,9 @@ function getProgress(book: BookMeta) {
   gap: 10px;
 }
 .book-title {
-  font-size: 16px;
-  font-weight: 650;
+  font-family: var(--font-serif);
+  font-size: 18px;
+  font-weight: 700;
   margin: 0;
   color: var(--text);
   overflow: hidden;
@@ -461,58 +478,66 @@ function getProgress(book: BookMeta) {
 .status-pill {
   font-size: 11px;
   font-weight: 600;
-  padding: 1px 6px;
-  border-radius: 3px;
+  padding: 1px 7px;
+  border-radius: 2px;
   background: var(--surface-2);
   color: var(--text-2);
+  border: 1px solid var(--border);
   flex-shrink: 0;
 }
 .status-pill.reading {
-  background: var(--brand);
-  color: var(--on-brand, #fff);
+  background: var(--eink-ink);
+  color: var(--eink-paper);
+  border-color: var(--eink-ink);
 }
 .status-pill.finished {
-  background: #2e7d32;
-  color: #fff;
+  background: var(--card);
+  color: var(--eink-ink);
+  border-color: var(--eink-ink);
 }
 .status-pill.paused {
-  background: #e65100;
-  color: #fff;
+  background: var(--surface-2);
+  color: var(--text-2);
+  border-color: var(--border);
 }
 .progress-container {
   display: flex;
   align-items: center;
-  gap: 10px;
+  gap: 12px;
 }
 .progress-bar-track {
   width: 160px;
-  height: 5px;
-  border-radius: 2.5px;
-  background: var(--surface-2);
+  height: 4px;
+  border-radius: 2px;
+  background: var(--surface-3);
   overflow: hidden;
 }
 .progress-bar-fill {
   height: 100%;
-  background: var(--brand);
+  background: var(--eink-ink);
 }
 .progress-label {
-  font-size: 11.5px;
+  font-size: 12px;
   font-weight: 600;
   color: var(--text-2);
+  font-feature-settings: "tnum" 1;
 }
 .meta-row {
   display: flex;
   gap: 16px;
   font-size: 12px;
   color: var(--text-3);
+  font-feature-settings: "tnum" 1;
 }
 .card-action-col {
   flex-shrink: 0;
 }
 .btn-continue {
-  min-height: 48px;
+  min-height: 44px;
   min-width: 48px;
   white-space: nowrap;
+  font-weight: 600;
+  border-radius: 2px;
 }
 .meta-sep {
   opacity: 0.5;
@@ -533,26 +558,31 @@ function getProgress(book: BookMeta) {
   color: var(--text-2);
 }
 .empty {
-  padding: 48px 24px;
+  padding: 56px 24px;
   text-align: center;
   display: flex;
   flex-direction: column;
   align-items: center;
   gap: 12px;
+  border: 1px dashed var(--border);
+  border-radius: var(--radius);
+  background: var(--card);
 }
 .empty-icon {
-  color: var(--text-3);
+  color: var(--text-2);
 }
 .empty-title {
-  font-size: 16px;
-  font-weight: 600;
+  font-family: var(--font-serif);
+  font-size: 17px;
+  font-weight: 700;
   color: var(--text);
   margin: 0;
 }
 .empty-hint {
   font-size: 13px;
   color: var(--text-2);
-  margin: 0 0 8px;
+  margin: 0 0 12px;
   max-width: 380px;
+  line-height: 1.5;
 }
 </style>

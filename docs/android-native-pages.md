@@ -1,6 +1,6 @@
 # Android 原生管理页面与存量迁移
 
-状态：七页源码/host 实现通过 v4 独立复审（PASS；合并判断为 OK with notes）。已关闭剩余源码问题 R3-01；Android/BOOX 与发布验收仍未完成，未安装 APK，不据此宣称设备或发布就绪。
+状态：七页受审基准 v4 的源码/host 实现通过独立复审（PASS；OK with notes），关闭 R3-01。后续实际启动发现并修复 SQLite PRAGMA API 使用问题，两版已覆盖安装并通过有限启动检查；本补丁未宣称经过新的独立复审。全部 Android/BOOX 功能与发布验收仍未完成。详见[启动修复记录](startup-1.5-fix.md)。
 
 受审基准：`.cache/native-pages-20261021/review-v4/snapshot.json`；验收状态：`.cache/native-pages-20261021/acceptance-v4.json`。本状态段在复审后更新，冻结的受审源码副本保持不变。
 
@@ -63,6 +63,6 @@ Android 13+ 对话框返回通过原生回调走同一屏障，旧版走按键�
 
 合成数据覆盖原生 Kotlin 状态机、SQLite/迁移、类型/枚举、批量部分结果、原生准备流程及真实 Vue Router 屏障。浏览器还实际解析合成 EPUB，验证安全 Foliate 目录路径与损坏输入；它不是 Android 原生窗口运行测试。
 
-尚未安装 APK、读取真实书库或在 BOOX 验证对话框、手势返回、键盘/insets、阅读器交接及 EPD。opaque content URI 的实际 provider→Android→Rust→JS 导入链仍是运行验收项；源代码核验不代替该测试。当前只记录静态/合成验证，不宣称设备、远端 AI 服务或全仓所有既有测试全绿。
+设备现已安装 1.5.0 启动修复包，并完成测试版初始化/挂载及正式版前端就绪、关闭探针后的正常启动检查。未读取书库正文或逐条迁移记录；对话框、手势返回、键盘/insets、阅读器交接及 EPD 仍未完成专项验收。opaque content URI 的实际 provider→Android→Rust→JS 导入链也仍待验证；源码/host 和启动检查不能代替这些功能测试，不宣称远端 AI 服务或全仓所有既有测试全绿。
 
 恢复点：`.cache/native-pages-20261021/preflight.json` 与 `before/`。所有已有未提交变更均受保护；迁移开发不读取真实用户数据，不自动安装 APK 或修改全局环境。编译、JVM/SQLite 与模拟器证据均须注明，不能替代真实 BOOX 的运行验收。

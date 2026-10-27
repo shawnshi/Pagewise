@@ -283,11 +283,12 @@ const recommendationCount = ref<number | null>(null)
             </span>
           </div>
 
-          <div v-if="progress != null" class="progress-section">
-            <div class="progress-bar-track" role="progressbar" :aria-valuenow="progress" aria-valuemin="0" aria-valuemax="100">
-              <div class="progress-bar-fill" :style="{ width: `${progress}%` }" />
+          <div v-if="progress != null" class="fore-edge-gauge">
+            <div class="fore-edge-track" role="progressbar" :aria-valuenow="progress" aria-valuemin="0" aria-valuemax="100">
+              <div class="fore-edge-fill" :style="{ width: `${progress}%` }" />
+              <div class="fore-edge-notch" :style="{ left: `${progress}%` }" />
             </div>
-            <span class="progress-text">{{ progress }}%</span>
+            <span class="fore-edge-text">{{ progress }}%</span>
           </div>
 
           <div class="detail-actions">
@@ -489,24 +490,31 @@ const recommendationCount = ref<number | null>(null)
 }
 .hero-card {
   display: flex;
-  gap: 24px;
+  gap: 28px;
   padding: 24px;
   margin-bottom: 20px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  background: var(--card);
+  box-shadow: none;
 }
 .cover-wrapper {
   position: relative;
   width: 140px;
-  aspect-ratio: 3 / 4.2;
+  height: 198px;
+  aspect-ratio: 1 / 1.414;
   flex-shrink: 0;
-  border-radius: var(--radius);
+  border-radius: 2px;
   overflow: hidden;
+  border: 1px solid var(--border);
   background: var(--surface-2);
-  box-shadow: var(--shadow);
+  box-shadow: none;
 }
 .cover-img {
   width: 100%;
   height: 100%;
   object-fit: cover;
+  display: block;
 }
 .cover-placeholder {
   width: 100%;
@@ -516,20 +524,21 @@ const recommendationCount = ref<number | null>(null)
   align-items: center;
   justify-content: center;
   text-align: center;
-  font-size: 13px;
-  font-weight: 600;
+  font-family: var(--font-serif);
+  font-size: 14px;
+  font-weight: 700;
   color: var(--text-2);
 }
 .format-tag {
   position: absolute;
-  top: 6px;
-  left: 6px;
-  background: rgba(0, 0, 0, 0.75);
-  color: #fff;
+  top: 4px;
+  left: 4px;
+  background: var(--eink-ink);
+  color: var(--eink-paper);
   font-size: 10px;
-  font-weight: 600;
-  padding: 2px 6px;
-  border-radius: 4px;
+  font-weight: 700;
+  padding: 1px 6px;
+  border-radius: 2px;
 }
 .meta-section {
   flex: 1;
@@ -539,11 +548,13 @@ const recommendationCount = ref<number | null>(null)
   gap: 12px;
 }
 .book-title {
-  font-size: 22px;
+  font-family: var(--font-serif);
+  font-size: 24px;
   font-weight: 700;
   line-height: 1.3;
   margin: 0;
   color: var(--text);
+  letter-spacing: -0.01em;
 }
 .book-author {
   font-size: 14px;
@@ -559,31 +570,37 @@ const recommendationCount = ref<number | null>(null)
 .status-select {
   padding: 4px 8px;
   height: 32px;
-  border-radius: var(--radius);
+  border-radius: var(--radius-sm);
+  border: 1px solid var(--border);
+  background: var(--card);
 }
 .badge {
   font-size: 11px;
   font-weight: 600;
   padding: 2px 8px;
-  border-radius: 4px;
+  border-radius: 2px;
   background: var(--surface-2);
   color: var(--text-2);
+  border: 1px solid var(--border);
 }
 .badge.reading {
-  background: var(--brand);
-  color: var(--on-brand, #fff);
+  background: var(--eink-ink);
+  color: var(--eink-paper);
+  border-color: var(--eink-ink);
 }
 .badge.finished {
-  background: #2e7d32;
-  color: #fff;
+  background: var(--card);
+  color: var(--eink-ink);
+  border-color: var(--eink-ink);
 }
 .badge.paused {
-  background: #e65100;
-  color: #fff;
+  background: var(--surface-2);
+  color: var(--text-2);
+  border-color: var(--border);
 }
 .badge.unread {
   background: var(--surface-2);
-  color: var(--text);
+  color: var(--text-2);
 }
 .progress-section {
   display: flex;
@@ -593,19 +610,20 @@ const recommendationCount = ref<number | null>(null)
 .progress-bar-track {
   flex: 1;
   max-width: 240px;
-  height: 6px;
-  border-radius: 3px;
-  background: var(--surface-2);
+  height: 5px;
+  border-radius: 2px;
+  background: var(--surface-3);
   overflow: hidden;
 }
 .progress-bar-fill {
   height: 100%;
-  background: var(--brand);
+  background: var(--eink-ink);
 }
 .progress-text {
   font-size: 12px;
   font-weight: 600;
   color: var(--text-2);
+  font-feature-settings: "tnum" 1;
 }
 .detail-actions {
   display: flex;
@@ -615,34 +633,42 @@ const recommendationCount = ref<number | null>(null)
   padding-top: 10px;
 }
 .btn-read {
-  min-width: 100px;
+  min-width: 110px;
+  font-weight: 600;
 }
 .tabs-nav {
   display: flex;
-  gap: 8px;
-  border-bottom: 1px solid var(--border);
+  gap: 6px;
+  border-bottom: 1.5px solid var(--eink-solid-black);
   margin-bottom: 16px;
+  padding-bottom: 2px;
 }
 .tab-btn {
-  background: transparent;
-  border: none;
-  border-bottom: 2px solid transparent;
-  padding: 10px 16px;
-  font-size: 14px;
-  font-weight: 600;
-  color: var(--text-2);
+  background: var(--eink-surface-pure);
+  border: 1px solid var(--eink-border-hairline);
+  padding: 8px 14px;
+  font-size: 13px;
+  font-weight: 500;
+  color: var(--eink-text-secondary);
   cursor: pointer;
-  transition: color var(--dur-fast), border-color var(--dur-fast);
+  border-radius: 2px;
 }
 .tab-btn:hover {
-  color: var(--text);
+  background: var(--eink-surface-subtle);
+  color: var(--eink-text-primary);
+  border-color: var(--eink-solid-black);
 }
 .tab-btn.active {
-  color: var(--brand);
-  border-bottom-color: var(--brand);
+  background: var(--eink-solid-black);
+  color: var(--eink-surface-pure);
+  border-color: var(--eink-solid-black);
+  font-weight: 600;
 }
 .tab-panel {
   padding: 20px;
+  border: 1px solid var(--eink-border-hairline);
+  border-radius: 2px;
+  background: var(--eink-surface-pure);
 }
 .meta-grid {
   display: grid;
@@ -677,11 +703,16 @@ const recommendationCount = ref<number | null>(null)
   padding: 2px 8px;
   border-radius: var(--radius-sm);
   background: var(--surface-2);
+  border: 1px solid var(--border);
   color: var(--text-2);
 }
 .description-text {
-  line-height: 1.6;
+  font-family: var(--font-serif);
+  line-height: 1.73;
   white-space: pre-wrap;
+  font-size: 15px;
+  color: var(--eink-text-primary);
+  text-indent: 2em;
 }
 .loading-box,
 .empty-box {
@@ -700,15 +731,17 @@ const recommendationCount = ref<number | null>(null)
   gap: 8px;
 }
 .toc-item {
-  padding: 8px 12px;
-  border-radius: var(--radius);
-  background: var(--surface-2);
+  padding: 10px 14px;
+  border-radius: var(--radius-sm);
+  background: var(--card);
+  border: 1px solid var(--border);
   font-size: 13px;
 }
 .annotation-item {
   padding: 12px 14px;
-  border-radius: var(--radius);
-  background: var(--surface-2);
+  border-radius: var(--radius-sm);
+  background: var(--card);
+  border: 1px solid var(--border);
   display: flex;
   flex-direction: column;
   gap: 6px;
@@ -721,17 +754,22 @@ const recommendationCount = ref<number | null>(null)
 .annotation-time {
   font-size: 11px;
   color: var(--text-3);
+  font-feature-settings: "tnum" 1;
 }
 .annotation-text {
   margin: 0;
   font-size: 13px;
   color: var(--text);
   font-style: italic;
+  line-height: 1.5;
+  border-left: 2px solid var(--border-strong);
+  padding-left: 8px;
 }
 .annotation-note {
   margin: 0;
   font-size: 13px;
-  color: var(--brand);
+  color: var(--text);
+  font-weight: 500;
 }
 
 .meta-sep {
@@ -754,10 +792,14 @@ const recommendationCount = ref<number | null>(null)
   font-weight: 500;
 }
 .source-status-badge.missing {
-  color: var(--danger);
+  color: var(--text);
+  border: 1px solid var(--text);
+  padding: 1px 4px;
 }
 .source-status-badge.denied {
-  color: var(--warning);
+  color: var(--text-2);
+  border: 1px solid var(--border);
+  padding: 1px 4px;
 }
 .tag-placeholder {
   color: var(--text-3);

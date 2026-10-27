@@ -45,7 +45,7 @@ internal object NativeUi {
         GradientDrawable().apply {
             setColor(surface(background))
             if (outlined) setStroke(dp(context, 1), border(background))
-            cornerRadius = dp(context, 8).toFloat()
+            cornerRadius = dp(context, 2).toFloat()
         }
 
     private fun actionable(
@@ -241,8 +241,18 @@ internal object NativeUi {
             orientation = LinearLayout.VERTICAL
             gravity = Gravity.CENTER
             minimumHeight = dp(context, 64)
-            setPadding(dp(context, 4), dp(context, 5), dp(context, 4), dp(context, 5))
-            this.background = actionable(context, background, selected, outlined = false)
+            setPadding(dp(context, 4), dp(context, 4), dp(context, 4), dp(context, 6))
+            val pressState = StateListDrawable().apply {
+                addState(
+                    intArrayOf(android.R.attr.state_pressed),
+                    GradientDrawable().apply {
+                        setColor(mutedSurface(background))
+                        cornerRadius = dp(context, 2).toFloat()
+                    },
+                )
+                addState(intArrayOf(), GradientDrawable().apply { setColor(Color.TRANSPARENT) })
+            }
+            this.background = pressState
             contentDescription = label
             isSelected = selected
             isFocusable = true
@@ -257,18 +267,19 @@ internal object NativeUi {
                         info.className = Button::class.java.name
                     }
                 }
+            val currentColor = if (selected) ink else secondary(background)
             addView(
                 View(context).apply {
                     setBackgroundColor(ink)
                     visibility = if (selected) View.VISIBLE else View.INVISIBLE
                     importantForAccessibility = View.IMPORTANT_FOR_ACCESSIBILITY_NO
                 },
-                LinearLayout.LayoutParams(dp(context, 24), dp(context, 3)).apply { bottomMargin = dp(context, 3) },
+                LinearLayout.LayoutParams(dp(context, 32), dp(context, 3)).apply { bottomMargin = dp(context, 4) },
             )
             addView(
                 ImageView(context).apply {
                     scaleType = ImageView.ScaleType.FIT_XY
-                    setImageDrawable(NativeUiIcon(context, if (page == "annotations") "notes" else page, ink, selected))
+                    setImageDrawable(NativeUiIcon(context, if (page == "annotations") "notes" else page, currentColor, selected))
                     importantForAccessibility = View.IMPORTANT_FOR_ACCESSIBILITY_NO
                 },
                 LinearLayout.LayoutParams(dp(context, 28), dp(context, 28)),
@@ -276,10 +287,10 @@ internal object NativeUi {
             addView(
                 TextView(context).apply {
                     text = label
-                    textSize = 14f
+                    textSize = 13f
                     gravity = Gravity.CENTER
-                    setLineSpacing(0f, 1.35f)
-                    setTextColor(ink)
+                    setLineSpacing(0f, 1.25f)
+                    setTextColor(currentColor)
                     setTypeface(null, if (selected) Typeface.BOLD else Typeface.NORMAL)
                     importantForAccessibility = View.IMPORTANT_FOR_ACCESSIBILITY_NO
                 },
@@ -306,10 +317,25 @@ internal object NativeUi {
         ink: Int,
         background: Int,
     ) {
+        val context = view.context
         view.isSelected = selected
         view.setTypeface(null, if (selected) Typeface.BOLD else Typeface.NORMAL)
-        view.background = actionable(view.context, background, selected, outlined = false)
-        view.setTextColor(ink)
+        if (selected) {
+            view.background =
+                GradientDrawable().apply {
+                    setColor(ink)
+                    cornerRadius = dp(context, 2).toFloat()
+                }
+            view.setTextColor(surface(background))
+        } else {
+            view.background =
+                GradientDrawable().apply {
+                    setColor(surface(background))
+                    setStroke(dp(context, 1), border(background))
+                    cornerRadius = dp(context, 2).toFloat()
+                }
+            view.setTextColor(secondary(background))
+        }
     }
 
     fun section(

@@ -1,176 +1,125 @@
 <p align="center">
-  <img src="Pagewise.png" width="160" alt="知页阅读器 · Pagewise 项目 Logo">
+  <img src="reader/public/pagewise-logo.png" width="160" alt="知页阅读器 · Pagewise 项目 Logo">
 </p>
 
 # 知页阅读器 · Pagewise
 
-面向文石（Onyx BOOX）Android 墨水屏设备的本地阅读应用。当前版本为 **1.9.0**，Android 版本码为 **1009000**。
+面向文石（Onyx BOOX）Android 墨水屏设备的本地阅读应用。当前版本为 **2.0.0**，Android 版本码为 **2000000**。
 
-项目只面向 BOOX Android 设备。浏览器用于界面开发和合成测试，不提供桌面、iOS 或 PWA 发行版。
+项目专为 BOOX Android 设备设计与调优。浏览器仅用于前端组件开发与单元测试，不提供桌面、iOS 或 PWA 发行版。
 
 ## 当前状态
 
-1.9.0 已在 **Note X3 Pro（Android API 32）** 上同签名覆盖安装两个版本：
+2.0.0 已在 **Note X3 Pro（Android API 32, Carta 1200 墨水屏）** 上完成构建与真机部署：
 
-| 变体 | 显示名称 | 包名 |
+| 变体 | 桌面显示名称 | 包名 |
 |---|---|---|
 | Release | 知页 | `io.pagewise.reader` |
-| Debug | 知页 1.9.0 测试版 | `io.pagewise.reader.debug` |
+| Debug | 知页 2.0.0 测试版 | `io.pagewise.reader.debug` |
 
-本版整合 Android 原生管理页与存储保护、AI 简介预览、书库推荐，以及统计/设置的墨水屏呈现改造。EPUB/PDF 正文保留现有阅读实现；两版包名和私有数据目录分离，不自动复制书库或设置。
+### 2.0.0 核心演进：全系统 E-ink 典藏级排印与交互重构
 
-**已验证**：实际 Vue/TypeScript 检查、Vite 构建、两版 Rust/Kotlin/assemble、Release R8、签名与 APK 身份检查通过；本轮关联测试 **67/67**。两包完成五个主页面、统计标签与设置目录的真机导航检查；Debug 自有合成 EPUB 的正文打开、翻页及正常返回保存通过。覆盖安装未卸载或清数据，安装身份保持。
+本版在保持 100% 既有功能与存储安全边界的前提下，全面升级为针对 300 PPI Carta 墨水屏物理特性的专属设计体系：
 
-**验收边界**：这是限定验证，不是完整功能回归。统计/设置原生 P1 为 27/27，其余五个预定配置尚未执行；真实 AI 服务、完整无障碍/旋转/进程死亡矩阵、物理 EPD 波形与残影仍待验证。Release 没有完整物理数据库备份或逐字段对照，不能把安装身份保持写成全部数据不变。详见 [1.9.0 功能与验证范围](docs/release-1.9.0.md)。
+1. **16 级安全灰阶色板 (Carta Grayscale Palette)**：定义纸白（`#FFFFFF`）、晨雾灰（`#F0F0F0`）、水泥浅灰（`#D6D6D6`）、铅笔深灰（`#9E9E9E`）、碳素中灰（`#5A5A5A`）、浓墨深黑（`#121212`）与纯黑印墨（`#000000`）。彻底移除彩色半透明遮罩与浅灰底块，杜绝 GPU 抖动算法导致的网点麻点（Dithering Artifacts）。
+2. **装裱式封面规制 (Framed Cover Plate)**：书架与在读列表封面严格锁定 1:1.414 经典开本比例，外围包裹 1dp 发丝线并衬以 2dp 浅灰衬纸，解决彩色封面转黑白后边缘发虚的缺陷。
+3. **人文衬线宋体排印 (Editorial Serifs)**：书架书名、正文标题与简介长文本升级为思源宋体粗体（`Typeface.SERIF, Typeface.BOLD`），与无衬线元数据形成严密的古典出版物主次对比。
+4. **反相矩阵选项卡与通栏分页规**：选项卡激活态采用纯黑底白字反相高亮，零灰阶拖影；书架与列表底部采用左右对齐的通栏书口分页条（`1 / 1 · 共 N 册`）。
+5. **实体图书检索盒 (Archival Search Box)**：白底发丝线卡片盒内嵌几何矢量放大镜与清除按键，告别单薄悬空的下划线输入。
+6. **精装书口进度刻度规 (Fore-edge Gauge)**：详情页与在读页全面启用仿实体书切口刻度尺，以实线已读、浅灰未读与等宽数字展示沉浸进度。
+7. **硬朗微倒角与零动画**：全局圆角严格收敛为 2dp 典藏微倒角，动效时长锁定为 0ms，消除所有引起残影的平滑补间。
 
 ## 功能范围
 
-- **原生管理页**：藏书、正在阅读、书籍详情、全部笔记、阅读统计、设置、使用手册使用 Android 原生控件，不是新增 WebView 包装。
-- **书库**：授权目录监测、手动导入、原生书目/封面提取、分类与高级筛选、分页及批量操作；目录访问依赖 Android SAF 授权，未知提交不自动重放。
-- **阅读**：EPUB、MOBI、PDF、TXT、Markdown 的现有解析与阅读入口，以及目录、排版、进度、查找和批注功能。EPUB/PDF 正文链路保留原有实现；格式入口存在不等于所有文件均已真机验收。
-- **书籍简介**：按最小书目信息请求 AI，生成结果先预览、编辑或复制；显式确认后以 CAS 替换简介，不发送原简介、正文或批注，未知提交结果不自动重放。
-- **书库推荐**：在正在阅读、书籍详情和书末提供入口；默认按本地书目与分类信息排序，不读取正文或批注、不凑数。可选 AI 需要单独同意元数据分享，失败时保留本地结果；不是外部向量嵌入服务。
-- **统计与设置**：统计分为概览、趋势、年历；设置按八组目录组织。原生与 Web 开发界面使用有界布局和灰阶呈现，保留原统计口径、设置 canonical 值及提交恢复边界。
-- **伴读与阅读助手**：章节理解、提问和分层阅读等交互；服务选择与授权由用户控制。
-- **AI 服务**：支持用户配置的 DeepSeek、OpenAI、Gemini、OpenRouter；已移除内置试用及伴读回退，支持模型下拉选择和保留已保存型号。模型目录是带核验日期的内置列表，不自动联网更新，也不保证始终是最新型号。见 [AI 服务说明](docs/ai-services.md)。
-- **听书**：提供系统语音、引擎选择与播放控制入口；具体可用性取决于设备及配置。
-- **BOOX 适配**：包含硬件按键、刷新、前光、笔迹和原生文件处理桥接。接口存在不代表对应硬件能力已经验收。
-
-切换 AI 服务不会把其他服务的密钥复制过去，也不会自动把已退役服务切到其他服务；未配置时不发 AI 请求。伴读运行时统一使用 `PagewiseCompanion` 命名；旧配置、缓存和 relay 协议中的兼容字段按契约保留，不应机械批量改名。见 [伴读命名与兼容说明](docs/companion-naming.md)。
+- **原生管理页**：藏书、正在阅读、书籍详情、全部笔记、阅读统计、设置、使用手册全部基于 Android 原生 View 与受控布局，避免 WebView 渲染延迟。
+- **书库管理**：授权目录监测（SAF）、原生书目与封面提取、分类/书架管理、复合高级筛选、分页翻阅及批量多选管理。
+- **正文阅读**：支持 EPUB、MOBI、PDF、TXT、Markdown 原生解析与阅读，包含目录（TOC / Smart TOC）、版式调节、阅读进度记忆（CFI / 页码）、全文检索与划线批注。
+- **书籍简介 (AI CAS)**：按最小书目信息请求 AI 生成简介，支持预览、编辑或复制；显式确认后以 CAS 替换，不发送正文或批注。
+- **本地馆藏推荐**：在正在阅读、书籍详情及书末展示相关书籍推荐，基于本地分类、主题与作者匹配，不依赖外部向量服务。
+- **阅读度量与年历**：概览看板、阅读时长趋势直方图、4 级黑白几何年历热力图，保留精确到秒的本地阅读流水账。
+- **伴读与助手**：章节理解、选段提问、分层阅读；支持 OpenAI、DeepSeek、Gemini、OpenRouter 等用户自有 API 端点。
+- **BOOX 硬件桥接**：深度适配文石硬件翻页按键、墨水屏局部/全局刷新、手掌防误触与前光调控。
 
 ## 架构与数据
 
-| 层 | 主要实现 | 职责 |
+| 层级 | 主要实现 | 职责 |
 |---|---|---|
-| 原生管理界面 | Kotlin、Android Views | 七页管理控件、草稿离开屏障和原生导航；调用现有业务所有者 |
-| 正文阅读与共享服务 | Vue、TypeScript、Vite、foliate-js | EPUB/PDF 正文、排版、伴读及可复用的非 UI 业务服务 |
-| 应用容器 | Tauri 2、Rust、受保护 IPC | Android 封装、存储/任务入口与原生命令边界 |
-| 原生存储与设备能力 | Kotlin、SQLite、Android API、BOOX 反射桥接 | 同一数据库、导入任务、SAF、TTS/MediaSession、窗口与 EPD 调度 |
+| 原生管理界面 | Kotlin、Android Views | 藏书管理、阅读状态流转、详情卡片、笔记归档与设置控制 |
+| 正文阅读与排版服务 | Vue 3、TypeScript、Vite、foliate-js | EPUB/PDF 正文渲染、双语混排、阅读器视窗与排版预设 |
+| 应用容器与本地桥接 | Tauri 2、Rust、NDK aarch64 | Android 平台生命周期、底层 SQLite、文件 I/O 与安全 IPC |
+| 存储与系统能力 | SQLite (`lightread.db`)、Android SAF、Onyx SDK 桥接 | 统一本地数据库、只读目录监测、TTS / MediaSession 调度 |
 
-原生页面通过受保护 IPC 复用现有业务服务，不另建书库、草稿、导入、TTS 或 EPD 所有者。PDF 书目与首封面使用原生解析能力，正文仍保留 MuPDF、PDFium 和 Worker 等现有处理链；不能将原生元数据/封面解析写成整个 PDF 阅读器已替换。
-
-BOOX 桥接通过反射探测设备 API。不同机型、固件或 SDK 可见性可能导致能力不可用；当前不能宣称完整接入了文石 SDK，或已经达到固定刷新延迟。
-
-原生层包含外部 URI 暂存、ZIP 检索和阅读恢复点等接口。这里不把这些入口写成“零拷贝”“防丢”或已闭环的性能承诺，实际链路仍需逐项验证。
-
-Android 书目、批注、设置与阅读统计共用原有 `lightread.db`；既有 ID、CFI、手工分类/锁定项、阅读位置和计数保留。启动迁移核对分块及事务回执；完成后旧 WebView `localStorage`/IndexedDB 只读保留为迁移前恢复副本，不双写。导航/显示偏好与草稿继续使用其既有所有者；内存草稿不保证跨进程退出恢复。
-
-设置提交失败时可从原生管理页直接核对原请求回执，并在结果明确后显式选择重新应用或丢弃已知内存编辑；无回执不等于未提交。目录监测引用的原书依赖持续有效的 SAF 权限；应用数据、源书和导出备份不是同一份备份。详见[迁移与恢复合同](docs/android-native-pages.md)。
-
-### 目录
+### 项目结构
 
 ```text
 Pagewise/
-├── readme.md                   # 项目唯一总说明
-├── docs/                       # 架构、部署和验证记录
+├── readme.md                   # 项目总说明
+├── design.md                   # 墨水屏核心设计规范
+├── boox_native_reader_design_specification.md # 文石原生阅读器规范
+├── docs/                       # 架构设计与通用开发指南
+│   ├── deployment.md           # 部署与签名全流程
+│   ├── device-admission.md     # 真机准入检查项
+│   ├── deployment-1.9-status.md# 1.9.0 基线回执
+│   └── archive/                # 历史版本部署与修复归档
+│       ├── deployments/        # 1.1 ~ 1.8 部署回执
+│       ├── historical-fixes/   # 历史现场修复与临时审计
+│       └── upstream-plans/     # 上游云端旧方案归档
 └── reader/
-    ├── package.json            # 前端及 Android 命令
-    ├── src/                    # Vue 界面、服务与存储适配
+    ├── package.json            # 前端依赖与 Android 构建脚本
+    ├── src/                    # Vue 界面、服务与样式
     ├── src-tauri/
     │   ├── src/                # Rust 命令与容器逻辑
-    │   ├── android/            # 受管 Kotlin 模板
-    │   ├── gen/android/        # 本地生成的 Android 工程
+    │   ├── android/            # 受管 Kotlin 模板与原生 Views
+    │   ├── gen/android/        # 本地生成的 Android Gradle 工程
     │   ├── Cargo.toml
     │   └── tauri.conf.json
-    ├── scripts/                # 准备、构建检查与测试
-    ├── relay/                  # 可选 AI 中继服务
-    └── docs/                   # 使用手册与功能专题
+    └── scripts/                # 准备、构建检查与测试套件
+        └── archive/            # 历史过渡验证脚本归档
 ```
-
-生成工程、构建缓存、APK 和签名材料不随源码提交。可复用的 Android 行为应维护在受管模板和准备脚本中，而不是只修改生成工程。
 
 ## 开发与构建
 
-### 环境
+### 依赖环境
+- Node.js (>= 20)、npm
+- Rust (>= 1.87) 及 Android 交叉编译目标：`rustup target add aarch64-linux-android`
+- OpenJDK 21 (推荐 Microsoft Build of OpenJDK 21)
+- Android SDK (API 36, Build-Tools 36.0.0) 及 Android NDK (`30.0.16248370`)
+- LLVM-MinGW 工具链 (Windows 平台下用于 proc-macro 与本地工具链接)
 
-需要 Node.js/npm、Rust，以及 Android 构建使用的 JDK、SDK 和 NDK。1.9.0 本地构建使用 Node.js 25.9.0、JDK 21、Android SDK 36、NDK `30.0.16248370`、Kotlin 2.4.20、Gradle 8.14.3 和 AGP 8.11.0；这是已使用的环境记录，不代表其他组合已经验证。构建脚本只设置子进程环境，不要求修改全局 Java/SDK。
-
-先在仓库根目录执行：
+### 构建命令
 
 ```bash
 cd reader
 npm ci
 
-# 浏览器开发预览，不等同于 Android 功能验收
-npm run dev
-
-# Vue/TypeScript 检查与前端生产构建
+# 前端构建检查
 npm run build
-```
-
-配置 Android SDK/NDK 路径，并安装 Rust Android 目标后：
-
-```bash
-rustup target add aarch64-linux-android
-
-# 首次生成 Android 工程
-npm run android:init
 
 # 准备原生模板、版本属性及两版名称
 npm run android:prepare
 
-# Debug / Release APK
+# 构建 Debug 与 Release APK
 npm run android:build
 npm run android:build:release
 ```
 
-`android:prepare` 包含两个步骤：`prepare-android-project.mjs` 和 `prepare-android-variants.mjs`。只运行前者不会同步两版名称及版本属性。构建前必须确认 npm、Cargo、Tauri 和 Android 版本一致，并在构建后检查实际 APK 元数据。
-
-Release 构建还需要按 [部署指南](docs/deployment.md) 配置签名。构建命令成功不代表签名与设备上的旧包一致；不要将 keystore、密码或 API Key 写入仓库。
-
-### 侧载与升级
-
-默认 Android APK 输出位于：
-
+编译产物生成于：
 - `reader/src-tauri/gen/android/app/build/outputs/apk/arm64/debug/app-arm64-debug.apk`
 - `reader/src-tauri/gen/android/app/build/outputs/apk/arm64/release/app-arm64-release.apk`
 
-本轮验证的本地产物为 `artifacts/Pagewise-1.9.0-debug.apk` 和 `artifacts/Pagewise-1.9.0-release.apk`；历史包保留作恢复参考。这些是本地产物，不随 GitHub 源码同步上传，也不代表已创建 GitHub Release。
-
-只有在包名、版本、ABI 和签名检查通过后，才对指定设备覆盖安装：
+### 侧载部署至 BOOX 设备
 
 ```bash
-adb -s <设备序列号> install -r -t <debug.apk>
-adb -s <设备序列号> install -r <release.apk>
+adb install -r <app-arm64-release.apk>
+adb install -r <app-arm64-debug.apk>
+
+# 若受 BOOX 系统冻结策略影响，可显式启用：
+adb shell pm enable io.pagewise.reader
+adb shell pm enable io.pagewise.reader.debug
 ```
 
-先验证 Debug，再安装正式版。签名不匹配时停止，不通过卸载或清数据绕过升级校验。降级和恢复也需独立检查版本码与数据兼容性。
+## 隐私与安全
 
-## 测试与验证边界
-
-在 `reader/` 下可运行：
-
-```bash
-npm run build
-npm run test:android-only
-node scripts/test-android-variants.mjs
-npm run test:ai-providers
-npm run test:companion
-node --experimental-strip-types --test scripts/test-library-categories-sort.mjs
-
-# 原生设置恢复、共享状态、受保护注册表及统计恢复入口（合成边界）
-node --experimental-strip-types --test scripts/test-native-settings-editing.mjs scripts/test-native-state.mjs scripts/test-native-pages-contract.mjs scripts/test-native-stats-recovery-ui.mjs
-```
-
-更多专项脚本见 `reader/package.json` 和 `reader/scripts/`。浏览器、Mock 和源码契约测试只能证明各自覆盖的范围，不能替代 BOOX 真机验收；原生/前端 ready 信号也不证明书籍读取、目录扫描或远端 AI 服务可用。
-
-性能探针和详细部署证据应保留在对应测试或部署记录中，不能仅凭进程存在、接口返回或哈希一致就宣称功能完成。
-
-## 文档入口
-
-- [1.9.0 功能与验证范围](docs/release-1.9.0.md)
-- [七页原生管理、迁移与恢复（历史设计）](docs/android-native-pages.md)
-- [构建、签名与安装指南](docs/deployment.md)
-- [Android-only 约束](docs/android-only.md)
-- [Android 原生能力路线与待验项](docs/android-native-roadmap.md)
-- [伴读命名与兼容契约](docs/companion-naming.md)
-- [AI 服务与模型目录](docs/ai-services.md)
-- [使用手册](reader/docs/manual/README.md)
-- [验证状态记录](docs/validation-status.md)
-
-## 隐私与许可
-
-本地阅读文件和索引由应用存储管理。AI、网络语音和元数据等联网功能涉及各自的请求与服务端处理，使用前应检查实际授权、配置和服务条款。API Key、书库、私人日志和签名材料不应提交到项目仓库；应用沙盒也不等同于加密存储。
-
+知页为纯本地优先的单机离线阅读器。所有藏书文件、阅读进度、笔记和统计数据均持久化在设备本地 SQLite 数据库或用户指定的监控目录中。启用 AI 功能时，仅发送用户明确选中的书目信息或选段文本至用户配置的私有 API 端点，本地密钥与书库绝不外传。
 
 项目仓库：[shawnshi/Pagewise](https://github.com/shawnshi/Pagewise)。

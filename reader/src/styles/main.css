@@ -12,45 +12,65 @@
   --lr-safe-bottom: env(safe-area-inset-bottom);
   --lr-safe-left: env(safe-area-inset-left);
 
-  /* 品牌 */
-  --brand: #1664ff;
-  --brand-hover: #0e4fd1;
-  --brand-active: #0a3ba8;
-  --brand-light: #e8f0ff;
-  --brand-soft: color-mix(in srgb, var(--brand) 10%, transparent);
+  /* 品牌 - 墨水屏高对比纯黑强调 */
+  --brand: #000000;
+  --brand-hover: #121212;
+  --brand-active: #000000;
+  --brand-light: #f0f0f0;
+  --brand-soft: #f0f0f0;
   --on-brand: #ffffff;
-  /* 二维码: 深色模式下也保持白底深色模块, 否则部分扫码器认不出反色码 (不在深色主题里重定义) */
+
+  /* 16 级灰阶墨水屏安全设计令牌 (Carta 1200 / 1300 Calibrated) */
+  --eink-surface-pure: #ffffff;      /* 纸白 100% */
+  --eink-surface-subtle: #f0f0f0;    /* 晨雾灰 94% */
+  --eink-surface-container: #d6d6d6; /* 水泥浅灰 84% */
+  --eink-border-hairline: #9e9e9e;   /* 铅笔深灰 62% */
+  --eink-text-secondary: #5a5a5a;    /* 碳素中灰 35% */
+  --eink-text-primary: #121212;      /* 浓墨深黑 7% */
+  --eink-solid-black: #000000;       /* 纯黑印墨 0% */
+
+  /* 兼容既有令牌映射 */
+  --eink-paper: var(--eink-surface-pure);
+  --eink-canvas: var(--eink-surface-subtle);
+  --eink-border: var(--eink-border-hairline);
+  --eink-border-strong: var(--eink-solid-black);
+  --eink-secondary: var(--eink-text-secondary);
+  --eink-ink: var(--eink-text-primary);
+  --eink-invert-bg: var(--eink-solid-black);
+  --eink-invert-fg: var(--eink-surface-pure);
+
+  /* 二维码: 深色模式下也保持白底深色模块 */
   --qr-bg: #ffffff;
-  --qr-fg: #111418;
+  --qr-fg: #000000;
 
   /* 表面与文字 */
-  --bg: #f5f6f8;
+  --bg: #ffffff;
   --card: #ffffff;
-  --surface-2: #f0f2f5;   /* 悬停 / 次级面板 */
-  --surface-3: #e6e8ec;   /* 按下 / 轨道 */
-  --text: #1d2129;
-  --text-2: #4e5969;
-  --text-3: #6b7480;      /* ≥4.5:1 于白底 */
-  --border: #e5e6eb;
-  --border-strong: #cfd3da;
-  --overlay: rgba(17, 20, 26, 0.48);
-  --skeleton: #e9ebef;
-  --skeleton-shine: rgba(255, 255, 255, 0.7);
+  --surface-2: #f0f0f0;   /* 悬停 / 次级面板 */
+  --surface-3: #d6d6d6;   /* 按下 / 轨道 */
+  --text: #121212;
+  --text-2: #5a5a5a;
+  --text-3: #757575;      /* 次级印刷文案 */
+  --border: #9e9e9e;
+  --border-strong: #000000;
+  --overlay: #121212;     /* 避免半透明抖动点阵 */
+  --skeleton: #f0f0f0;
+  --skeleton-shine: #ffffff;
 
-  /* 状态 */
-  --danger: #e5383b;
-  --danger-soft: color-mix(in srgb, var(--danger) 10%, transparent);
-  --success: #128a3e;
-  --success-soft: color-mix(in srgb, var(--success) 10%, transparent);
-  --warning: #b45309;
-  --warning-soft: color-mix(in srgb, var(--warning) 10%, transparent);
+  /* 状态 - 墨水屏克制表达 */
+  --danger: #000000;
+  --danger-soft: #f0f0f0;
+  --success: #000000;
+  --success-soft: #f0f0f0;
+  --warning: #000000;
+  --warning-soft: #f0f0f0;
 
-  /* 圆角 */
-  --radius-sm: 6px;
-  --radius: 8px;
-  --radius-lg: 12px;
-  --radius-xl: 16px;
-  --radius-pill: 999px;
+  /* 圆角 - 典藏硬质微圆角 (规制为 0dp 与 2dp) */
+  --radius-sm: 2px;
+  --radius: 2px;
+  --radius-lg: 2px;
+  --radius-xl: 4px;
+  --radius-pill: 2px;
 
   /* 间距 (4pt 节奏) */
   --space-1: 4px;
@@ -62,24 +82,26 @@
   --space-8: 32px;
   --space-10: 40px;
 
-  /* 阴影 */
-  --shadow-sm: 0 1px 2px rgba(29, 33, 41, 0.05);
-  --shadow: 0 2px 8px rgba(29, 33, 41, 0.06);
-  --shadow-md: 0 4px 14px rgba(29, 33, 41, 0.1);
-  --shadow-lg: 0 8px 28px rgba(29, 33, 41, 0.14);
-  --ring: 0 0 0 3px color-mix(in srgb, var(--brand) 28%, transparent);
+  /* 阴影 - 墨水屏彻底去除半透明模糊 */
+  --shadow-sm: none;
+  --shadow: none;
+  --shadow-md: none;
+  --shadow-lg: none;
+  --ring: 0 0 0 2px #000000;
 
-  /* 动效 */
-  --dur-fast: 120ms;
-  --dur: 180ms;
-  --dur-slow: 260ms;
-  --ease: cubic-bezier(0.2, 0.75, 0.25, 1);
+  /* 动效 - 墨水屏零延迟防残影 */
+  --dur-fast: 0ms;
+  --dur: 0ms;
+  --dur-slow: 0ms;
+  --ease: step-start;
 
   /* 触控 */
-  --control-h: 36px;
-  --control-h-sm: 30px;
+  --control-h: 40px;
+  --control-h-sm: 34px;
   --tap-min: 48px;
 
+  /* 排印字体族 */
+  --font-serif: 'PW Source Han Serif', 'Source Han Serif SC', 'Noto Serif CJK SC', 'SimSun', 'Songti SC', 'EB Garamond', 'Georgia', serif;
   --font: 'PW Source Han Sans', -apple-system, BlinkMacSystemFont, 'PingFang SC', 'Segoe UI',
     'Microsoft YaHei', 'Helvetica Neue', Arial, sans-serif;
   --font-mono: ui-monospace, 'SF Mono', Menlo, Consolas, 'Liberation Mono', monospace;
@@ -279,11 +301,6 @@ svg {
   font-weight: 500;
   line-height: 1;
   white-space: nowrap;
-  transition:
-    background var(--dur-fast) var(--ease),
-    border-color var(--dur-fast) var(--ease),
-    color var(--dur-fast) var(--ease),
-    box-shadow var(--dur-fast) var(--ease);
 }
 .btn:hover {
   background: var(--surface-2);
@@ -291,15 +308,15 @@ svg {
   text-decoration: none;
 }
 .btn:active {
-  background: var(--surface-3);
+  background: var(--eink-ink);
+  color: var(--eink-paper);
 }
 .btn:focus-visible {
-  outline: none;
-  box-shadow: var(--ring);
-  border-color: var(--brand);
+  outline: 2px solid var(--border-strong);
+  outline-offset: 1px;
 }
 .btn:disabled {
-  opacity: 0.5;
+  opacity: 0.45;
   cursor: not-allowed;
   background: var(--card);
   border-color: var(--border);
@@ -308,31 +325,33 @@ svg {
   flex-shrink: 0;
 }
 .btn-primary {
-  background: var(--brand);
-  border-color: var(--brand);
+  background: var(--eink-ink);
+  border-color: var(--eink-ink);
   color: var(--on-brand);
 }
 .btn-primary:hover {
-  background: var(--brand-hover);
-  border-color: var(--brand-hover);
+  background: #222222;
+  border-color: #222222;
   color: var(--on-brand);
 }
 .btn-primary:active {
-  background: var(--brand-active);
-  border-color: var(--brand-active);
+  background: var(--eink-paper);
+  border-color: var(--eink-ink);
+  color: var(--eink-ink);
 }
 .btn-primary:disabled {
-  background: var(--brand);
-  border-color: var(--brand);
+  background: #777777;
+  border-color: #777777;
   color: var(--on-brand);
 }
 .btn-danger {
-  color: var(--danger);
+  color: var(--text);
+  border-color: var(--border);
 }
 .btn-danger:hover {
-  background: var(--danger-soft);
-  border-color: color-mix(in srgb, var(--danger) 40%, var(--border));
-  color: var(--danger);
+  background: var(--surface-2);
+  border-color: var(--border-strong);
+  color: var(--text);
 }
 .btn-ghost {
   border-color: transparent;
@@ -341,7 +360,7 @@ svg {
 }
 .btn-ghost:hover {
   background: var(--surface-2);
-  border-color: transparent;
+  border-color: var(--border);
   color: var(--text);
 }
 .btn-sm {
@@ -428,13 +447,15 @@ input[type='range'] {
   padding: 2px;
   border: 1px solid var(--border);
   border-radius: var(--radius);
-  background: var(--surface-2);
+  background: var(--card);
   flex-shrink: 0;
+  gap: 2px;
 }
-.segmented button {
-  height: 28px;
+.segmented button,
+.segmented .segmented-btn {
+  height: 30px;
   padding: 0 12px;
-  border: none;
+  border: 1px solid transparent;
   border-radius: var(--radius-sm);
   background: transparent;
   color: var(--text-2);
@@ -443,29 +464,31 @@ input[type='range'] {
   display: inline-flex;
   align-items: center;
   gap: 6px;
-  transition:
-    background var(--dur-fast) var(--ease),
-    color var(--dur-fast) var(--ease),
-    box-shadow var(--dur-fast) var(--ease);
+  cursor: pointer;
 }
-.segmented button:hover {
+.segmented button:hover,
+.segmented .segmented-btn:hover {
   color: var(--text);
+  border-color: var(--border);
 }
-.segmented button.active {
-  background: var(--card);
-  color: var(--brand);
-  box-shadow: var(--shadow-sm);
+.segmented button.active,
+.segmented .segmented-btn.active {
+  background: var(--eink-ink) !important;
+  color: var(--on-brand) !important;
+  border-color: var(--eink-ink) !important;
+  font-weight: 600;
 }
-.segmented button:focus-visible {
-  outline: none;
-  box-shadow: var(--ring);
+.segmented button:focus-visible,
+.segmented .segmented-btn:focus-visible {
+  outline: 2px solid var(--border-strong);
+  outline-offset: 1px;
 }
 
 .card {
   background: var(--card);
-  border-radius: var(--radius-lg);
-  box-shadow: var(--shadow);
-  border: 1px solid color-mix(in srgb, var(--border) 60%, transparent);
+  border-radius: var(--radius);
+  box-shadow: none;
+  border: 1px solid var(--border);
 }
 
 .tag {
@@ -476,8 +499,9 @@ input[type='range'] {
   border-radius: var(--radius-sm);
   font-size: 12px;
   font-weight: 500;
-  background: var(--brand-light);
-  color: var(--brand);
+  background: var(--surface-2);
+  color: var(--text);
+  border: 1px solid var(--border);
   white-space: nowrap;
 }
 
@@ -773,4 +797,132 @@ input[type='range'] {
 .pagewise-eink ::selection, .lr-eink ::selection { background: var(--annotation-bg); color: var(--text); }
 .lr-eink .sel-colors { flex-wrap: wrap; }
 .lr-eink :is(.highlight-bar, .sel-bar) { flex-wrap: wrap; max-width: calc(100vw - 24px); }
+
+/* ---- WisePage 典藏级墨水屏设计系统 (Carta 1200 / 300 PPI) ---- */
+
+/* 1. 物理装裱式封面框 */
+.archival-cover-plate {
+  position: relative;
+  display: inline-block;
+  aspect-ratio: 1 / 1.414;
+  background-color: var(--eink-surface-subtle);
+  border: 1px solid var(--eink-border-hairline);
+  box-sizing: border-box;
+  overflow: hidden;
+  padding: 2px;
+}
+.archival-cover-plate img {
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+  display: block;
+}
+
+/* 2. 精装书口阅读进度刻度规 (Fore-edge Gauge) */
+.fore-edge-gauge {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  width: 100%;
+}
+.fore-edge-track {
+  position: relative;
+  flex: 1;
+  height: 4px;
+  background-color: var(--eink-surface-subtle);
+  border: 1px solid var(--eink-border-hairline);
+  box-sizing: border-box;
+}
+.fore-edge-fill {
+  height: 100%;
+  background-color: var(--eink-solid-black);
+}
+.fore-edge-notch {
+  position: absolute;
+  top: -4px;
+  width: 0;
+  height: 0;
+  border-left: 3px solid transparent;
+  border-right: 3px solid transparent;
+  border-top: 4px solid var(--eink-solid-black);
+  transform: translateX(-50%);
+}
+.fore-edge-text {
+  font-family: var(--font-mono);
+  font-size: 11px;
+  font-weight: 500;
+  color: var(--eink-text-secondary);
+  font-feature-settings: "tnum" 1;
+  white-space: nowrap;
+}
+
+/* 3. 牛津双线规矩分割线 (Oxford Rule) */
+.oxford-rule {
+  width: 100%;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  margin: 16px 0;
+}
+.oxford-rule::before {
+  content: '';
+  display: block;
+  width: 100%;
+  height: 1.5px;
+  background-color: var(--eink-text-primary);
+}
+.oxford-rule::after {
+  content: '';
+  display: block;
+  width: 100%;
+  height: 0.5px;
+  background-color: var(--eink-border-hairline);
+}
+
+/* 4. 数字藏书票样式卡片 (Ex Libris Badge) */
+.ex-libris-card {
+  border: 2px solid var(--eink-solid-black);
+  padding: 16px 20px;
+  background: var(--eink-surface-pure);
+  position: relative;
+  box-sizing: border-box;
+  margin: 16px 0;
+}
+.ex-libris-inner {
+  border: 1px solid var(--eink-border-hairline);
+  padding: 12px 16px;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  text-align: center;
+}
+.ex-libris-header {
+  font-family: var(--font-serif);
+  font-size: 13px;
+  letter-spacing: 0.25em;
+  text-transform: uppercase;
+  color: var(--eink-text-primary);
+  font-weight: 700;
+  margin-bottom: 6px;
+}
+.ex-libris-title {
+  font-family: var(--font-serif);
+  font-size: 16px;
+  font-weight: 600;
+  color: var(--eink-text-primary);
+  margin: 4px 0;
+}
+.ex-libris-meta {
+  font-family: var(--font-mono);
+  font-size: 11px;
+  color: var(--eink-text-secondary);
+  margin-top: 4px;
+}
+
+/* 5. 墨水屏即时反相触控类 */
+.eink-tap-invert:active {
+  background-color: var(--eink-solid-black) !important;
+  color: var(--eink-surface-pure) !important;
+}
+
 

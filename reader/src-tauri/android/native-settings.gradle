@@ -7,6 +7,15 @@
         def overlay = new File(settingsDir, 'native-sdk/tauri-android')
         if (!new File(overlay, 'pagewise-provenance.json').isFile()) throw new GradleException('Missing pinned Tauri lifecycle overlay')
         module.projectDir = overlay
+    } else if (module.projectDir.toPath().getRoot() != settingsDir.toPath().getRoot()) {
+        def overlay = new File(settingsDir, 'native-sdk/' + name)
+        if (!overlay.exists()) {
+            copy {
+                from module.projectDir
+                into overlay
+            }
+        }
+        module.projectDir = overlay
     }
     def adapter = new File(settingsDir, 'native-gradle/' + name + '.gradle.kts')
     if (!adapter.isFile()) throw new GradleException('Missing project-local Kotlin adapter: ' + name)

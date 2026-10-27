@@ -836,9 +836,9 @@ function formatTime(ts: number): string {
 /* 笔记卡片 */
 .note-card {
   padding: 14px 16px;
-  border: 1px solid var(--border);
-  background-color: var(--card);
-  border-radius: 6px;
+  border: 1px solid var(--eink-border-hairline);
+  background-color: var(--eink-surface-pure);
+  border-radius: 2px;
   display: flex;
   flex-direction: column;
   gap: 10px;
@@ -908,16 +908,17 @@ function formatTime(ts: number): string {
 .quote-block {
   margin: 0;
   padding: 8px 12px;
-  background-color: var(--surface-2);
-  border-left: 4px solid var(--brand);
-  border-radius: 0 4px 4px 0;
+  background-color: var(--eink-surface-subtle);
+  border-left: 3px solid var(--eink-solid-black);
+  border-radius: 0;
 }
 
 .quote-text {
+  font-family: var(--font-serif);
   margin: 0;
-  font-size: 13px;
+  font-size: 14px;
   line-height: 1.6;
-  color: var(--text);
+  color: var(--eink-text-primary);
   word-break: break-word;
 }
 
@@ -1006,7 +1007,7 @@ function formatTime(ts: number): string {
 .modal-backdrop {
   position: fixed;
   inset: 0;
-  background-color: rgba(0, 0, 0, 0.45);
+  background-color: var(--eink-text-primary);
   display: flex;
   align-items: center;
   justify-content: center;
@@ -1018,10 +1019,10 @@ function formatTime(ts: number): string {
   max-width: 400px;
   width: 100%;
   padding: 20px;
-  background-color: var(--card);
-  border: 1px solid var(--border);
-  border-radius: 8px;
-  box-shadow: 0 4px 16px rgba(0, 0, 0, 0.15);
+  background-color: var(--eink-surface-pure);
+  border: 2px solid var(--eink-solid-black);
+  border-radius: 2px;
+  box-shadow: none;
 }
 
 .modal-title {

@@ -2,7 +2,13 @@
 
 状态：构建、签名及指定设备覆盖安装完成。两包 versionName 为 `1.5.0`，versionCode 为 `1005000`；设备为 Note X3 Pro，Android API 32 / arm64-v8a。
 
-## 安装结果
+## 后续启动修复（当前设备状态）
+
+1.5.0 启动被报告出错，测试版现场确认 `native_state_error`。现已修复三处 Android SQLite 初始化 API 使用问题，并同证书覆盖安装启动修复包：`artifacts/Pagewise-1.5.0-startup-fix-release.apk`、`artifacts/Pagewise-1.5.0-startup-fix-debug.apk`。版本名/版本码仍为 1.5.0 / 1005000，显示名称与数据目录身份不变。
+
+两版已完成有限启动检查；正式版探针已关闭并正常重启，未清数据。根因、当前包摘要、严格边界回归及验收限制见[启动修复记录](startup-1.5-fix.md)。下文保留原始打包/安装阶段的历史记录，不把其“未主动启动”范围套用于后续诊断。
+
+## 原始安装结果（历史）
 
 | 变体 | 显示名称 | 包名 | 安装包 |
 |---|---|---|---|
@@ -22,7 +28,7 @@
 - 两次 `adb install -r` 均返回 Success（debug 额外使用 `-t`），安装后的 `base.apk` SHA-256 与交付包完全一致。未修改应用启用状态或主动发起 Activity 启动。
 - 与 v4 受审实现核对：除本次明确允许的版本元数据与文档外，没有实现源码或无关 dirty 文件漂移。打包安装阶段不含 Git 提交/推送，未发布 APK；原生成 JNI 链接已恢复。
 
-## 包摘要
+## 原始包摘要（非当前启动修复包）
 
 - release：`fe38ea858c735ff402b3c179f1ab8e5c4156fe1cd77350f87f75f061b2b86ee7`。
 - debug：`554fd0f73862baea9d964db21e2033a778942efaa678cc86b5f46943e4f22ad0`。

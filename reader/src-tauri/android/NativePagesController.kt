@@ -684,7 +684,7 @@ internal class NativePagesController(
             ).apply {
                 pageTitle = this
                 maxLines = if (page in listOf("library", "stats", "settings")) Int.MAX_VALUE else 1
-                if (page in listOf("stats", "settings")) setTypeface(Typeface.SERIF, Typeface.NORMAL)
+                if (page in listOf("library", "reading", "stats", "settings")) setTypeface(Typeface.SERIF, Typeface.BOLD)
                 ellipsize = TextUtils.TruncateAt.END
                 setPadding(if (rootPage) 0 else dp(12), 0, dp(8), 0)
             },
@@ -1066,16 +1066,17 @@ internal class NativePagesController(
                         }
                     }
             }
-        val coverWidth = if (reading) 72 else 58
-        val coverHeight = if (reading) 101 else 78
+        val coverWidth = if (reading) 72 else 64
+        val coverHeight = if (reading) 101 else 90
         val coverBox =
             FrameLayout(activity).apply {
                 background =
                     NativeUi.shape(activity, this@NativePagesController.background).apply {
-                        cornerRadius = 0f
-                        setStroke(dp(1), this@NativePagesController.foreground)
+                        cornerRadius = dp(2).toFloat()
+                        setStroke(dp(1), NativeUi.border(this@NativePagesController.background))
                     }
                 clipToOutline = true
+                setPadding(dp(2), dp(2), dp(2), dp(2))
                 importantForAccessibility = View.IMPORTANT_FOR_ACCESSIBILITY_NO_HIDE_DESCENDANTS
             }
         coverBox.addView(
@@ -1132,6 +1133,7 @@ internal class NativePagesController(
         heading.addView(
             text(book.optString("title"), if (reading) 16f else 18f, true).apply {
                 maxLines = if (reading) 1 else 2
+                setTypeface(Typeface.SERIF, Typeface.BOLD)
                 ellipsize =
                     TextUtils.TruncateAt.END
             },
@@ -1489,6 +1491,7 @@ internal class NativePagesController(
         identity.addView(
             text(book.optString("title"), 22f, true).apply {
                 setTextIsSelectable(true)
+                setTypeface(Typeface.SERIF, Typeface.BOLD)
                 setPadding(0, 0, 0, dp(12))
             },
         )
@@ -1503,23 +1506,40 @@ internal class NativePagesController(
                 14f,
             ),
         )
-        identity.addView(button(label("阅读状态") + ": " + label(statuses[book.optString("effectiveReadingStatus")] ?: "未标记")) { status(book) })
+        identity.addView(
+            button(label("阅读状态") + ": " + label(statuses[book.optString("effectiveReadingStatus")] ?: "未标记")) { status(book) },
+            LinearLayout.LayoutParams(ViewGroup.LayoutParams.WRAP_CONTENT, ViewGroup.LayoutParams.WRAP_CONTENT).apply {
+                topMargin = dp(6)
+                bottomMargin = dp(8)
+            },
+        )
         if (!book.isNull("progress") && book.optDouble("progress").isFinite()) {
             val p = (book.optDouble("progress").coerceIn(0.0, 1.0) * 100).toInt()
-            identity.addView(
+            val progressRow =
+                LinearLayout(activity).apply {
+                    orientation = LinearLayout.HORIZONTAL
+                    gravity = Gravity.CENTER_VERTICAL
+                    setPadding(0, dp(4), 0, dp(4))
+                }
+            progressRow.addView(
+                text("$p%", 13f, true).apply {
+                    setPadding(0, 0, dp(12), 0)
+                    setTypeface(Typeface.MONOSPACE, Typeface.BOLD)
+                },
+            )
+            progressRow.addView(
                 android.widget.ProgressBar(activity, null, android.R.attr.progressBarStyleHorizontal).apply {
                     max = 100
-                    progress =
-                        p
+                    progress = p
                     progressTintList =
                         android.content.res.ColorStateList
                             .valueOf(this@NativePagesController.foreground)
                     contentDescription =
                         label("阅读进度") + " $p%"
                 },
-                LinearLayout.LayoutParams(-1, dp(6)).apply { topMargin = dp(12) },
+                LinearLayout.LayoutParams(0, dp(4), 1f),
             )
-            identity.addView(text("$p%", 12f))
+            identity.addView(progressRow, LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT).apply { bottomMargin = dp(10) })
         }
         val mainActions = NativeActionFlow(activity)
         mainActions.addView(
@@ -1733,7 +1753,12 @@ internal class NativePagesController(
             ),
         )
         val description = book.optString("description")
-        overview.addView(text(label("简介"), 16f, true))
+        overview.addView(
+            text(label("简介"), 16f, true).apply {
+                setTypeface(Typeface.SERIF, Typeface.BOLD)
+                setPadding(0, dp(12), 0, dp(4))
+            },
+        )
         overview.addView(
             text(
                 if (description.isNotEmpty() &&
@@ -1744,7 +1769,11 @@ internal class NativePagesController(
                     label("暂无简介，可按书目信息生成。")
                 },
                 14f,
-            ).apply { setTextIsSelectable(true) },
+            ).apply {
+                setTextIsSelectable(true)
+                setTypeface(Typeface.SERIF, Typeface.NORMAL)
+                setLineSpacing(0f, 1.4f)
+            },
         )
         actions(overview, listOf("生成简介" to { openBookIntroduction(book) }))
         val classification = book.optJSONObject("classification")

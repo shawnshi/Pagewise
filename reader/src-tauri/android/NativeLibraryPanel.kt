@@ -14,6 +14,7 @@ import android.view.inputmethod.EditorInfo
 import android.widget.Button
 import android.widget.CheckBox
 import android.widget.EditText
+import android.widget.ImageView
 import android.widget.LinearLayout
 import android.widget.ScrollView
 import android.widget.TextView
@@ -270,17 +271,43 @@ internal class NativeLibraryPanel(
 
     private fun installSearch() {
         if (reading || keywordInput != null) return
+        val inputBg = if (ink == android.graphics.Color.BLACK) android.graphics.Color.WHITE else android.graphics.Color.BLACK
         val input =
             EditText(activity).apply {
                 setText(session.optString("keyword"))
                 setTextColor(ink)
-                setHintTextColor(ink)
+                setHintTextColor(NativeUi.secondary(inputBg))
                 hint = tr("搜索书名、作者、标签", "Search title, author, tags")
                 isSingleLine = true
+                background = null
+                textSize = 14f
                 imeOptions = EditorInfo.IME_ACTION_SEARCH
+                setPadding(0, NativeUi.dp(activity, 6), 0, NativeUi.dp(activity, 6))
             }
         keywordInput = input
-        val row = LinearLayout(activity).apply { gravity = android.view.Gravity.CENTER_VERTICAL }
+        val row =
+            LinearLayout(activity).apply {
+                orientation = LinearLayout.HORIZONTAL
+                gravity = android.view.Gravity.CENTER_VERTICAL
+                background =
+                    NativeUi.shape(activity, inputBg).apply {
+                        cornerRadius = NativeUi.dp(activity, 2).toFloat()
+                        setStroke(NativeUi.dp(activity, 1), NativeUi.border(inputBg))
+                    }
+                setPadding(NativeUi.dp(activity, 12), NativeUi.dp(activity, 2), NativeUi.dp(activity, 8), NativeUi.dp(activity, 2))
+                layoutParams =
+                    LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT).apply {
+                        bottomMargin = NativeUi.dp(activity, 12)
+                    }
+            }
+        row.addView(
+            ImageView(activity).apply {
+                setImageDrawable(NativeUi.glyph(activity, "search-library", NativeUi.secondary(inputBg), 18))
+            },
+            LinearLayout.LayoutParams(NativeUi.dp(activity, 18), NativeUi.dp(activity, 18)).apply {
+                marginEnd = NativeUi.dp(activity, 8)
+            },
+        )
         row.addView(input, LinearLayout.LayoutParams(0, -2, 1f))
         val clear =
             NativeUi.iconButton(
@@ -288,13 +315,7 @@ internal class NativeLibraryPanel(
                 tr("清除搜索", "Clear search"),
                 "close",
                 ink,
-                if (ink ==
-                    android.graphics.Color.BLACK
-                ) {
-                    android.graphics.Color.WHITE
-                } else {
-                    android.graphics.Color.BLACK
-                },
+                inputBg,
             ) { input.setText("") }
         clear.visibility = if (input.text.isEmpty()) View.GONE else View.VISIBLE
         row.addView(clear)
@@ -852,21 +873,51 @@ internal class NativeLibraryPanel(
             return
         }
         if (result.getInt("total") == 0) return
-        root.addView(text("$page / $pages · ${result.getInt("total")} " + tr("项", "items")))
-        val pager = LinearLayout(activity)
-        pager.addView(
+        val pagingBar =
+            LinearLayout(activity).apply {
+                orientation = LinearLayout.HORIZONTAL
+                gravity = android.view.Gravity.CENTER_VERTICAL
+                setPadding(NativeUi.dp(activity, 4), NativeUi.dp(activity, 14), NativeUi.dp(activity, 4), NativeUi.dp(activity, 14))
+                layoutParams = LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT)
+            }
+        val pageInfo =
+            TextView(activity).apply {
+                text = "$page / $pages · " + tr("共", "Total ") + "${result.getInt("total")} " + tr("册", "items")
+                textSize = 13f
+                setTextColor(NativeUi.secondary(if (ink == android.graphics.Color.BLACK) android.graphics.Color.WHITE else android.graphics.Color.BLACK))
+                setTypeface(android.graphics.Typeface.MONOSPACE, android.graphics.Typeface.NORMAL)
+            }
+        pagingBar.addView(pageInfo, LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f))
+        val pagerButtons =
+            LinearLayout(activity).apply {
+                orientation = LinearLayout.HORIZONTAL
+                gravity = android.view.Gravity.END
+            }
+        pagerButtons.addView(
             button(tr("上页", "Previous")) {
                 session.put("page", page - 1)
                 load(persist = true)
-            }.apply { isEnabled = page > 1 },
+            }.apply {
+                isEnabled = page > 1
+                minHeight = NativeUi.dp(activity, 38)
+                minimumHeight = NativeUi.dp(activity, 38)
+            },
+            LinearLayout.LayoutParams(ViewGroup.LayoutParams.WRAP_CONTENT, ViewGroup.LayoutParams.WRAP_CONTENT).apply {
+                marginEnd = NativeUi.dp(activity, 8)
+            },
         )
-        pager.addView(
+        pagerButtons.addView(
             button(tr("下页", "Next")) {
                 session.put("page", page + 1)
                 load(persist = true)
-            }.apply { isEnabled = page < pages },
+            }.apply {
+                isEnabled = page < pages
+                minHeight = NativeUi.dp(activity, 38)
+                minimumHeight = NativeUi.dp(activity, 38)
+            },
         )
-        root.addView(pager)
+        pagingBar.addView(pagerButtons)
+        root.addView(pagingBar)
     }
 
     private fun filterTitle(key: String) =

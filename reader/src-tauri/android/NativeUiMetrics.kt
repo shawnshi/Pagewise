@@ -117,13 +117,13 @@ internal data class NativeEinkPalette(
 private val nativeEinkLight =
     NativeEinkPalette(
         0xFFFFFFFF.toInt(),
-        0xFFFAFAFA.toInt(),
+        0xFFF4F4F4.toInt(),
         0xFF000000.toInt(),
-        0xFFD4D4D4.toInt(),
+        0xFFD0D0D0.toInt(),
         0xFF000000.toInt(),
-        0xFF4A4A4A.toInt(),
+        0xFF555555.toInt(),
         0xFF8C8C8C.toInt(),
-        0xFFDCDCDC.toInt(),
+        0xFFE0E0E0.toInt(),
     )
 private val nativeEinkDark =
     NativeEinkPalette(

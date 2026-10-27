@@ -1,7 +1,7 @@
 #requires -Version 7.0
 [CmdletBinding()]
 param(
-    [ValidateSet('Upstream','Pagewise')][string]$Mode = 'Upstream',
+    [ValidateSet('Upstream','Pagewise')][string]$Mode = 'Pagewise',
     [string]$ApkPath = '',
     [string]$SdkRoot = (Join-Path $env:LOCALAPPDATA 'Android\Sdk'),
     [string]$BuildToolsVersion = '36.0.0',

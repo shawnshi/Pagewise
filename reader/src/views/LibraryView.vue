@@ -1052,10 +1052,12 @@ async function clearSelectedTags() {
   gap: 10px;
 }
 .heading h1 {
-  font-size: 22px;
+  font-family: var(--font-serif);
+  font-size: 24px;
   font-weight: 700;
   margin: 0;
   color: var(--text);
+  letter-spacing: -0.01em;
 }
 .count {
   font-size: 13px;
@@ -1130,11 +1132,14 @@ async function clearSelectedTags() {
   flex: 0 0 auto;
   white-space: nowrap;
   transition: none;
+  border: 1px solid var(--border);
+  border-radius: 2px;
+  background: var(--card);
 }
 .category-tab.category-active {
   color: var(--card);
-  background: var(--text);
-  border-color: var(--text);
+  background: var(--eink-ink);
+  border-color: var(--eink-ink);
   font-weight: 700;
 }
 .category-tab:focus-visible {
@@ -1189,11 +1194,12 @@ async function clearSelectedTags() {
   display: inline-flex;
   align-items: center;
   gap: 4px;
-  padding: 4px 10px;
-  border-radius: var(--radius-pill);
-  background: var(--surface-2);
-  border: 1px solid var(--border);
+  padding: 3px 8px;
+  border-radius: 2px;
+  background: var(--eink-surface-pure);
+  border: 1px solid var(--eink-border-hairline);
   font-size: 12px;
+  color: var(--eink-text-primary);
 }
 .chip-remove {
   border: none;
@@ -1250,9 +1256,9 @@ async function clearSelectedTags() {
   gap: 8px;
   padding: 10px 18px;
   background: var(--card);
-  border: 1px solid var(--text);
-  border-radius: var(--radius-lg);
-  box-shadow: var(--shadow-lg);
+  border: 1.5px solid var(--border-strong);
+  border-radius: var(--radius);
+  box-shadow: none;
   z-index: 100;
 }
 .batch-count {
@@ -1263,19 +1269,20 @@ async function clearSelectedTags() {
 .modal-mask {
   position: fixed;
   inset: 0;
-  background: rgba(0, 0, 0, 0.4);
+  background: var(--eink-text-primary);
   display: flex;
   align-items: center;
   justify-content: center;
   z-index: 200;
 }
 .modal {
-  background: var(--card);
-  border-radius: var(--radius-lg);
+  background: var(--eink-surface-pure);
+  border-radius: 2px;
+  border: 2px solid var(--eink-solid-black);
   padding: 24px;
   width: 90%;
   max-width: 440px;
-  box-shadow: var(--shadow-lg);
+  box-shadow: none;
 }
 .modal h3 {
   margin: 0 0 8px;
