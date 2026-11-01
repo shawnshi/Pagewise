@@ -52,7 +52,7 @@ test('Android opened-event queue and file read authorization are retained', () =
   for (const command of ['take_open_files', 'read_open_file', 'edge_tts::edge_tts_synthesize', 'fonts::list_system_fonts']) {
     assert.ok(lib.includes(command), command)
   }
-  assert.match(lib, /tauri_plugin_sql::Builder::new\(\)\.build\(\)/)
+  assert.match(lib, /native_pages::init\(\)/)
 })
 
 test('shared native implementations retain the frozen brand source (ignoring checkout line endings)', () => {

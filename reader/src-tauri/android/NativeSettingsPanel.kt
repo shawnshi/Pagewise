@@ -107,6 +107,7 @@ internal class NativeSettingsPanel(
             LinearLayout(activity).apply {
                 orientation = LinearLayout.HORIZONTAL
                 gravity = android.view.Gravity.END
+                visibility = View.GONE
                 layoutParams = LinearLayout.LayoutParams(-1, -2).apply { bottomMargin = ui.dp(8) }
             }
         recRow.addView(
@@ -124,6 +125,7 @@ internal class NativeSettingsPanel(
                 LinearLayout(activity).apply {
                     orientation = LinearLayout.HORIZONTAL
                     gravity = android.view.Gravity.END
+                    visibility = View.GONE
                     layoutParams = LinearLayout.LayoutParams(-1, -2).apply { bottomMargin = ui.dp(8) }
                 }
             recRowSettled.addView(
@@ -360,10 +362,14 @@ internal class NativeSettingsPanel(
         }
         content.addView(backToDirBtn)
         for ((id, caption) in captions) {
-            val action = ui.button(caption, selected = state.group == id) { select(id) }
+            val action =
+                ui.button(caption, selected = state.group == id) { select(id) }.apply {
+                    gravity = android.view.Gravity.START or android.view.Gravity.CENTER_VERTICAL
+                    setPadding(ui.dp(16), ui.dp(8), ui.dp(16), ui.dp(8))
+                }
             action.contentDescription = tr("设置分类：", "Settings category: ") + caption
             buttons[id] = action
-            nav.addView(action, LinearLayout.LayoutParams(-1, -2).apply { bottomMargin = ui.dp(8) })
+            nav.addView(action, LinearLayout.LayoutParams(-1, -2).apply { bottomMargin = ui.dp(6) })
         }
         content.addView(
             render(extraSections) { id, view ->

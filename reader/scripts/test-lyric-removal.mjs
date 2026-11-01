@@ -114,6 +114,8 @@ test('actual settings load applies migration before merging defaults using synth
     '../services/readingModes/retiredSettings.ts': { normalizeRetiredLyricSettings },
     '../services/aiProviders.ts': await import('../src/services/aiProviders.ts'),
     '../services/readerTypographyProfiles.ts': await import('../src/services/readerTypographyProfiles.ts'),
+    '../services/nativeState.ts': { hasNativeState: () => false },
+    '../services/PagewiseCompanion/compatibility.ts': await import('../src/services/PagewiseCompanion/compatibility.ts'),
   }
   vm.runInNewContext(output, {
     exports, require: id => { assert.ok(id in imports, `unexpected import ${id}`); return imports[id] },

@@ -188,7 +188,21 @@ internal object NativeUi {
         background: Int,
         reading: Boolean,
     ): Drawable {
-        if (reading) return actionable(context, background)
+        val ink = if (Color.red(background) > 128) Color.BLACK else Color.WHITE
+        if (reading) {
+            return StateListDrawable().apply {
+                addState(intArrayOf(android.R.attr.state_focused), shape(context, background).apply { setStroke(dp(context, 2), ink) })
+                addState(intArrayOf(android.R.attr.state_selected), shape(context, background).apply { setStroke(dp(context, 2), ink) })
+                addState(
+                    intArrayOf(android.R.attr.state_pressed),
+                    shape(context, background).apply {
+                        setColor(activeSubtle(background))
+                        setStroke(dp(context, 2), ink)
+                    },
+                )
+                addState(intArrayOf(), hairlineShape(context, background, false))
+            }
+        }
         val fill = shape(context, background, false).apply { cornerRadius = 0f }
         val line = GradientDrawable().apply { setColor(divider(background)) }
         val normal =

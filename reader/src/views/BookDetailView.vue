@@ -282,6 +282,22 @@ const recommendationCount = ref<number | null>(null)
             <span v-if="statusInfo.effective" class="badge" :class="statusInfo.effective">
               {{ t('uiV02.status.' + (statusInfo.effective)) }}
             </span>
+            <button
+              type="button"
+              class="btn btn-primary btn-read btn-sm"
+              :disabled="!readable"
+              @click="openReader"
+            >
+              {{ fileProblem ? t(fileProblem === 'missing' ? 'library.relink' : 'library.reauthorize') : progress && progress > 0 ? t('catalog.continueReading') : t('settings.navReading') }}
+            </button>
+            <button type="button" class="btn btn-sm" @click="togglePin">
+              <AppIcon name="pin" :size="16" aria-hidden="true" />
+              <span>{{ book.pinnedAt ? t('library.unpin') : t('library.pin') }}</span>
+            </button>
+            <button v-if="!book.sourceRef" type="button" class="btn btn-danger btn-sm" @click="removeBook">
+              <AppIcon name="delete" :size="16" aria-hidden="true" />
+              <span>{{ t('book.removeFromLibrary') }}</span>
+            </button>
           </div>
 
           <div v-if="progress != null" class="fore-edge-gauge">
@@ -290,25 +306,6 @@ const recommendationCount = ref<number | null>(null)
               <div class="fore-edge-notch" :style="{ left: `${progress}%` }" />
             </div>
             <span class="fore-edge-text">{{ progress }}%</span>
-          </div>
-
-          <div class="detail-actions">
-            <button
-              type="button"
-              class="btn btn-primary btn-read"
-              :disabled="!readable"
-              @click="openReader"
-            >
-              {{ fileProblem ? t(fileProblem === 'missing' ? 'library.relink' : 'library.reauthorize') : progress && progress > 0 ? t('catalog.continueReading') : t('settings.navReading') }}
-            </button>
-            <button type="button" class="btn" @click="togglePin">
-              <AppIcon name="pin" :size="16" aria-hidden="true" />
-              <span>{{ book.pinnedAt ? t('library.unpin') : t('library.pin') }}</span>
-            </button>
-            <button v-if="!book.sourceRef" type="button" class="btn btn-danger" @click="removeBook">
-              <AppIcon name="delete" :size="16" aria-hidden="true" />
-              <span>{{ t('book.removeFromLibrary') }}</span>
-            </button>
           </div>
         </div>
       </section>
@@ -416,10 +413,12 @@ const recommendationCount = ref<number | null>(null)
               <span v-else class="tag-placeholder">{{ t('book.noTags') }}</span>
             </dd>
           </div>
-          <div class="meta-item full-width">
-            <dt>{{ t("uiV02.copy.书籍简介：") }}</dt>
+          <div class="meta-item full-width intro-item">
+            <div class="intro-header">
+              <dt>{{ t("uiV02.copy.书籍简介：") }}</dt>
+              <button type="button" class="btn btn-ghost btn-sm" :disabled="book.id !== bookId" @click="showIntroduction = true">{{ t('bookIntroduction.generate') }}</button>
+            </div>
             <dd class="description-text">{{ book.description || t('bookIntroduction.empty') }}</dd>
-            <dd><button type="button" class="btn btn-ghost" :disabled="book.id !== bookId" @click="showIntroduction = true">{{ t('bookIntroduction.generate') }}</button></dd>
           </div>
         </dl>
 
@@ -564,6 +563,7 @@ const recommendationCount = ref<number | null>(null)
 .status-row {
   display: flex;
   align-items: center;
+  flex-wrap: wrap;
   gap: 8px;
   font-size: 13px;
 }
@@ -705,6 +705,20 @@ const recommendationCount = ref<number | null>(null)
   background: var(--surface-2);
   border: 1px solid var(--border);
   color: var(--text-2);
+}
+.intro-item {
+  flex-direction: column !important;
+  gap: 8px;
+}
+.intro-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  width: 100%;
+}
+.intro-header dt {
+  margin: 0;
+  width: auto;
 }
 .description-text {
   font-family: var(--font-serif);

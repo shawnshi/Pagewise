@@ -854,11 +854,15 @@ internal class NativeLibraryPanel(
                     }
                 }
             wrapper.addView(check)
-            val metadata =
-                listOf(view.optString("author"), view.optString("publisher"), view.optString("publicationDate"))
-                    .filter { it.isNotBlank() && it != "null" }
-                    .joinToString(" · ")
-            val placeholder = text(view.getString("title") + if (metadata.isEmpty()) "" else "\n$metadata")
+            val placeholder =
+                makeCard(view, {
+                    if (!view.optBoolean("supported", true)) {
+                        status.text =
+                            tr("此旧格式已停止阅读支持；元数据保留。", "This legacy format is no longer readable; metadata is retained.")
+                    } else {
+                        remember(id) { openReader(view) }
+                    }
+                }, { if (state.manage) check.isChecked = !check.isChecked else remember(id) { openDetails(view) } })
             wrapper.addView(placeholder)
             root.addView(wrapper)
             metadataQueue.add {
@@ -867,7 +871,8 @@ internal class NativeLibraryPanel(
                     if (error != null ||
                         metadata == null
                     ) {
-                        placeholder.text = view.getString("title") + " · " + (error ?: "metadata_unavailable")
+                        wrapper.removeView(placeholder)
+                        wrapper.addView(text(view.getString("title") + " · " + (error ?: "metadata_unavailable")))
                         main.post { advance() }
                         return@ask
                     }

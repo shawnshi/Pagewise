@@ -132,8 +132,8 @@ function captureRecommendationRelocate(event: Event) {
   recommendationRelocateReason = typeof detail?.reason === 'string' ? detail.reason : null
 }
 function setPrimaryPanel(name: PrimaryPanel) {
-  if (name !== 'none' && endRecommendationsOpen.value) {
-    if (endRecommendationsDialog.value?.isWriting()) return
+  if (name !== 'none' && typeof endRecommendationsOpen !== 'undefined' && endRecommendationsOpen.value) {
+    if (typeof endRecommendationsDialog !== 'undefined' && endRecommendationsDialog.value?.isWriting()) return
     endRecommendationsOpen.value = false
   }
   if (name !== 'none') {
@@ -526,7 +526,7 @@ const typographyPage = computed(() => {
 })
 const typographyBottomInset = computed(() => {
   const page = typographyPage.value
-  return page ? page.bottom - page.top : 0
+  return Math.max(24, page ? page.bottom - page.top : 0)
 })
 
 /** Portrait flowable pages use page edges; explicit percent margins take precedence over ruler defaults. */
@@ -4267,7 +4267,14 @@ onBeforeRouteLeave(async () => {
         </div>
         <template v-else>
           <div ref="aiListEl" class="panel-body ai-list">
-            <p v-if="!aiMessages.length" class="panel-empty">{{ t('ai.intro') }}</p>
+            <template v-if="!aiMessages.length">
+              <p class="panel-empty">{{ t('ai.intro') }}</p>
+              <div class="ai-quick-prompts">
+                <button type="button" class="btn btn-sm ai-quick-chip" :disabled="aiStreaming" @click="sendAi(t('ai.quickSummary'))">{{ t('ai.quickSummary') }}</button>
+                <button type="button" class="btn btn-sm ai-quick-chip" :disabled="aiStreaming" @click="sendAi(t('ai.quickLogic'))">{{ t('ai.quickLogic') }}</button>
+                <button type="button" class="btn btn-sm ai-quick-chip" :disabled="aiStreaming" @click="sendAi(t('ai.quickConcepts'))">{{ t('ai.quickConcepts') }}</button>
+              </div>
+            </template>
             <div v-for="(m, i) in aiMessages" :key="i" class="ai-msg" :class="m.role">
               <div class="ai-bubble">{{ m.content }}<span v-if="m.role === 'assistant' && aiStreaming && i === aiMessages.length - 1" class="ai-cursor">▍</span></div>
               <p v-if="m.role === 'assistant' && m.complete === false && (!aiStreaming || i !== aiMessages.length - 1)" class="analysis-scope">{{ t('ai.incompleteReply') }}</p>
@@ -4571,7 +4578,10 @@ onBeforeRouteLeave(async () => {
   color: var(--text);
 }
 .inspection-bar .btn:focus-visible { outline: 2px solid var(--text); outline-offset: 2px; }
-.analysis-scope { padding: 0 16px; color: var(--text-2); font-size: 13px; }
+.analysis-scope { padding: 8px 14px; margin: 4px 0 8px; border-top: 1px solid var(--border); color: var(--text-2); font-size: 12px; line-height: 1.55; }
+.ai-quick-prompts { display: flex; flex-direction: column; gap: 8px; padding: 4px 12px 16px; }
+.ai-quick-chip { justify-content: flex-start; text-align: left; padding: 10px 14px; height: auto; min-height: 42px; border: 1px solid var(--text); border-radius: 0; font-size: 14px; font-weight: 500; background: var(--card); color: var(--text); }
+.ai-quick-chip:active { background: var(--text); color: var(--card); }
 /* 正文让出状态栏 / 手势条 / 横屏刘海; 阅读背景仍铺满整屏 */
 .content {
   flex: 1;
@@ -4839,16 +4849,18 @@ onBeforeRouteLeave(async () => {
   right: 12px;
   bottom: calc(50px + var(--safe-bottom));
   z-index: 15;
-  width: min(360px, calc(100% - 24px));
+  width: min(420px, calc(100% - 24px));
   min-height: 0;
   max-height: calc(100dvh - 104px - var(--safe-top) - var(--safe-bottom));
-  padding: 16px;
+  padding: 18px 20px;
   display: flex;
   flex-direction: column;
 }
 .panel h3 {
-  font-size: 14px;
-  margin-bottom: 10px;
+  font-family: var(--font-serif);
+  font-size: 18px;
+  font-weight: 700;
+  margin-bottom: 12px;
 }
 .panel-body {
   flex: 1;
@@ -4862,9 +4874,9 @@ onBeforeRouteLeave(async () => {
   flex-shrink: 0;
 }
 .panel-empty {
-  color: var(--text-3);
-  font-size: 13px;
-  padding: 20px 0;
+  color: var(--text-2);
+  font-size: 15px;
+  padding: 24px 0;
   text-align: center;
 }
 .panel-tip {
@@ -5386,9 +5398,9 @@ onBeforeRouteLeave(async () => {
 }
 .ai-bubble {
   max-width: 92%;
-  padding: 8px 10px;
-  border-radius: 10px;
-  font-size: 13px;
+  padding: 10px 14px;
+  border-radius: 8px;
+  font-size: 15px;
   line-height: 1.7;
   white-space: pre-wrap;
   word-break: break-word;
@@ -5518,9 +5530,10 @@ onBeforeRouteLeave(async () => {
 @media (max-width: 1023px) {
   .bar.top { flex-wrap: wrap; gap: 6px; }
   .book-title { flex: 1 1 120px; min-width: 0; }
-  .bar-actions { flex: 0 0 100%; width: 100%; gap: 4px; align-items: stretch; }
+  .book-title strong { font-size: 16px; font-weight: 700; font-family: Georgia, "Noto Serif CJK SC", serif; }
+  .bar-actions { flex: 0 0 100%; width: 100%; gap: 4px; align-items: stretch; border-top: 1px solid var(--border); padding-top: 4px; }
   .bar-actions > .reader-action-btn, .reader-more-wrap { flex: 1; min-width: 0; }
-  .bar-actions .reader-action-btn { width: 100%; min-height: 64px; height: auto; flex-direction: column; gap: 4px; padding: 6px 4px; font-size: 13px; line-height: 1.3; white-space: normal; }
+  .bar-actions .reader-action-btn { width: 100%; min-height: 60px; height: auto; flex-direction: column; gap: 4px; padding: 6px 4px; font-size: 13px; line-height: 1.3; white-space: normal; }
   .bar-actions .btn-text { max-width: 100%; font-size: 13px; white-space: normal; overflow-wrap: anywhere; text-align: center; }
 }
 

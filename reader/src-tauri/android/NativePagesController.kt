@@ -238,6 +238,7 @@ internal class NativePagesController(
             "分钟" to "minutes",
             "小时" to "hours",
             "需要权限" to "Permission required",
+            "分类与标签" to "Classification and tags",
             "页面加载失败，未将读取错误当作空数据。" to "This page could not be loaded. A read error is not an empty result.",
             "目录加载失败，请重试或返回阅读器。" to "The table of contents could not be loaded. Retry or return to the reader.",
         )[zh]
@@ -1212,23 +1213,27 @@ internal class NativePagesController(
             },
         )
         if (!reading || tagLabels.isNotEmpty()) {
-            heading.addView(
-                text(
-                    if (reading) {
-                        tagLabels.joinToString(" · ")
-                    } else {
-                        listOf(problem, statusName, if (hasProgress) "$percent%" else "")
-                            .filter { it.isNotEmpty() }
-                            .joinToString(" · ")
-                    },
-                    if (reading) 12f else 14f,
-                ).apply {
-                    if (reading) {
-                        maxEms = 12
+            val effectiveCode = book.optString("effectiveReadingStatus")
+            val shownStatus = if (effectiveCode.isEmpty() || effectiveCode == "unmarked") "" else statusName
+            val secondaryHeading =
+                if (reading) {
+                    tagLabels.joinToString(" · ")
+                } else {
+                    listOf(problem, shownStatus, if (hasProgress && percent > 0) "$percent%" else "")
+                        .filter { it.isNotEmpty() }
+                        .joinToString(" · ")
+                }
+            if (secondaryHeading.isNotEmpty()) {
+                heading.addView(
+                    text(
+                        secondaryHeading,
+                        if (reading) 12f else 13f,
+                    ).apply {
+                        if (reading) maxEms = 14
                         setTextColor(NativeUi.secondary(this@NativePagesController.background))
-                    }
-                },
-            )
+                    },
+                )
+            }
         }
         info.addView(heading)
         val author = book.optString("author").takeUnless { it.isBlank() || it == "null" } ?: label("未知作者")
@@ -1316,13 +1321,6 @@ internal class NativePagesController(
                 ) { bookPrimary(book) { if (read != null) read() else openReader(book) } },
             )
         }
-        if (!reading) {
-            tools.addView(
-                NativeUi.iconTextButton(activity, label("更多"), "more", foreground, background) {
-                    if (libraryPanel?.canOperate() != false) bookMenu(book, read, details)
-                },
-            )
-        }
         tools.visibility = if (libraryState.manage) View.GONE else View.VISIBLE
         row.addView(tools)
         row.setOnClickListener {
@@ -1340,10 +1338,6 @@ internal class NativePagesController(
             } else {
                 false
             }
-        }
-        row.setOnLongClickListener {
-            if (libraryPanel?.canOperate() != false) bookMenu(book, read, details)
-            true
         }
         return row
     }
@@ -1420,6 +1414,7 @@ internal class NativePagesController(
         navigate(path + Uri.encode(book.getString("id")) + if (query.isEmpty()) "" else "?${query.joinToString("&")}")
     }
 
+    @Suppress("UNUSED_PARAMETER", "unused")
     private fun bookMenu(
         book: JSONObject,
         read: (() -> Unit)? = null,
@@ -1634,16 +1629,59 @@ internal class NativePagesController(
                 },
             )
         }
-        identity.addView(
+        val statusActions = NativeActionFlow(activity)
+        statusActions.addView(
             button(label("阅读状态") + ": " + label(statuses[book.optString("effectiveReadingStatus")] ?: "未标记")) { status(book) }.apply {
                 minHeight = dp(38)
                 minimumHeight = dp(38)
                 gravity = Gravity.CENTER
                 setPadding(dp(12), dp(4), dp(12), dp(4))
             },
-            LinearLayout.LayoutParams(ViewGroup.LayoutParams.WRAP_CONTENT, ViewGroup.LayoutParams.WRAP_CONTENT).apply {
-                topMargin = dp(8)
-                bottomMargin = dp(8)
+        )
+        statusActions.addView(
+            NativeUi
+                .primaryButton(
+                    activity,
+                    label(
+                        if (book.optString("fileAvailability") in
+                            setOf("missing", "permission-denied")
+                        ) {
+                            if (book.optString("fileAvailability") == "permission-denied") "重新授权" else "重新关联文件"
+                        } else if (book.optDouble("progress", 0.0) >
+                            0
+                        ) {
+                            "继续阅读"
+                        } else {
+                            "阅读"
+                        },
+                    ),
+                    foreground,
+                    background,
+                ) { bookPrimary(book) }
+                .apply {
+                    isEnabled =
+                        !book.has("supported") || book.optBoolean("supported")
+                },
+        )
+        statusActions.addView(
+            NativeUi.iconTextButton(
+                activity,
+                label(if (book.isNull("pinnedAt")) "置顶" else "取消置顶"),
+                "pin",
+                foreground,
+                background,
+            ) {
+                patchBook(book, JSONObject().put("pinnedAt", if (book.isNull("pinnedAt")) System.currentTimeMillis() else JSONObject.NULL))
+            },
+        )
+        if (book.isNull("sourceRef")) {
+            statusActions.addView(NativeUi.iconTextButton(activity, label("移除书目"), "delete", foreground, background) { removeBook(book) })
+        }
+        identity.addView(
+            statusActions,
+            LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT).apply {
+                topMargin = dp(6)
+                bottomMargin = dp(6)
             },
         )
         if (!book.isNull("progress") && book.optDouble("progress").isFinite()) {
@@ -1678,47 +1716,6 @@ internal class NativePagesController(
             )
             identity.addView(progressRow, LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT).apply { bottomMargin = dp(10) })
         }
-        val mainActions = NativeActionFlow(activity)
-        mainActions.addView(
-            NativeUi
-                .primaryButton(
-                    activity,
-                    label(
-                        if (book.optString("fileAvailability") in
-                            setOf("missing", "permission-denied")
-                        ) {
-                            if (book.optString("fileAvailability") == "permission-denied") "重新授权" else "重新关联文件"
-                        } else if (book.optDouble("progress", 0.0) >
-                            0
-                        ) {
-                            "继续阅读"
-                        } else {
-                            "阅读"
-                        },
-                    ),
-                    foreground,
-                    background,
-                ) { bookPrimary(book) }
-                .apply {
-                    isEnabled =
-                        !book.has("supported") || book.optBoolean("supported")
-                },
-        )
-        mainActions.addView(
-            NativeUi.iconTextButton(
-                activity,
-                label(if (book.isNull("pinnedAt")) "置顶" else "取消置顶"),
-                "pin",
-                foreground,
-                background,
-            ) {
-                patchBook(book, JSONObject().put("pinnedAt", if (book.isNull("pinnedAt")) System.currentTimeMillis() else JSONObject.NULL))
-            },
-        )
-        if (book.isNull("sourceRef")) {
-            mainActions.addView(NativeUi.iconTextButton(activity, label("移除书目"), "delete", foreground, background) { removeBook(book) })
-        }
-        identity.addView(mainActions)
         hero.addView(identity, LinearLayout.LayoutParams(0, -2, 1f))
         body.addView(hero)
         if (book.optString("fileAvailability") in setOf("missing", "permission-denied")) {
@@ -1895,83 +1892,71 @@ internal class NativePagesController(
                 text(label(key) + ": " + value, 14f).apply { setTextIsSelectable(true) },
             )
         }
-        overview.addView(metadata)
-        if (fileMetadata.childCount > 0) {
-            val toggle =
-                button("文件信息") {}.apply {
-                    background = NativeUi.hairlineShape(activity, this@NativePagesController.background, true)
-                    minHeight = dp(38)
-                    minimumHeight = dp(38)
-                    gravity = Gravity.CENTER
-                    setPadding(dp(14), dp(4), dp(14), dp(4))
-                }
-            toggle.setOnClickListener {
-                fileMetadata.visibility = if (fileMetadata.visibility == View.VISIBLE) View.GONE else View.VISIBLE
-                toggle.text = label(if (fileMetadata.visibility == View.VISIBLE) "收起文件信息" else "文件信息")
-                toggle.contentDescription = toggle.text
+        val description = book.optString("description")
+        val introHeader =
+            LinearLayout(activity).apply {
+                orientation = LinearLayout.HORIZONTAL
+                gravity = Gravity.CENTER_VERTICAL
+                setPadding(0, dp(4), 0, dp(4))
             }
-            overview.addView(
-                toggle,
-                LinearLayout.LayoutParams(ViewGroup.LayoutParams.WRAP_CONTENT, ViewGroup.LayoutParams.WRAP_CONTENT).apply {
-                    topMargin = dp(8)
-                    bottomMargin = dp(8)
-                },
-            )
-            overview.addView(fileMetadata)
-        }
-        val tags = book.optJSONArray("tags") ?: JSONArray()
+        introHeader.addView(
+            text(label("简介"), 16f, true).apply {
+                setTypeface(Typeface.SERIF, Typeface.BOLD)
+            },
+            LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f),
+        )
+        introHeader.addView(
+            button("生成简介") { openBookIntroduction(book) }.apply {
+                background = NativeUi.hairlineShape(activity, this@NativePagesController.background, true)
+                minHeight = dp(32)
+                minimumHeight = dp(32)
+                gravity = Gravity.CENTER
+                textSize = 12f
+                setPadding(dp(10), dp(2), dp(10), dp(2))
+            },
+            LinearLayout.LayoutParams(ViewGroup.LayoutParams.WRAP_CONTENT, ViewGroup.LayoutParams.WRAP_CONTENT),
+        )
+        overview.addView(introHeader)
         overview.addView(
             text(
-                label("标签") + ": " +
-                    if (tags.length() == 0) label("暂无标签") else (0 until tags.length()).joinToString(" · ") { tags.optString(it) },
+                "",
                 14f,
-            ),
+            ).apply {
+                text =
+                    if (description.isNotEmpty() &&
+                        description != "null"
+                    ) {
+                        formatBookDescription(description)
+                    } else {
+                        label("暂无简介，可按书目信息生成。")
+                    }
+                setTextIsSelectable(true)
+                setTypeface(Typeface.SERIF, Typeface.NORMAL)
+                setLineSpacing(0f, 1.45f)
+            },
         )
-        val description = book.optString("description")
+        val classification = book.optJSONObject("classification")
+        val tags = book.optJSONArray("tags") ?: JSONArray()
         overview.addView(
-            text(label("简介"), 16f, true).apply {
+            text(label("分类与标签"), 16f, true).apply {
                 setTypeface(Typeface.SERIF, Typeface.BOLD)
                 setPadding(0, dp(12), 0, dp(4))
             },
         )
+        val rawCat = classification?.optJSONObject("category")?.optString("value").orEmpty()
         overview.addView(
             text(
-                if (description.isNotEmpty() &&
-                    description != "null"
-                ) {
-                    description
+                if (rawCat.isEmpty()) {
+                    label("未分类")
                 } else {
-                    label("暂无简介，可按书目信息生成。")
+                    nativeCategoryCallNumber(rawCat, preferences.optString("language") == "en")
                 },
                 14f,
             ).apply {
-                setTextIsSelectable(true)
-                setTypeface(Typeface.SERIF, Typeface.NORMAL)
-                setLineSpacing(0f, 1.4f)
+                typeface = NativeUi.monoTypeface(false)
             },
         )
-        actions(overview, listOf("生成简介" to { openBookIntroduction(book) }))
-        val classification = book.optJSONObject("classification")
         if (classification != null) {
-            overview.addView(
-                text(label("分类"), 16f, true).apply {
-                    setTypeface(Typeface.SERIF, Typeface.BOLD)
-                    setPadding(0, dp(10), 0, dp(4))
-                },
-            )
-            val rawCat = classification.optJSONObject("category")?.optString("value").orEmpty()
-            overview.addView(
-                text(
-                    if (rawCat.isEmpty()) {
-                        label("未分类")
-                    } else {
-                        nativeCategoryCallNumber(rawCat, preferences.optString("language") == "en")
-                    },
-                    14f,
-                ).apply {
-                    typeface = NativeUi.monoTypeface(false)
-                },
-            )
             val topics = classification.optJSONArray("topics") ?: JSONArray()
             if (topics.length() >
                 0
@@ -1994,10 +1979,59 @@ internal class NativePagesController(
                 )
             }
         }
+        overview.addView(
+            text(
+                label("标签") + ": " +
+                    if (tags.length() == 0) label("暂无标签") else (0 until tags.length()).joinToString(" · ") { tags.optString(it) },
+                14f,
+            ),
+        )
         actions(
             overview,
-            listOf("编辑书目信息" to { editBook(book) }, "标签" to { editTags(book) }, "AI 分类" to { openClassification(bookId, true) }),
+            listOf("标签" to { editTags(book) }, "AI 分类" to { openClassification(bookId, true) }),
         )
+        overview.addView(
+            line().apply {
+                layoutParams = LinearLayout.LayoutParams(-1, dp(1)).apply { topMargin = dp(12); bottomMargin = dp(10) }
+            },
+        )
+        overview.addView(metadata)
+        val fileActions = NativeActionFlow(activity)
+        if (fileMetadata.childCount > 0) {
+            val toggle =
+                button("文件信息") {}.apply {
+                    background = NativeUi.hairlineShape(activity, this@NativePagesController.background, true)
+                    minHeight = dp(38)
+                    minimumHeight = dp(38)
+                    gravity = Gravity.CENTER
+                    setPadding(dp(14), dp(4), dp(14), dp(4))
+                }
+            toggle.setOnClickListener {
+                fileMetadata.visibility = if (fileMetadata.visibility == View.VISIBLE) View.GONE else View.VISIBLE
+                toggle.text = label(if (fileMetadata.visibility == View.VISIBLE) "收起文件信息" else "文件信息")
+                toggle.contentDescription = toggle.text
+            }
+            fileActions.addView(toggle)
+        }
+        val editBookBtn =
+            button("编辑书目信息") { editBook(book) }.apply {
+                background = NativeUi.hairlineShape(activity, this@NativePagesController.background, true)
+                minHeight = dp(38)
+                minimumHeight = dp(38)
+                gravity = Gravity.CENTER
+                setPadding(dp(14), dp(4), dp(14), dp(4))
+            }
+        fileActions.addView(editBookBtn)
+        overview.addView(
+            fileActions,
+            LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT).apply {
+                topMargin = dp(8)
+                bottomMargin = dp(4)
+            },
+        )
+        if (fileMetadata.childCount > 0) {
+            overview.addView(fileMetadata)
+        }
         select(0)
         recordPage(0)
     }
@@ -2331,6 +2365,33 @@ internal class NativePagesController(
                             setTextColor(NativeUi.secondary(this@NativePagesController.background))
                         },
                     )
+                    records.take(2).forEach { preview ->
+                        val previewQuote =
+                            preview.optString("text").takeIf { it.isNotBlank() && it != "null" }
+                                ?: preview.optString("note").takeIf { !preview.isNull("note") && it.isNotBlank() && it != "null" }
+                        if (previewQuote != null) {
+                            val quoteBox =
+                                LinearLayout(activity).apply {
+                                    orientation = LinearLayout.HORIZONTAL
+                                    setBackgroundColor(NativeUi.mutedSurface(this@NativePagesController.background))
+                                    layoutParams = LinearLayout.LayoutParams(-1, -2).apply { topMargin = dp(6) }
+                                }
+                            quoteBox.addView(
+                                View(activity).apply { setBackgroundColor(this@NativePagesController.foreground) },
+                                LinearLayout.LayoutParams(dp(3), -1),
+                            )
+                            quoteBox.addView(
+                                text("“$previewQuote”", 14f).apply {
+                                    maxLines = 2
+                                    ellipsize = TextUtils.TruncateAt.END
+                                    setTypeface(Typeface.SERIF, Typeface.NORMAL)
+                                    setPadding(dp(10), dp(6), dp(8), dp(6))
+                                },
+                                LinearLayout.LayoutParams(0, -2, 1f),
+                            )
+                            card.addView(quoteBox)
+                        }
+                    }
                     val open = { navigate("/notes?bookId=${Uri.encode(id)}") }
                     val footer =
                         LinearLayout(activity).apply {
@@ -2768,9 +2829,56 @@ internal class NativePagesController(
         }
     }
 
+    private fun formatBookDescription(raw: String): CharSequence {
+        val builder = android.text.SpannableStringBuilder()
+        val lines = raw.replace("\r\n", "\n").split('\n')
+        for ((index, line) in lines.withIndex()) {
+            if (index > 0) builder.append('\n')
+            val headingMatch = Regex("^\\s*#{1,6}\\s+(.+)$").find(line)
+            val bulletMatch = if (headingMatch == null) Regex("^\\s*[\\-*]\\s+(.+)$").find(line) else null
+            val content =
+                when {
+                    headingMatch != null -> headingMatch.groupValues[1].trim()
+                    bulletMatch != null -> "• " + bulletMatch.groupValues[1].trim()
+                    else -> line
+                }
+            val lineStart = builder.length
+            var cursor = 0
+            for (boldMatch in Regex("\\*\\*(.+?)\\*\\*").findAll(content)) {
+                builder.append(content.substring(cursor, boldMatch.range.first))
+                val boldStart = builder.length
+                builder.append(boldMatch.groupValues[1])
+                builder.setSpan(
+                    android.text.style.StyleSpan(Typeface.BOLD),
+                    boldStart,
+                    builder.length,
+                    android.text.Spanned.SPAN_EXCLUSIVE_EXCLUSIVE,
+                )
+                cursor = boldMatch.range.last + 1
+            }
+            builder.append(content.substring(cursor))
+            if (headingMatch != null && builder.length > lineStart) {
+                builder.setSpan(
+                    android.text.style.StyleSpan(Typeface.BOLD),
+                    lineStart,
+                    builder.length,
+                    android.text.Spanned.SPAN_EXCLUSIVE_EXCLUSIVE,
+                )
+                builder.setSpan(
+                    android.text.style.RelativeSizeSpan(1.06f),
+                    lineStart,
+                    builder.length,
+                    android.text.Spanned.SPAN_EXCLUSIVE_EXCLUSIVE,
+                )
+            }
+        }
+        return builder
+    }
+
     private fun publicationDate(value: String): String {
         val raw = value.trim().takeUnless { it == "null" } ?: return ""
-        return if (Regex("^[0-9]{4}-[0-9]{2}-[0-9]{2}T").containsMatchIn(raw)) raw.take(10) else raw
+        val date = if (Regex("^[0-9]{4}-[0-9]{2}-[0-9]{2}").containsMatchIn(raw)) raw.take(10) else raw
+        return if (date.startsWith("0101-") || date.startsWith("0001-") || date.startsWith("1900-01-01")) "" else date
     }
 
     private fun languageName(value: String): String {

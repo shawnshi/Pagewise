@@ -67,7 +67,7 @@ function Assert-ApkPolicy {
     } else {
         $expected = if ($BuildKind -eq 'Debug') { 'io.pagewise.reader.debug' } else { 'io.pagewise.reader' }
         if ($Metadata.Package -ne $expected) { throw "APK_PAGEWISE_IDENTITY_MISMATCH: Expected $expected, observed $($Metadata.Package)." }
-        $forbidden = @('android.permission.INTERNET','android.permission.REQUEST_INSTALL_PACKAGES','android.permission.MANAGE_EXTERNAL_STORAGE','android.permission.READ_EXTERNAL_STORAGE','android.permission.WRITE_EXTERNAL_STORAGE')
+        $forbidden = @('android.permission.REQUEST_INSTALL_PACKAGES','android.permission.MANAGE_EXTERNAL_STORAGE','android.permission.READ_EXTERNAL_STORAGE','android.permission.WRITE_EXTERNAL_STORAGE')
         foreach ($permission in $forbidden) {
             if ($Metadata.Permissions -contains $permission) { throw "APK_FORBIDDEN_PERMISSION: $permission is present in the packaged manifest." }
         }

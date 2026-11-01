@@ -1,11 +1,10 @@
 <script setup lang="ts">
-import { computed, onBeforeUnmount, ref } from 'vue'
+import { computed } from 'vue'
 import type { BookMeta } from '../storage'
 import { FORMAT_LABELS, isSupportedBookFormat } from '../services/format'
 import { formatReadingTime } from '../composables/useReadingTimer'
 import { resolveReadingStatus } from '../services/readingStatus'
 import { bookFileProblem, visibleBookTopics } from '../services/bookAvailability'
-import AppIcon from './AppIcon.vue'
 import { t } from '../i18n'
 
 const props = defineProps<{
@@ -66,43 +65,6 @@ function activate() {
   else emit('open')
 }
 
-/* 触屏设备: 封面操作收进「更多」按钮, 点一下展开, 点别处收起 */
-const menuOpen = ref(false)
-const actionsEl = ref<HTMLElement | null>(null)
-function closeMenu() {
-  menuOpen.value = false
-  document.removeEventListener('pointerdown', onOutsidePointerDown, true)
-}
-function onOutsidePointerDown(e: PointerEvent) {
-  // 按下点在菜单内部时不能收起: 收起会让按钮瞬间 pointer-events:none,
-  // 随后的 click 命中测试会落到卡片上, 变成打开书籍 (触屏专属问题)
-  if (actionsEl.value && e.target instanceof Node && actionsEl.value.contains(e.target)) return
-  closeMenu()
-}
-function toggleMenu() {
-  if (menuOpen.value) return closeMenu()
-  openMenu()
-}
-function openMenu() {
-  if (menuOpen.value) return
-  menuOpen.value = true
-  setTimeout(() => document.addEventListener('pointerdown', onOutsidePointerDown, true))
-}
-function menuAction(event: 'read' | 'remove' | 'togglePin' | 'rescan') {
-  closeMenu()
-  if (event === 'read') emit('read')
-  else if (event === 'remove') emit('remove')
-  else if (event === 'togglePin') emit('togglePin')
-  else if (event === 'rescan') emit('rescan')
-}
-/* 触屏长按封面: 与点「更多」一样展开操作 (系统的长按菜单无意义, 拦掉) */
-function onContextMenu(e: Event) {
-  if (props.selectable || !window.matchMedia('(hover: none)').matches) return
-  e.preventDefault()
-  openMenu()
-}
-onBeforeUnmount(() => document.removeEventListener('pointerdown', onOutsidePointerDown, true))
-
 function onKeydown(e: KeyboardEvent) {
   if (e.key === 'Enter' || e.key === ' ') {
     e.preventDefault()
@@ -112,10 +74,10 @@ function onKeydown(e: KeyboardEvent) {
 </script>
 
 <template>
-  <article class="book-card" :class="{ selected: selectable && selected, selectable, 'menu-open': menuOpen }">
+  <article class="book-card" :class="{ selected: selectable && selected, selectable }">
     <div class="book-body" :title="tooltip" :role="selectable ? 'checkbox' : 'button'"
       :aria-checked="selectable ? selected : undefined" :aria-label="ariaLabel"
-      tabindex="0" @click="activate" @keydown="onKeydown" @contextmenu="onContextMenu">
+      tabindex="0" @click="activate" @keydown="onKeydown">
       <div class="cover">
         <img v-if="coverUrl" :src="coverUrl" alt="" loading="lazy" decoding="async" />
         <div v-else class="cover-fallback" :style="{ '--h': fallbackHue }" aria-hidden="true">{{ book.title }}</div>
@@ -138,29 +100,10 @@ function onKeydown(e: KeyboardEvent) {
         </div>
       </div>
     </div>
-    <div v-if="!selectable" ref="actionsEl" class="actions">
-      <button v-if="readable" type="button" class="action read-action" @click.stop="menuAction('read')">
+    <div v-if="!selectable" class="actions">
+      <button v-if="readable" type="button" class="action read-action" @click.stop="emit('read')">
         {{ fileProblem ? recoveryLabel : progress != null && progress > 0 ? t('catalog.continueReading') : t('settings.navReading') }}
       </button>
-      <button type="button" class="action more" :aria-label="t('common.moreActions')" :aria-expanded="menuOpen" @click.stop="toggleMenu">
-        <AppIcon name="more" :size="20" aria-hidden="true" />
-        <span class="action-text">{{ t('common.more') }}</span>
-      </button>
-      <div v-if="menuOpen" class="book-menu">
-        <button v-if="book.sourceRef" type="button" class="action" @click.stop="menuAction('rescan')">{{ t('folder.rescan') }}</button>
-        <button type="button" class="action pin" :aria-pressed="!!book.pinnedAt" @click.stop="menuAction('togglePin')">
-          <AppIcon name="pin" :size="16" aria-hidden="true" />
-          <span>{{ book.pinnedAt ? t('library.unpin') : t('library.pin') }}</span>
-        </button>
-        <button v-if="!book.sourceRef" type="button" class="action remove" @click.stop="menuAction('remove')">
-          <AppIcon name="delete" :size="16" aria-hidden="true" />
-          <span>{{ t('book.removeFromLibrary') }}</span>
-        </button>
-        <div v-else class="action-source-notice" :title="t('book.sourceManagedHint')">
-          <AppIcon name="folder" :size="16" aria-hidden="true" />
-          <span>{{ t('book.sourceManaged') }}</span>
-        </div>
-      </div>
     </div>
   </article>
 </template>
@@ -192,11 +135,6 @@ function onKeydown(e: KeyboardEvent) {
 .read-action { background: var(--eink-solid-black); color: var(--eink-surface-pure); border-color: var(--eink-solid-black); font-weight: 600; }
 .read-action:hover { background: var(--eink-text-primary); }
 .read-action:active { background: var(--eink-surface-pure); color: var(--eink-solid-black); }
-.more { border-color: var(--eink-border-hairline); display: inline-flex; align-items: center; gap: 4px; }
-.action-text { font-size: 13px; }
-.action-source-notice { display: flex; align-items: center; gap: 6px; padding: 6px 10px; font-size: 12px; color: var(--eink-text-secondary); background: var(--eink-surface-subtle); border: 1px solid var(--eink-border-hairline); border-radius: 2px; }
-.book-menu { z-index: 30; position: absolute; top: 100%; right: 0; width: 180px; display: grid; background: var(--eink-surface-pure); padding: 6px; border: 1.5px solid var(--eink-solid-black); gap: 4px; box-shadow: none; }
-.book-menu .action { text-align: start; border-color: var(--eink-border-hairline); min-height: 36px; }
 @media (max-width: 520px) { .book-card { gap: 8px; } .book-body { gap: 10px; } .actions { flex-direction: column; gap: 4px; } .action { padding: 6px 8px; } .title { font-size: 16px; } }
 @media (prefers-reduced-motion: reduce) { * { transition: none !important; } }
 </style>

@@ -208,9 +208,9 @@ internal class NativeStatsSettingsUi(
         summary: String,
         click: () -> Unit,
     ): View =
-        ScopedSettingRow(context).apply {
-            minimumHeight = dp(72)
-            setPadding(dp(12), dp(12), dp(12), dp(12))
+        ScopedSettingRow(context, hairline).apply {
+            minimumHeight = dp(60)
+            setPadding(dp(12), dp(10), dp(12), dp(10))
             addView(text(label, 16f, true))
             addView(note(summary.ifBlank { "—" }))
             for (i in 0 until childCount) {
@@ -243,7 +243,20 @@ internal class NativeStatsSettingsUi(
 
     private class ScopedSettingRow(
         context: Context,
+        private val ruleColor: Int,
     ) : LinearLayout(context) {
+        private val rulePaint = android.graphics.Paint().apply { color = ruleColor }
+
+        init {
+            setWillNotDraw(false)
+        }
+
+        override fun onDraw(canvas: android.graphics.Canvas) {
+            super.onDraw(canvas)
+            val h = NativeUi.dp(context, 1).toFloat()
+            canvas.drawRect(0f, height - h, width.toFloat(), height.toFloat(), rulePaint)
+        }
+
         override fun onMeasure(
             widthMeasureSpec: Int,
             heightMeasureSpec: Int,
