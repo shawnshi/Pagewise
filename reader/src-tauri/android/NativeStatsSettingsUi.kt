@@ -206,28 +206,56 @@ internal class NativeStatsSettingsUi(
     fun settingRow(
         label: String,
         summary: String,
+        badgeState: String = "",
+        quickToggle: (() -> Unit)? = null,
         click: () -> Unit,
     ): View =
         ScopedSettingRow(context, hairline).apply {
             minimumHeight = dp(60)
             setPadding(dp(12), dp(10), dp(12), dp(10))
             addView(text(label, 16f, true))
-            addView(note(summary.ifBlank { "—" }))
+            val isOn = badgeState == "on"
+            val isOff = badgeState == "off"
+            val displaySummary =
+                when {
+                    isOn -> "● " + summary.ifBlank { "—" }
+                    isOff -> "○ " + summary.ifBlank { "—" }
+                    else -> summary.ifBlank { "—" }
+                }
+            val valueView =
+                note(displaySummary).apply {
+                    typeface = NativeUi.monoTypeface(isOn)
+                    fontFeatureSettings = "tnum"
+                    setPadding(dp(10), dp(6), dp(10), dp(6))
+                    background =
+                        when {
+                            isOn -> shape(primary, primary, 1)
+                            isOff -> shape(paper, secondary, 1)
+                            else -> shape(sunkenSurface, hairline, 1)
+                        }
+                    if (quickToggle != null) {
+                        isClickable = true
+                        isFocusable = true
+                        minimumHeight = dp(48)
+                        minHeight = dp(48)
+                        gravity = Gravity.CENTER_VERTICAL
+                        setOnClickListener { quickToggle() }
+                    }
+                }
+            addView(valueView)
             for (i in 0 until childCount) {
                 (getChildAt(i) as? TextView)?.apply {
-                    isDuplicateParentStateEnabled = true
+                    isDuplicateParentStateEnabled = i == 0 || quickToggle == null
                     setTextColor(
                         ColorStateList(
                             arrayOf(intArrayOf(-android.R.attr.state_enabled), intArrayOf(android.R.attr.state_pressed), intArrayOf()),
                             intArrayOf(
                                 secondary,
                                 paper,
-                                if (i ==
-                                    0
-                                ) {
-                                    primary
-                                } else {
-                                    secondary
+                                when {
+                                    i == 0 -> primary
+                                    isOn -> paper
+                                    else -> secondary
                                 },
                             ),
                         ),

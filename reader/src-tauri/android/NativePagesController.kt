@@ -1735,7 +1735,12 @@ internal class NativePagesController(
         val tabButtons = mutableListOf<Button>()
         val panels =
             listOf(
-                NativeUi.card(activity, background),
+                NativeUi.exLibrisCard(
+                    activity,
+                    background,
+                    headerLabel = "ARCHIVAL RECORD · 馆藏档案",
+                    badgeLabel = book.optString("format").uppercase(),
+                ),
                 NativeUi.card(activity, background),
                 NativeUi.card(activity, background),
                 NativeUi.card(activity, background),
@@ -1751,7 +1756,7 @@ internal class NativePagesController(
         fun recordPage(offset: Int) {
             val intent = ++recordsIntent
             records.removeAllViews()
-            records.addView(text(label("正在加载…")))
+            records.addView(NativeUi.wireframeSkeleton(activity, background, foreground, label("正在加载…"), rows = 2))
             records.addView(button("重试") { recordPage(offset) })
             call("library.annotations", JSONObject().put("bookId", bookId).put("offset", offset).put("limit", 20)) { value ->
                 if (generation != epoch || recordsIntent != intent) return@call
@@ -1945,15 +1950,20 @@ internal class NativePagesController(
         )
         val rawCat = classification?.optJSONObject("category")?.optString("value").orEmpty()
         overview.addView(
-            text(
+            NativeUi.pillBadge(
+                activity,
                 if (rawCat.isEmpty()) {
                     label("未分类")
                 } else {
                     nativeCategoryCallNumber(rawCat, preferences.optString("language") == "en")
                 },
-                14f,
+                foreground,
+                background,
+                emphasized = rawCat.isNotEmpty(),
             ).apply {
-                typeface = NativeUi.monoTypeface(false)
+                layoutParams = LinearLayout.LayoutParams(ViewGroup.LayoutParams.WRAP_CONTENT, ViewGroup.LayoutParams.WRAP_CONTENT).apply {
+                    bottomMargin = dp(6)
+                }
             },
         )
         if (classification != null) {
@@ -2051,7 +2061,7 @@ internal class NativePagesController(
         val form = target ?: column()
         if (target != null) {
             form.removeAllViews()
-            form.addView(text(label("正在加载…")))
+            form.addView(NativeUi.wireframeSkeleton(activity, background, foreground, label("正在加载…"), rows = 3))
         }
 
         fun fetch(offset: Int) {

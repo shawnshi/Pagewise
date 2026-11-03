@@ -4,18 +4,35 @@
 
 # 知页阅读器 · Pagewise
 
-面向文石（Onyx BOOX）Android 墨水屏设备的本地阅读应用。当前版本为 **2.1.0**，Android 版本码为 **2001000**。
+面向文石（Onyx BOOX）Android 墨水屏设备的本地阅读应用。当前版本为 **2.2.0**，Android 版本码为 **2002000**。
 
 项目专为 BOOX Android 设备设计与调优。浏览器仅用于前端组件开发与单元测试，不提供桌面、iOS 或 PWA 发行版。
 
 ## 当前状态
 
-2.1.0 已在 **Note X3 Pro（Android API 32, Carta 1200 墨水屏）** 上完成构建与真机部署：
+2.2.0 已在 **Note X3 Pro（Android API 32, Carta 1200 墨水屏）** 上完成构建与真机部署：
 
-| 变体 | 桌面显示名称 | 包名 |
-|---|---|---|
-| Release | 知页 | `io.pagewise.reader` |
-| Debug | 知页 2.1.0 测试版 | `io.pagewise.reader.debug` |
+| 变体 | 桌面显示名称 | 包名 | 下载 |
+|---|---|---|---|
+| Release | 知页 | `io.pagewise.reader` | [Pagewise-2.2.0-release.apk](https://github.com/shawnshi/Pagewise/releases/download/v2.2.0/Pagewise-2.2.0-release.apk) |
+| Debug | 知页 2.2.0 测试版 | `io.pagewise.reader.debug` | [Pagewise-2.2.0-debug.apk](https://github.com/shawnshi/Pagewise/releases/download/v2.2.0/Pagewise-2.2.0-debug.apk) |
+
+### 校验信息 (SHA-256)
+- **Release APK (`Pagewise-2.2.0-release.apk`)**:
+  `5317cc61cd022f59e468dc3df251a6bb58364cd2d5d5bf7f64c30026fa4ab897`
+- **Debug APK (`Pagewise-2.2.0-debug.apk`)**:
+  `648774de6b670593125311eb058a6a60555487d2980e0b6e32d31c4c7dd34ee0`
+
+### 2.2.0 核心演进：双平面视觉语法统一、阅读器认知减负与原位轻交互
+
+本版在 2.1.0 视觉降噪的基础上，对系统全界面与交互做出了深度重构：
+
+1. **统一双平面视觉语法与馆藏著录卡**：原生层新增 `pillBadge` 实体徽章，书籍详情页（`renderBook`）升级为双线 Ex Libris 馆藏档案卡（带 `ARCHIVAL RECORD · 馆藏档案` 铭文与格式角标），中图法索书号改为高对比度馆藏徽章，抹平了 Native View 与 Vue 瑞士馆藏暖纸美学的断层。
+2. **PDF 阅读器顶栏认知减负与版式控制台**：在顶栏版式控制台（`zoomMenu`）统一集成 `滚动/翻页` 及 `单页/双页/书籍视图`；将缩略图、自动阅读、手写批注、打印、幻灯片及快捷键收纳进「更多」菜单；10.3" 墨水屏竖屏及窄屏下自动隐藏冗余控件，消除严重水平折行与查找认知过载。
+3. **在读页 7 段分段控制器主次解耦**：将「在读 / 最近阅读 / 想读」高频主工作流与「暂缓 / 已读 / 弃读」归档流通过竖向分割线明确解耦，为归档状态配置次级灰阶与紧凑内边距，推荐项虚线边框区分，消除平铺透支。
+4. **原生设置页布尔开关原位一键切换**：重构原生设置行，为布尔设置提供 `● 开启 / ○ 关闭` 高对比度直显胶囊，支持 1 步原位直接切换提交；非布尔或异常时平滑降级至带 `settingsRecoveryInspect` 的完整核对模态框。
+5. **排版工作台与阅读模式职责厘清与互跳**：排版面板（`TypographyPanel`）顶部常驻「阅读模式 →」快捷通道，阅读模式面板（`ReadingModePanel`）头部新增「Aa · 排版」反向跳转，两面板互斥平滑切换，状态联动指示。
+6. **墨水屏静态线框骨架屏（Static Wireframe Skeleton）**：在书库初次检索、详情页目录/批注与在读页异步加载期引入零动画、恒定几何的 1dp 灰框占位符，消除异步数据返回时的全屏跳动与重排闪烁。
 
 ### 2.1.0 核心演进：全系统视觉降噪、零位移渲染与排印深度重构
 
@@ -119,8 +136,9 @@ npm run android:build:release
 ```
 
 编译产物生成于：
-- `reader/src-tauri/gen/android/app/build/outputs/apk/arm64/debug/app-arm64-debug.apk`
-- `reader/src-tauri/gen/android/app/build/outputs/apk/arm64/release/app-arm64-release.apk`
+- `reader/src-tauri/gen/android/app/build/outputs/apk/universal/debug/app-universal-debug.apk`
+- `reader/src-tauri/gen/android/app/build/outputs/apk/universal/release/app-universal-release.apk`
+（历史或独立 ABI 产物亦保留于同级 `arm64/` 目录）
 
 ### 侧载部署至 BOOX 设备
 

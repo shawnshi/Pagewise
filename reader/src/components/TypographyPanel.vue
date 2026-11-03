@@ -517,10 +517,11 @@ let systemFontsLoading = false
       </select>
     </label>
 
-    <!-- 场景提示 -->
-    <p v-if="sceneNames" class="tp-scenes" role="note">
-      <span>{{ t('reader.scenesOn', { names: sceneNames }) }}</span>
-      <button type="button" class="tp-link" @click="emit('open-modes')">{{ t('reader.manageScenes') }}</button>
+    <!-- 场景提示与阅读模式快捷互跳 -->
+    <p class="tp-scenes" role="note">
+      <span v-if="sceneNames">{{ t('reader.scenesOn', { names: sceneNames }) }}</span>
+      <span v-else>{{ t('readingMode.scenesHint') }}</span>
+      <button type="button" class="tp-link" @click="emit('open-modes')">{{ t('readingMode.title') }} →</button>
     </p>
 
     <!-- 错误横幅 (应用失败保留草稿) -->

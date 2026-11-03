@@ -182,9 +182,10 @@ function getProgress(book: BookMeta) {
         >
           {{ t('uiV02.status.wanted') }} ({{ wantedBooks.length }})
         </button>
+        <span class="segmented-divider" aria-hidden="true" />
         <button
           type="button"
-          class="segmented-btn"
+          class="segmented-btn segmented-btn-archive"
           :class="{ active: currentTab === 'paused' }"
           :disabled="recommendationWriting"
           role="tab"
@@ -195,7 +196,7 @@ function getProgress(book: BookMeta) {
         </button>
         <button
           type="button"
-          class="segmented-btn"
+          class="segmented-btn segmented-btn-archive"
           :class="{ active: currentTab === 'finished' }"
           :disabled="recommendationWriting"
           role="tab"
@@ -206,7 +207,7 @@ function getProgress(book: BookMeta) {
         </button>
         <button
           type="button"
-          class="segmented-btn"
+          class="segmented-btn segmented-btn-archive"
           :class="{ active: currentTab === 'abandoned' }"
           :disabled="recommendationWriting"
           role="tab"
@@ -215,11 +216,22 @@ function getProgress(book: BookMeta) {
         >
           {{ t('uiV02.status.abandoned') }} ({{ abandonedBooks.length }})
         </button>
-        <button type="button" class="segmented-btn" :class="{ active: currentTab === 'recommendations' }" :disabled="recommendationWriting" :aria-pressed="currentTab === 'recommendations'" @click="currentTab = 'recommendations'">{{ t('recommendations.tab') }}<template v-if="recommendationCount != null"> ({{ recommendationCount }})</template></button>
+        <span class="segmented-divider" aria-hidden="true" />
+        <button type="button" class="segmented-btn segmented-btn-recommend" :class="{ active: currentTab === 'recommendations' }" :disabled="recommendationWriting" :aria-pressed="currentTab === 'recommendations'" @click="currentTab = 'recommendations'">{{ t('recommendations.tab') }}<template v-if="recommendationCount != null"> ({{ recommendationCount }})</template></button>
       </nav>
     </header>
 
     <BookRecommendationsPanel v-if="currentTab === 'recommendations'" mode="reading" @writing="recommendationWriting = $event" @count="recommendationCount = $event" @navigate="id => router.push(`/book/${encodeURIComponent(id)}`)" />
+    <div v-else-if="!library.loaded && !displayedBooks.length" class="eink-wireframe-list" aria-busy="true">
+      <div v-for="n in 3" :key="n" class="card eink-wireframe-row" aria-hidden="true">
+        <div class="eink-wireframe-cover" />
+        <div class="eink-wireframe-lines">
+          <div class="eink-wireframe-line title" />
+          <div class="eink-wireframe-line meta" />
+          <div class="eink-wireframe-line bar" />
+        </div>
+      </div>
+    </div>
     <div v-else-if="!displayedBooks.length" class="empty card">
       <div class="empty-icon" aria-hidden="true">
         <AppIcon name="reading" :size="48" aria-hidden="true" />
@@ -377,6 +389,22 @@ function getProgress(book: BookMeta) {
   color: var(--eink-paper) !important;
   border-color: var(--eink-ink) !important;
   font-weight: 600;
+}
+.segmented-divider {
+  width: 1px;
+  align-self: stretch;
+  margin: 4px 2px;
+  background: var(--border);
+  flex-shrink: 0;
+}
+.segmented-btn-archive {
+  padding-inline: 10px;
+  color: var(--text-3);
+  font-size: 12.5px;
+}
+.segmented-btn-recommend {
+  border-style: dashed;
+  border-color: var(--border);
 }
 .book-list {
   display: flex;

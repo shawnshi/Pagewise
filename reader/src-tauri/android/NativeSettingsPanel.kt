@@ -235,8 +235,27 @@ internal class NativeSettingsPanel(
                             value.toString().take(100)
                         }
                     val display = if (rule.optBoolean("secret")) summary else optionLabel(rule, value)
+                    val isBool = rule.optString("kind") == "boolean"
+                    val badgeState =
+                        if (!isBool) {
+                            ""
+                        } else if (value == true || value.toString() == "true") {
+                            "on"
+                        } else {
+                            "off"
+                        }
+                    val quickToggle: (() -> Unit)? =
+                        if (isBool && !rule.optBoolean("secret")) {
+                            {
+                                if (!busy && !closed) {
+                                    quickPatchBoolean(rule, value)
+                                }
+                            }
+                        } else {
+                            null
+                        }
                     section.addView(
-                        ui.settingRow(label, display) {
+                        ui.settingRow(label, display, badgeState, quickToggle) {
                             if (!busy &&
                                 !closed
                             ) {
@@ -558,6 +577,25 @@ internal class NativeSettingsPanel(
         )
         alert.show()
         inspect()
+    }
+
+    private fun quickPatchBoolean(
+        rule: JSONObject,
+        before: Any,
+    ) {
+        val currentBool = before == true || before.toString() == "true"
+        val nextBool = !currentBool
+        val path = rule.getJSONArray("path")
+        val patch =
+            JSONObject()
+                .put("path", path)
+                .put("before", JSONObject().put("present", true).put("value", currentBool))
+                .put("after", JSONObject().put("present", true).put("value", nextBool))
+        perform("settingsPatch", JSONObject().put("patches", JSONArray().put(patch)), {
+            changed()
+        }, {
+            edit(rule, before)
+        })
     }
 
     private fun edit(

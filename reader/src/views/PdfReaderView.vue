@@ -3636,10 +3636,16 @@ onBeforeUnmount(() => {
             </button>
             <div v-if="moreMenu" class="reader-more-backdrop" @click="moreMenu = false" />
             <div v-if="moreMenu" class="reader-more-menu card" role="menu">
+              <button role="menuitem" @click="toggleDrawerTab('thumbnails'); moreMenu = false">{{ t('reader.thumbnails') }}</button>
+              <button role="menuitem" @click="toggleDrawerTab('annotations'); moreMenu = false">{{ t('reader.comments') }}</button>
+              <button role="menuitem" @click="toggleAutoPanel(); moreMenu = false">{{ autoReading ? t('reader.autoReading') : t('reader.autoRead') }}</button>
+              <button role="menuitem" @click="scribbleEnabled = !scribbleEnabled; moreMenu = false">{{ t('reader.scribble') }}</button>
               <button role="menuitem" @click="saveDocumentAs">{{ t('reader.saveAs') }}</button>
               <button role="menuitem" @click="openDocumentFolder">{{ t('reader.openFolder') }}</button>
               <button role="menuitem" @click="openProperties">{{ t('reader.properties') }}</button>
-              <button role="menuitem" @click="toggleDrawerTab('annotations'); moreMenu = false">{{ t('reader.comments') }}</button>
+              <button role="menuitem" @click="printDocument(); moreMenu = false">{{ t('reader.print') }}</button>
+              <button role="menuitem" @click="enterPresentation(); moreMenu = false">{{ t('reader.slideshow') }}</button>
+              <button role="menuitem" @click="toggleShortcutGuide(); moreMenu = false">{{ t('reader.keyboardShortcuts') }}</button>
               <button
                 role="menuitemcheckbox"
                 class="more-check"
@@ -4010,9 +4016,45 @@ onBeforeUnmount(() => {
           </div>
         </div>
 
-        <!-- 缩放档位菜单 -->
+        <!-- 缩放与版式控制台菜单 -->
         <div v-if="zoomMenu && pdfLayout === 'original'" class="zoom-backdrop" @click="zoomMenu = false" />
         <div v-if="zoomMenu && pdfLayout === 'original'" class="zoom-menu card">
+          <div class="zoom-layout-section">
+            <div class="zoom-layout-row">
+              <button
+                type="button"
+                class="zoom-layout-chip"
+                :class="{ active: mode === 'scroll' }"
+                @click="switchMode('scroll')"
+              >{{ t('reader.scrolled') }}</button>
+              <button
+                type="button"
+                class="zoom-layout-chip"
+                :class="{ active: mode === 'paged' }"
+                @click="switchMode('paged')"
+              >{{ t('reader.paginated') }}</button>
+            </div>
+            <div v-if="!pdfEffective.portraitLocked" class="zoom-layout-row">
+              <button
+                type="button"
+                class="zoom-layout-chip"
+                :class="{ active: spreadMode === 'single' }"
+                @click="setSpreadMode('single')"
+              >{{ t('reader.singlePage') }}</button>
+              <button
+                type="button"
+                class="zoom-layout-chip"
+                :class="{ active: spreadMode === 'facing' }"
+                @click="setSpreadMode('facing')"
+              >{{ t('reader.facingPages') }}</button>
+              <button
+                type="button"
+                class="zoom-layout-chip"
+                :class="{ active: spreadMode === 'book' }"
+                @click="setSpreadMode('book')"
+              >{{ t('reader.bookView') }}</button>
+            </div>
+          </div>
           <button
             v-for="p in ZOOM_PRESETS"
             :key="p"
@@ -6161,6 +6203,34 @@ onBeforeUnmount(() => {
   border-radius: 6px;
   padding: 8px 10px;
 }
+.zoom-layout-section {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  padding: 6px;
+  margin-bottom: 6px;
+  border-bottom: 1px solid var(--border);
+}
+.zoom-layout-row {
+  display: flex;
+  gap: 4px;
+}
+.zoom-layout-chip {
+  flex: 1;
+  min-height: 40px;
+  padding: 6px 8px;
+  font-size: 13px;
+  font-weight: 600;
+  border: 1px solid var(--border);
+  background: var(--bg-elev);
+  color: var(--text);
+  border-radius: 2px;
+}
+.zoom-layout-chip.active {
+  background: var(--text);
+  color: var(--bg-elev);
+  border-color: var(--text);
+}
 @media (max-width: 1180px) {
   .paper-bar {
     gap: 10px;
@@ -6175,14 +6245,17 @@ onBeforeUnmount(() => {
   .reader-tool {
     padding-inline: 8px;
   }
-  /* 10.3" 墨水屏竖屏约 992 CSS px: 单行工具栏会隐藏右侧缩放/版式控件。
-     中等宽度改为换行展示, 不做无提示的横向滚动。 */
+  /* 10.3" 墨水屏竖屏约 992 CSS px: 收纳已在版式控制台(zoomMenu)与更多菜单(moreMenu)中提供的重复低频组，减少顶栏换行与认知过载。 */
   .pdf-toolbar {
     flex-wrap: wrap;
     overflow-x: visible;
     row-gap: 4px;
   }
-  .pdf-toolbar .toolbar-sep {
+  .pdf-toolbar .toolbar-sep,
+  .pdf-toolbar .toolbar-secondary,
+  .pdf-toolbar .toolbar-layout .fit-segment,
+  .pdf-toolbar .toolbar-layout .page-view-segment,
+  .pdf-toolbar .toolbar-end .no-phone {
     display: none;
   }
 }

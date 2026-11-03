@@ -190,12 +190,35 @@ internal class NativeLibraryPanel(
         parent: LinearLayout,
         values: List<Pair<String, () -> Unit>>,
         selected: Int = 0,
+        archiveDividerIndex: Int = -1,
     ) {
-        val row = LinearLayout(activity)
+        val bg = if (ink == android.graphics.Color.BLACK) android.graphics.Color.WHITE else android.graphics.Color.BLACK
+        val row =
+            LinearLayout(activity).apply {
+                gravity = android.view.Gravity.CENTER_VERTICAL
+            }
         values.forEachIndexed { index, (title, action) ->
+            if (index == archiveDividerIndex) {
+                row.addView(
+                    View(activity).apply {
+                        setBackgroundColor(NativeUi.divider(bg))
+                        importantForAccessibility = View.IMPORTANT_FOR_ACCESSIBILITY_NO
+                    },
+                    LinearLayout.LayoutParams(NativeUi.dp(activity, 1), NativeUi.dp(activity, 28)).apply {
+                        marginStart = NativeUi.dp(activity, 4)
+                        marginEnd = NativeUi.dp(activity, 8)
+                    },
+                )
+            }
+            val isArchiveItem = archiveDividerIndex in 1..index && index < archiveDividerIndex + 3
             row.addView(
                 button(title, action).apply {
                     isSelected = index == selected
+                    if (isArchiveItem && !isSelected) {
+                        background = NativeUi.hairlineShape(activity, bg, sunken = true)
+                        setTextColor(NativeUi.secondary(bg))
+                        setPadding(NativeUi.dp(activity, 10), NativeUi.dp(activity, 6), NativeUi.dp(activity, 10), NativeUi.dp(activity, 6))
+                    }
                     if (isSelected) {
                         setTypeface(null, android.graphics.Typeface.BOLD)
                         background =
@@ -460,6 +483,10 @@ internal class NativeLibraryPanel(
         keywordInput?.isEnabled = true
         disableOldResult()
         status.text = tr("正在检索书库…", "Querying library…")
+        if (root.childCount == 0) {
+            val bg = if (ink == android.graphics.Color.BLACK) android.graphics.Color.WHITE else android.graphics.Color.BLACK
+            root.addView(NativeUi.wireframeSkeleton(activity, bg, ink, rows = 4))
+        }
 
         fun query() {
             ask(
@@ -741,6 +768,7 @@ internal class NativeLibraryPanel(
                 root,
                 readingTabs,
                 listOf("reading", "recent", "wanted", "paused", "finished", "abandoned").indexOf(state.tab),
+                archiveDividerIndex = 3,
             )
         }
         if (!reading) {

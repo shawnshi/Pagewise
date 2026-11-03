@@ -3763,13 +3763,13 @@ onBeforeRouteLeave(async () => {
         <div class="reader-more-wrap">
           <button
             class="icon-btn reader-action-btn reader-more-btn"
-            :class="{ 'auto-on': readerMoreOpen }"
+            :class="{ 'auto-on': readerMoreOpen || readingModeActive || scribbleEnabled }"
             :title="t('common.moreActions')"
             :aria-label="t('common.moreActions')"
             :aria-expanded="readerMoreOpen"
             @click="toggleReaderMore"
           >
-            <AppIcon name="more" :size="28" aria-hidden="true" />
+            <AppIcon name="more" :size="28" :emphasis="readerMoreOpen || readingModeActive || scribbleEnabled" aria-hidden="true" />
             <span class="btn-text">{{ t('common.more') }}</span>
           </button>
           <div v-if="readerMoreOpen" class="reader-more-menu card" role="menu">
@@ -4342,7 +4342,7 @@ onBeforeRouteLeave(async () => {
       :initial-typography="effectiveTypography"
       :apply-typography="applyTypography"
       @close="settingsOpen = false"
-      @open-modes="modes.openPanel()"
+      @open-modes="settingsOpen = false; modes.openPanel()"
     />
   </div>
 </template>

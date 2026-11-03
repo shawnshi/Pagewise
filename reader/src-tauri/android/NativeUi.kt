@@ -548,6 +548,95 @@ internal object NativeUi {
             setPadding(0, dp(context, 16), 0, dp(context, 8))
         }
 
+    fun pillBadge(
+        context: Context,
+        label: String,
+        ink: Int,
+        background: Int,
+        emphasized: Boolean = false,
+    ): TextView =
+        TextView(context).apply {
+            text = label
+            textSize = 12f
+            typeface = monoTypeface(emphasized)
+            fontFeatureSettings = "tnum"
+            setTextColor(if (emphasized) surface(background) else ink)
+            this.background =
+                GradientDrawable().apply {
+                    setColor(if (emphasized) ink else mutedSurface(background))
+                    setStroke(dp(context, 1), if (emphasized) ink else border(background))
+                    cornerRadius = 0f
+                }
+            setPadding(dp(context, 8), dp(context, 3), dp(context, 8), dp(context, 3))
+        }
+
+    /** Static E-Ink wireframe skeleton (zero animation, fixed geometry to prevent layout jump). */
+    fun wireframeSkeleton(
+        context: Context,
+        background: Int,
+        ink: Int,
+        statusText: String = "",
+        rows: Int = 3,
+    ): LinearLayout =
+        LinearLayout(context).apply {
+            orientation = LinearLayout.VERTICAL
+            setPadding(0, dp(context, 4), 0, dp(context, 8))
+            if (statusText.isNotEmpty()) {
+                addView(
+                    TextView(context).apply {
+                        text = statusText
+                        textSize = 13f
+                        typeface = monoTypeface(false)
+                        setTextColor(secondary(background))
+                        setPadding(0, dp(context, 4), 0, dp(context, 8))
+                    },
+                )
+            }
+            repeat(rows.coerceIn(1, 6)) {
+                addView(
+                    LinearLayout(context).apply {
+                        orientation = LinearLayout.HORIZONTAL
+                        gravity = Gravity.CENTER_VERTICAL
+                        this.background = hairlineShape(context, background, sunken = false)
+                        setPadding(dp(context, 12), dp(context, 10), dp(context, 12), dp(context, 10))
+                        layoutParams =
+                            LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT).apply {
+                                bottomMargin = dp(context, 8)
+                            }
+                        importantForAccessibility = View.IMPORTANT_FOR_ACCESSIBILITY_NO
+                        addView(
+                            View(context).apply {
+                                this.background = hairlineShape(context, background, sunken = true)
+                                importantForAccessibility = View.IMPORTANT_FOR_ACCESSIBILITY_NO
+                            },
+                            LinearLayout.LayoutParams(dp(context, 42), dp(context, 56)).apply { marginEnd = dp(context, 12) },
+                        )
+                        addView(
+                            LinearLayout(context).apply {
+                                orientation = LinearLayout.VERTICAL
+                                importantForAccessibility = View.IMPORTANT_FOR_ACCESSIBILITY_NO
+                                addView(
+                                    View(context).apply {
+                                        setBackgroundColor(mutedSurface(background))
+                                        importantForAccessibility = View.IMPORTANT_FOR_ACCESSIBILITY_NO
+                                    },
+                                    LinearLayout.LayoutParams(dp(context, 180), dp(context, 14)).apply { bottomMargin = dp(context, 8) },
+                                )
+                                addView(
+                                    View(context).apply {
+                                        setBackgroundColor(divider(background))
+                                        importantForAccessibility = View.IMPORTANT_FOR_ACCESSIBILITY_NO
+                                    },
+                                    LinearLayout.LayoutParams(dp(context, 112), dp(context, 10)),
+                                )
+                            },
+                            LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f),
+                        )
+                    },
+                )
+            }
+        }
+
     fun settingRow(
         context: Context,
         label: String,
@@ -577,6 +666,48 @@ internal object NativeUi {
                 button(context, value.ifEmpty { "—" }, ink, background, click).apply {
                     contentDescription = "$label: $value"
                     typeface = monoTypeface(false)
+                    fontFeatureSettings = "tnum"
+                },
+            )
+        }
+
+    fun settingToggleRow(
+        context: Context,
+        label: String,
+        enabled: Boolean,
+        value: String,
+        ink: Int,
+        background: Int,
+        click: () -> Unit,
+    ): View =
+        NativeSettingRow(context).apply {
+            val fill = shape(context, background, false)
+            val rule = GradientDrawable().apply { setColor(divider(background)) }
+            this.background =
+                android.graphics.drawable.LayerDrawable(arrayOf(fill, rule)).apply {
+                    setLayerHeight(1, dp(context, 1))
+                    setLayerGravity(1, Gravity.BOTTOM)
+                }
+            setPadding(0, dp(context, 6), 0, dp(context, 6))
+            addView(
+                TextView(context).apply {
+                    text = label
+                    textSize = 15f
+                    setTextColor(ink)
+                    setPadding(0, dp(context, 8), dp(context, 12), dp(context, 8))
+                },
+            )
+            val badgeText = (if (enabled) "● " else "○ ") + value.ifEmpty { "—" }
+            val actionBtn =
+                if (enabled) {
+                    primaryButton(context, badgeText, ink, background, click)
+                } else {
+                    button(context, badgeText, ink, background, click)
+                }
+            addView(
+                actionBtn.apply {
+                    contentDescription = "$label: $value"
+                    typeface = monoTypeface(enabled)
                     fontFeatureSettings = "tnum"
                 },
             )

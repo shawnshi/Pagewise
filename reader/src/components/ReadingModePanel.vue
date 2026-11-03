@@ -43,7 +43,7 @@ const emit = defineEmits<{
   /** 「听书」分段的主按钮: 打开现有听书面板 */
   'open-tts': []
   /** 场景详情的「在排版里微调」: 打开排版面板并滚到对应分区 */
-  'open-typography': [section: TypographySection]
+  'open-typography': [section?: TypographySection]
   close: []
 }>()
 
@@ -197,9 +197,14 @@ function onSpeedInput(e: Event) {
   <section class="rm-panel card" role="dialog" :aria-label="t('readingMode.title')">
     <header class="rm-head">
       <strong>{{ t('readingMode.title') }}</strong>
-      <button class="rm-close" type="button" :title="t('common.close')" :aria-label="t('common.close')" @click="close">
-        <svg viewBox="0 0 24 24" width="16" height="16" aria-hidden="true"><path fill="currentColor" d="M6.3 6.3a1 1 0 0 1 1.4 0L12 10.58l4.3-4.3a1 1 0 1 1 1.4 1.42L13.42 12l4.3 4.3a1 1 0 0 1-1.42 1.4L12 13.42l-4.3 4.3a1 1 0 0 1-1.4-1.42L10.58 12l-4.3-4.3a1 1 0 0 1 0-1.4z"/></svg>
-      </button>
+      <div class="rm-head-actions">
+        <button class="rm-typo-switch" type="button" @click="emit('open-typography')">
+          Aa · {{ t('reader.dockTypography') }}
+        </button>
+        <button class="rm-close" type="button" :title="t('common.close')" :aria-label="t('common.close')" @click="close">
+          <svg viewBox="0 0 24 24" width="16" height="16" aria-hidden="true"><path fill="currentColor" d="M6.3 6.3a1 1 0 0 1 1.4 0L12 10.58l4.3-4.3a1 1 0 1 1 1.4 1.42L13.42 12l4.3 4.3a1 1 0 0 1-1.42 1.4L12 13.42l-4.3 4.3a1 1 0 0 1-1.4-1.42L10.58 12l-4.3-4.3a1 1 0 0 1 0-1.4z"/></svg>
+        </button>
+      </div>
     </header>
 
     <p v-if="presentationSuppressed" class="rm-publication-note" role="status">{{ t('reader.publicationPaused') }}</p>
@@ -652,6 +657,25 @@ function onSpeedInput(e: Event) {
 }
 .rm-head strong {
   font-size: 15px;
+}
+.rm-head-actions {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+}
+.rm-typo-switch {
+  min-height: 36px;
+  padding: 4px 10px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  background: var(--bg-elev);
+  color: var(--text);
+  font-size: 12px;
+  font-weight: 600;
+  cursor: pointer;
+}
+.rm-typo-switch:hover {
+  border-color: var(--text);
 }
 .rm-close {
   width: 32px;
