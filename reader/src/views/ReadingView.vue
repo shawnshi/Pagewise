@@ -135,6 +135,18 @@ function openReader(book: BookMeta) {
   router.push(readerPath(book))
 }
 
+function openCatchup(book: BookMeta) {
+  saveLibrarySession({ lastViewedBookId: book.id })
+  router.push({ path: `/book/${encodeURIComponent(book.id)}`, query: { catchup: '1' } })
+}
+
+function getDaysSinceRead(book: BookMeta): number | null {
+  if (!book.lastReadAt || book.lastReadAt <= 0) return null
+  const diff = Date.now() - book.lastReadAt
+  if (diff < 0) return 0
+  return Math.floor(diff / (1000 * 60 * 60 * 24))
+}
+
 function getProgress(book: BookMeta) {
   return progressById.value.get(book.id) ?? null
 }
@@ -302,6 +314,12 @@ function getProgress(book: BookMeta) {
             <span v-if="book.lastReadAt" class="meta-hint">
               {{ t("uiV02.copy.上次读过：") }}{{ new Date(book.lastReadAt).toLocaleDateString() }}
             </span>
+            <span
+              v-if="getDaysSinceRead(book) != null && getDaysSinceRead(book)! >= 3"
+              class="idle-days-badge"
+            >
+              {{ t('readingManager.catchupDaysAgo', { v0: getDaysSinceRead(book)! }) }}
+            </span>
             <span v-if="book.readingSeconds && book.readingSeconds >= 60" class="meta-hint">
               {{ t("uiV02.copy.累计：") }}{{ formatReadingTime(book.readingSeconds) }}
             </span>
@@ -317,6 +335,14 @@ function getProgress(book: BookMeta) {
             @click.stop="openReader(book)"
           >
             {{ t("uiV02.copy.继续阅读") }}
+          </button>
+          <button
+            v-if="(getProgress(book) ?? 0) > 0 || book.lastReadAt"
+            type="button"
+            class="btn btn-sm btn-catchup-quick"
+            @click.stop="openCatchup(book)"
+          >
+            {{ t('readingManager.catchupBtn') }}
           </button>
         </div>
       </article>
@@ -588,6 +614,9 @@ function getProgress(book: BookMeta) {
 }
 .card-action-col {
   flex-shrink: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
 }
 .btn-continue {
   min-height: 44px;
@@ -595,6 +624,22 @@ function getProgress(book: BookMeta) {
   white-space: nowrap;
   font-weight: 600;
   border-radius: 2px;
+}
+.btn-catchup-quick {
+  min-height: 36px;
+  white-space: nowrap;
+  border: 1px solid var(--eink-solid-black, #000000);
+  background: var(--eink-surface-pure, #ffffff);
+  color: var(--eink-text-primary, #000000);
+  font-weight: 600;
+}
+.idle-days-badge {
+  font-size: 11px;
+  font-weight: 700;
+  padding: 1px 6px;
+  border: 1px solid var(--eink-solid-black, #000000);
+  color: var(--eink-text-primary, #000000);
+  background: var(--eink-surface-card, #eeeeee);
 }
 .meta-sep {
   opacity: 0.5;

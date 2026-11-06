@@ -4383,18 +4383,13 @@ onBeforeRouteLeave(async () => {
   z-index: 12;
   width: 36px;
   height: 36px;
-  border: none;
-  border-radius: 50%;
-  background: color-mix(in srgb, var(--card) 70%, transparent);
-  backdrop-filter: blur(8px);
-  -webkit-backdrop-filter: blur(8px);
-  color: var(--text-3);
-  opacity: 0.45;
+  border: 1px solid var(--eink-solid-black, #000000);
+  border-radius: var(--radius, 2px);
+  background: var(--eink-surface-pure, #ffffff);
+  color: var(--eink-text-primary, #000000);
   display: inline-flex;
   align-items: center;
   justify-content: center;
-  transition: opacity 0.2s;
-  box-shadow: 0 1px 4px rgba(0, 0, 0, 0.12);
 }
 .fs-exit:hover {
   opacity: 1;

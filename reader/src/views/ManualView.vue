@@ -84,6 +84,15 @@ onMounted(async () => {
 })
 
 const chapters = computed(() => files.map(f => ({ file: f, title: titles.value[f] ?? f.replace(/\.md$/, '') })))
+const currentChapterIndex = computed(() => files.indexOf(current.value))
+function prevChapter() {
+  if (currentChapterIndex.value > 0) current.value = files[currentChapterIndex.value - 1]
+}
+function nextChapter() {
+  if (currentChapterIndex.value >= 0 && currentChapterIndex.value < files.length - 1) {
+    current.value = files[currentChapterIndex.value + 1]
+  }
+}
 
 async function openExternal(url: string) {
   const { openUrl } = await import('@tauri-apps/plugin-opener')
@@ -98,7 +107,7 @@ function onClick(e: MouseEvent) {
   if (!href) return
   e.preventDefault()
   if (href.startsWith('#')) {
-    document.getElementById(decodeURIComponent(href.slice(1)))?.scrollIntoView({ behavior: 'smooth', block: 'start' })
+    document.getElementById(decodeURIComponent(href.slice(1)))?.scrollIntoView({ block: 'start' })
     return
   }
   if (/^https?:/i.test(href)) {
@@ -112,7 +121,7 @@ function onClick(e: MouseEvent) {
   const name = path.split('/').pop() ?? ''
   if (!path.includes('/') && files.includes(name)) {
     if (name === current.value) {
-      if (hash) document.getElementById(decodeURIComponent(hash))?.scrollIntoView({ behavior: 'smooth', block: 'start' })
+      if (hash) document.getElementById(decodeURIComponent(hash))?.scrollIntoView({ block: 'start' })
     } else {
       void router.replace({ query: { ...route.query, doc: name }, hash: hash ? `#${hash}` : '' })
       current.value = name
@@ -153,7 +162,23 @@ function onClick(e: MouseEvent) {
       </select>
 
       <!-- 手册内容来自仓库内的 docs/manual, 不含用户输入 -->
-      <article ref="article" class="manual-content" :aria-busy="loading" @click="onClick" v-html="html" />
+      <div class="manual-main-col">
+        <article ref="article" class="manual-content" :aria-busy="loading" @click="onClick" v-html="html" />
+        <footer v-if="files.length > 1" class="manual-chapter-pager">
+          <button type="button" class="btn btn-sm" :disabled="currentChapterIndex <= 0" @click="prevChapter">
+            ‹ 上一章
+          </button>
+          <span class="chapter-pos">{{ currentChapterIndex + 1 }} / {{ files.length }}</span>
+          <button
+            type="button"
+            class="btn btn-sm"
+            :disabled="currentChapterIndex < 0 || currentChapterIndex >= files.length - 1"
+            @click="nextChapter"
+          >
+            下一章 ›
+          </button>
+        </footer>
+      </div>
     </div>
   </div>
 </template>
@@ -179,15 +204,35 @@ function onClick(e: MouseEvent) {
   font-size: 20px;
 }
 .icon-btn {
-  width: 32px;
-  height: 32px;
-  border: none;
+  min-width: var(--tap-min, 48px);
+  min-height: var(--tap-min, 48px);
+  border: 1px solid var(--border);
   border-radius: var(--radius-sm);
   background: none;
-  color: var(--text-2);
+  color: var(--text);
   display: inline-flex;
   align-items: center;
   justify-content: center;
+}
+.manual-main-col {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+.manual-chapter-pager {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 8px 12px;
+  border: 1px solid var(--border);
+  background: var(--card);
+}
+.chapter-pos {
+  font-size: 12px;
+  font-weight: 700;
+  font-variant-numeric: tabular-nums;
 }
 .icon-btn:hover {
   background: var(--surface-2);

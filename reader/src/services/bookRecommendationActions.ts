@@ -1,5 +1,5 @@
 import type { BookMeta, LibraryStorage, BookReadingStatusSnapshot } from '../storage/types.ts'
-import { buildRecommendationIndex, rankBookRecommendations, recommendationCorpusKey, recommendationMetadataKey, recommendationSeeds, recommendationStatusSnapshot, RecommendationError, RecommendationStatusConflictError, type RecommendationIndex, type RecommendationResult, type RecommendationMode, type RecommendationLanguage, type RecommendationCard } from './bookRecommendations.ts'
+import { buildRecommendationIndex, rankBookRecommendations, recommendationCorpusKey, recommendationLexicalKey, recommendationMetadataKey, recommendationSeeds, recommendationStatusSnapshot, RecommendationError, RecommendationStatusConflictError, type RecommendationIndex, type RecommendationResult, type RecommendationMode, type RecommendationLanguage, type RecommendationCard, type SeedAnnotationSnippet } from './bookRecommendations.ts'
 import { createRecommendationFeedbackStore, type RecommendationFeedbackStore } from './bookRecommendationFeedback.ts'
 import { generateRecommendationReasons, type RecommendationAiPair, type RecommendationAiReason } from './bookRecommendationAi.ts'
 
@@ -27,10 +27,41 @@ const defaults:RecommendationDependencies={
 }
 async function fingerprint(value:string){const bytes=await crypto.subtle.digest('SHA-256',new TextEncoder().encode(value));return Array.from(new Uint8Array(bytes),byte=>byte.toString(16).padStart(2,'0')).join('')}
 function cards(session:Session):RecommendationCard[]{return [...session.result.related,...session.result.extended]}
+async function loadBooklistMembership(storage:LibraryStorage):Promise<Map<string,string[]>> {
+  const map=new Map<string,string[]>()
+  if(typeof storage.listBooklists!=='function'||typeof storage.listBooklistBookIds!=='function')return map
+  try {
+    const lists=await storage.listBooklists()
+    if(!Array.isArray(lists))return map
+    for(const list of lists.slice(0,64)) {
+      if(!list||typeof list.id!=='string')continue
+      const bookIds=await storage.listBooklistBookIds(list.id)
+      if(!Array.isArray(bookIds))continue
+      for(const bookId of bookIds.slice(0,512)) {
+        if(typeof bookId!=='string')continue
+        const arr=map.get(bookId)
+        if(arr)arr.push(list.id);else map.set(bookId,[list.id])
+      }
+    }
+  } catch { /* optional enrichment degrades safely */ }
+  return map
+}
+async function loadSeedAnnotations(storage:LibraryStorage,seeds:readonly BookMeta[]):Promise<Map<string,SeedAnnotationSnippet[]>> {
+  const map=new Map<string,SeedAnnotationSnippet[]>()
+  if(typeof storage.listAnnotations!=='function')return map
+  try {
+    for(const seed of seeds.slice(0,5)) {
+      const items=await storage.listAnnotations(seed.id)
+      if(!Array.isArray(items)||!items.length)continue
+      map.set(seed.id,items.slice(0,32).map(a=>({text:typeof a?.text==='string'?a.text:undefined,note:typeof a?.note==='string'?a.note:undefined})))
+    }
+  } catch { /* optional enrichment degrades safely */ }
+  return map
+}
 /** Library/feedback/AI share an ephemeral, book-bound context; no model runs on a plain Get. */
 export function createBookRecommendationActions(overrides:Partial<RecommendationDependencies>={}):RecommendationActions {
   const deps={...defaults,...overrides},sessions=new Map<string,Session>(),running=new Map<string,{controller:AbortController;token?:string;kind:'get'|'ai'}>(),writes=new Set<string>()
-  let corpus:{key:string;index:RecommendationIndex}|undefined
+  let corpus:{key:string;lexicalKey:string;index:RecommendationIndex}|undefined
   function prune(){for(const [key,session]of sessions)if(!session.writing&&deps.now()-session.created>=TTL)sessions.delete(key)}
   function sessionFor(payload:Record<string,unknown>):Session {
     prune();if(!valid(payload.token,128))throw new RecommendationError('invalid_payload')
@@ -56,12 +87,14 @@ export function createBookRecommendationActions(overrides:Partial<Recommendation
         const blocked=await ready();if(blocked)return blocked;controller.signal.throwIfAborted()
         const storage=await deps.storage(),books=await (storage.listRecommendationBooks?storage.listRecommendationBooks():storage.listBooks())
         const feedback=await deps.feedback.read();controller.signal.throwIfAborted()
-        const key=await fingerprint(recommendationCorpusKey(books))
-        if(!corpus||corpus.key!==key||payload.refresh===true){const index=await buildRecommendationIndex(books);corpus={key,index}}
-        else {for(const book of books){const record=corpus.index.byId.get(book.id);if(record)record.book=book}}
+        const [key,lexicalKey]=await Promise.all([fingerprint(recommendationCorpusKey(books)),fingerprint(recommendationLexicalKey(books))])
+        if(!corpus||corpus.lexicalKey!==lexicalKey||payload.refresh===true){const index=await buildRecommendationIndex(books);corpus={key,lexicalKey,index}}
+        else {corpus.key=key;for(const book of books){const record=corpus.index.byId.get(book.id);if(record)record.book=book}}
         controller.signal.throwIfAborted()
         const index=corpus.index,seeds=recommendationSeeds(index,mode as RecommendationMode,referenceId as string|null)
-        const ranked=rankBookRecommendations(index,seeds.books,{language:language as RecommendationLanguage,onlyNotStarted,relatedLimit:mode==='finish'?4:mode==='reading'?5:6,extendedLimit:mode==='finish'?0:mode==='reading'?5:6,feedback})
+        const [booklists,seedAnnotations]=await Promise.all([loadBooklistMembership(storage),loadSeedAnnotations(storage,seeds.books)])
+        controller.signal.throwIfAborted()
+        const ranked=rankBookRecommendations(index,seeds.books,{language:language as RecommendationLanguage,onlyNotStarted,relatedLimit:mode==='finish'?4:mode==='reading'?5:6,extendedLimit:mode==='finish'?0:mode==='reading'?5:6,feedback,booklists,seedAnnotations})
         const token=deps.token();if(!valid(token,128)||sessions.has(token))throw new RecommendationError('token_conflict')
         const result:RecommendationResult={token,mode:mode as RecommendationMode,referenceId:referenceId as string|null,seedKind:seeds.kind,sources:seeds.books.map(book=>({id:book.id,title:book.title})),related:ranked.related,extended:ranked.extended,libraryCount:index.count,filteredCount:ranked.filteredCount,language:language as RecommendationLanguage,onlyNotStarted}
         const selected=new Map<string,BookMeta>(),metadata=new Map<string,string>(),statuses=new Map<string,BookReadingStatusSnapshot>()

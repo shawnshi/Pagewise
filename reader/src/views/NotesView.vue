@@ -19,6 +19,7 @@ import { t } from '../i18n'
 import { useNativeBack } from '../composables/useNativeBack'
 import { getStorage } from '../storage'
 import { toast } from '../services/toast'
+import ReadingManagerDialog from '../components/ReadingManagerDialog.vue'
 import {
   deleteGlobalNote,
   filterGlobalNotes,
@@ -47,6 +48,7 @@ const currentFilter = ref<NoteFilterKind>('all')
 
 // 未保存草稿列表
 const unsavedDrafts = ref<NoteDraft[]>([])
+const showReadingManager = ref(false)
 
 // 当前处于编辑状态的笔记 ID 及编辑缓存
 const editingNoteId = ref<string | null>(null)
@@ -131,6 +133,62 @@ onBeforeUnmount(() => {
 const filteredNotes = computed(() => {
   return filterGlobalNotes(notes.value, searchQuery.value, currentFilter.value)
 })
+
+// 视图模式: timeline (时间流) | by-book (按书聚合)
+const viewMode = ref<'timeline' | 'by-book'>('timeline')
+
+// 定高步进翻页 (消除墨水屏长列表滚动拖影)
+const NOTES_PAGE_SIZE = 12
+const notesPage = ref(1)
+const notesTotalPages = computed(() => Math.max(1, Math.ceil(filteredNotes.value.length / NOTES_PAGE_SIZE)))
+const pagedFilteredNotes = computed(() => {
+  const start = (notesPage.value - 1) * NOTES_PAGE_SIZE
+  return filteredNotes.value.slice(start, start + NOTES_PAGE_SIZE)
+})
+
+// 按书聚合分组
+const groupedByBook = computed(() => {
+  const map = new Map<
+    string,
+    {
+      bookId: string
+      bookTitle: string
+      bookAuthor: string
+      sourceMissing: boolean
+      items: GlobalNoteItem[]
+    }
+  >()
+  for (const item of pagedFilteredNotes.value) {
+    let group = map.get(item.bookId)
+    if (!group) {
+      group = {
+        bookId: item.bookId,
+        bookTitle: item.bookTitle,
+        bookAuthor: item.bookAuthor,
+        sourceMissing: item.sourceMissing,
+        items: [],
+      }
+      map.set(item.bookId, group)
+    }
+    group.items.push(item)
+  }
+  return [...map.values()]
+})
+
+// 墨水屏 4 种划线线型/底纹语义映射 (替代黑白屏无法区分的彩色圆点)
+function getEinkStrokeStyle(color?: string): { cls: string; label: string } {
+  const c = (color || '').toLowerCase()
+  if (c.includes('green') || c.includes('2e7d32') || c.includes('4caf50')) {
+    return { cls: 'eink-stroke-double', label: '双线·核心' }
+  }
+  if (c.includes('blue') || c.includes('1976d2') || c.includes('2196f3')) {
+    return { cls: 'eink-stroke-dashed', label: '虚线·存疑' }
+  }
+  if (c.includes('pink') || c.includes('red') || c.includes('purple') || c.includes('e91e63')) {
+    return { cls: 'eink-stroke-shaded', label: '底纹·概念' }
+  }
+  return { cls: 'eink-stroke-solid', label: '实线·重点' }
+}
 
 // 数量统计
 const countStats = computed(() => {
@@ -364,6 +422,13 @@ function formatTime(ts: number): string {
 
       <div class="header-right">
         <button
+          type="button"
+          class="btn btn-sm"
+          @click="showReadingManager = true"
+        >
+          {{ t('readingManager.hubBtn') }}
+        </button>
+        <button
           class="btn btn-ghost btn-icon"
           :title="tr('common.refresh', '刷新')"
           :aria-label="tr('common.refresh', '刷新')"
@@ -375,6 +440,7 @@ function formatTime(ts: number): string {
         </button>
       </div>
     </header>
+    <ReadingManagerDialog v-model="showReadingManager" />
 
     <!-- 搜索与分类栏 -->
     <div class="toolbar-section">
@@ -405,7 +471,7 @@ function formatTime(ts: number): string {
           role="tab"
           :class="{ active: currentFilter === 'all' }"
           :aria-selected="currentFilter === 'all'"
-          @click="currentFilter = 'all'"
+          @click="currentFilter = 'all'; notesPage = 1"
         >
           {{ tr('library.filterAll', '全部') }} ({{ countStats.total }})
         </button>
@@ -413,26 +479,54 @@ function formatTime(ts: number): string {
           role="tab"
           :class="{ active: currentFilter === 'thoughts' }"
           :aria-selected="currentFilter === 'thoughts'"
-          @click="currentFilter = 'thoughts'"
+          @click="currentFilter = 'thoughts'; notesPage = 1"
         >
-          💡 {{ t("uiV02.copy.想法 (") }}{{ countStats.thoughts }})
+          {{ t("uiV02.copy.想法 (") }}{{ countStats.thoughts }})
         </button>
         <button
           role="tab"
           :class="{ active: currentFilter === 'highlights' }"
           :aria-selected="currentFilter === 'highlights'"
-          @click="currentFilter = 'highlights'"
+          @click="currentFilter = 'highlights'; notesPage = 1"
         >
-          ✏️ {{ tr('reader.highlight', '划线') }} ({{ countStats.highlights }})
+          {{ tr('reader.highlight', '划线') }} ({{ countStats.highlights }})
         </button>
         <button
           role="tab"
           :class="{ active: currentFilter === 'bookmarks' }"
           :aria-selected="currentFilter === 'bookmarks'"
-          @click="currentFilter = 'bookmarks'"
+          @click="currentFilter = 'bookmarks'; notesPage = 1"
         >
-          📌 {{ tr('reader.bookmarksTab', '书签') }} ({{ countStats.bookmarks }})
+          {{ tr('reader.bookmarksTab', '书签') }} ({{ countStats.bookmarks }})
         </button>
+      </div>
+
+      <!-- 视图模式切换与定高步进翻页栏 -->
+      <div class="notes-subbar">
+        <div class="view-mode-switch" role="group" aria-label="视图模式">
+          <button
+            type="button"
+            class="btn btn-sm mode-pill"
+            :class="{ active: viewMode === 'timeline' }"
+            @click="viewMode = 'timeline'"
+          >
+            时间流
+          </button>
+          <button
+            type="button"
+            class="btn btn-sm mode-pill"
+            :class="{ active: viewMode === 'by-book' }"
+            @click="viewMode = 'by-book'"
+          >
+            按书聚合
+          </button>
+        </div>
+
+        <div v-if="notesTotalPages > 1" class="notes-step-pager">
+          <button type="button" class="btn btn-sm" :disabled="notesPage <= 1" @click="notesPage--">‹</button>
+          <span class="pager-indicator">{{ notesPage }} / {{ notesTotalPages }}</span>
+          <button type="button" class="btn btn-sm" :disabled="notesPage >= notesTotalPages" @click="notesPage++">›</button>
+        </div>
       </div>
     </div>
 
@@ -499,10 +593,28 @@ function formatTime(ts: number): string {
         </button>
       </div>
 
-      <!-- 笔记卡片列表 -->
+      <!-- 笔记卡片列表 (支持时间流 / 按书聚合 + 墨水屏4种划线线型编码) -->
       <div v-else class="notes-grid">
+        <div v-if="viewMode === 'by-book'" class="book-groups-Summary">
+          <span
+            v-for="g in groupedByBook"
+            :key="g.bookId"
+            class="book-group-pill"
+          >
+            <strong>《{{ g.bookTitle }}》({{ g.items.length }})</strong>
+            <button
+              v-if="!g.sourceMissing"
+              type="button"
+              class="btn btn-ghost btn-sm"
+              @click="router.push(`/book/${encodeURIComponent(g.bookId)}`)"
+            >
+              详情/综述 ↗
+            </button>
+          </span>
+        </div>
+
         <article
-          v-for="note in filteredNotes"
+          v-for="note in pagedFilteredNotes"
           :key="note.id"
           class="card note-card"
           :class="{ 'is-bookmark': note.kind === 'bookmark' }"
@@ -523,7 +635,7 @@ function formatTime(ts: number): string {
                   'kind-highlight': note.kind === 'highlight',
                 }"
               >
-                {{ note.kind === 'bookmark' ? tr('reader.bookmarksTab', '书签') : tr('reader.highlight', '划线') }}
+                {{ note.kind === 'bookmark' ? tr('reader.bookmarksTab', '书签') : getEinkStrokeStyle(note.color).label }}
               </span>
 
               <button
@@ -539,11 +651,11 @@ function formatTime(ts: number): string {
             </div>
           </div>
 
-          <!-- 原文选区引用块 -->
+          <!-- 原文选区引用块 (墨水屏 4 种线型与底纹语义) -->
           <blockquote
             v-if="note.text"
             class="quote-block"
-            :style="{ borderLeftColor: note.color || 'var(--brand)' }"
+            :class="getEinkStrokeStyle(note.color).cls"
           >
             <p class="quote-text">{{ note.text }}</p>
           </blockquote>
@@ -907,13 +1019,81 @@ function formatTime(ts: number): string {
   border-color: var(--danger, #d32f2f);
 }
 
-/* 选区原文引用 */
+/* 选区原文引用 (墨水屏 4 种线型与底纹编码) */
 .quote-block {
   margin: 0;
   padding: 8px 12px;
-  background-color: var(--eink-surface-subtle);
-  border-left: 3px solid var(--eink-solid-black);
+  background-color: var(--eink-surface-pure, #ffffff);
+  border-left: 3px solid var(--eink-solid-black, #000000);
   border-radius: 0;
+}
+
+.quote-block.eink-stroke-solid {
+  border-left: 3px solid var(--eink-solid-black, #000000);
+}
+
+.quote-block.eink-stroke-double {
+  border-left: 5px double var(--eink-solid-black, #000000);
+}
+
+.quote-block.eink-stroke-dashed {
+  border-left: 3px dashed var(--eink-solid-black, #000000);
+}
+
+.quote-block.eink-stroke-shaded {
+  border-left: 3px solid var(--eink-solid-black, #000000);
+  background-color: var(--eink-surface-card, #eeeeee);
+}
+
+.notes-subbar {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  flex-wrap: wrap;
+}
+
+.view-mode-switch,
+.notes-step-pager {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.mode-pill {
+  border: 1px solid var(--eink-border-hairline, #bbbbbb);
+  background: var(--eink-surface-pure, #ffffff);
+}
+
+.mode-pill.active {
+  background: var(--eink-solid-black, #000000);
+  color: var(--eink-surface-pure, #ffffff);
+  border-color: var(--eink-solid-black, #000000);
+}
+
+.pager-indicator {
+  font-size: 12px;
+  font-weight: 700;
+  font-variant-numeric: tabular-nums;
+}
+
+.book-groups-Summary {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  padding: 10px 12px;
+  border: 1px solid var(--eink-border-hairline, #bbbbbb);
+  background: var(--eink-surface-card, #eeeeee);
+}
+
+.book-group-pill {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 4px 8px;
+  border: 1px solid var(--eink-solid-black, #000000);
+  background: var(--eink-surface-pure, #ffffff);
+  font-size: 12px;
 }
 
 .quote-text {

@@ -49,6 +49,8 @@
     "test:zh-segment": "node --experimental-strip-types --test scripts/test-zh-segment.mjs",
     "stats": "node scripts/stats.mjs",
     "test:library": "node --experimental-strip-types --test scripts/test-library-query.mjs scripts/test-cover-url-cache.mjs scripts/test-library-covers.mjs",
+    "test:book-metadata": "node --experimental-strip-types --test scripts/test-book-metadata.mjs",
+    "test:reading-manager-ai": "node --experimental-strip-types --test scripts/test-reading-manager-ai.mjs",
     "test:feature-trim": "node --experimental-strip-types --test scripts/test-feature-formats.mjs scripts/test-lyric-removal.mjs scripts/test-android-native.mjs scripts/test-android-prepare-failure.mjs"
   },
   "dependencies": {

@@ -122,6 +122,94 @@ test('TTL/cap and malformed payload gates remain bounded without unsafe storage 
  const g=fixture();for(let i=0;i<32;i++)assert.equal((await get(g.actions)).ok,true);assert.equal((await get(g.actions)).code,'recommendation_limit')
  assert.equal((await g.actions.recommendationsClearFeedback({confirmClear:false})).code,'confirmation_required')
 })
+test('weighted top-160 truncation, salient Chinese cross-category bridge, facet bonus, and seed decay',async()=>{
+ const filler=Array.from({length:170},(_,i)=>`nw${i}`).join(' ')
+ const s1=book('zh-seed','computing-ai',[],{title:'控制论与自动机导论',description:`${filler} 耗散结构 耗散结构 耗散结构 博弈演化 博弈演化 博弈演化`,lastReadAt:500,readingStatus:'reading',classification:{...classification('computing-ai',[]),facets:{workCountry:'中国',workPeriod:'现代'}}})
+ const sRecent=book('recent-seed','economics-finance',['拓扑流形'],{title:'拓扑流形数理分析',description:'拓扑流形数理分析与均衡求解',lastReadAt:600,readingStatus:'reading'})
+ const sOld=book('old-seed','literature-language',['叙事诗学'],{title:'古典叙事诗学分析',description:'古典叙事诗学分析与文本解读',lastReadAt:100,readingStatus:'reading'})
+ const cBridge=book('zh-ext','philosophy-religion',[],{title:'复杂耗散结构与系统哲学',description:'围绕耗散结构与博弈演化的跨学科考察 耗散结构 博弈演化'})
+ const cNoiseOnly=book('zh-noise','arts-design',[],{title:'西方油画色彩学',description:'偶现耗散结构一词但非核心主题'})
+ const cFacetMatch=book('facet-hit','computing-ai',['系统工程'],{title:'控制论工程导引',description:'控制论在工程系统中的应用',classification:{...classification('computing-ai',['系统工程']),facets:{workCountry:'中国',workPeriod:'现代'}}})
+ const cFacetMiss=book('facet-miss','computing-ai',['系统工程'],{title:'控制论工程导引',description:'控制论在工程系统中的应用',classification:{...classification('computing-ai',['系统工程']),facets:{workCountry:'美国',workPeriod:'当代'}}})
+ const cRecent=book('from-recent','economics-finance',['拓扑流形'],{title:'拓扑流形数理导读',description:'拓扑流形数理分析与均衡求解导读'})
+ const cStale=book('from-stale','literature-language',['叙事诗学'],{title:'古典叙事诗学导读',description:'古典叙事诗学分析与文本解读导读'})
+ const lib=[s1,sRecent,sOld,cBridge,cNoiseOnly,cFacetMatch,cFacetMiss,cRecent,cStale]
+ const index=await m.buildRecommendationIndex(lib,async()=>{})
+ assert.equal(index.byId.get('zh-seed').vector.size,160)
+ assert.ok(index.byId.get('zh-seed').vector.has('耗散'))
+ const detail=m.rankBookRecommendations(index,[s1],opts)
+ assert.ok(detail.extended.some(c=>c.book.id==='zh-ext'&&c.evidence.kind==='terms'&&c.evidence.shared.length>0))
+ assert.ok(!detail.extended.some(c=>c.book.id==='zh-noise'))
+ const rIds=detail.related.map(c=>c.book.id)
+ assert.ok(rIds.includes('facet-hit')&&rIds.indexOf('facet-hit')<rIds.indexOf('facet-miss'))
+ const keyBefore=m.recommendationMetadataKey(cFacetMatch)
+ cFacetMatch.classification.facets.workPeriod='先秦'
+ assert.notEqual(m.recommendationMetadataKey(cFacetMatch),keyBefore)
+ const readingSeeds=m.recommendationSeeds(index,'reading',null).books
+ const multiIds=m.rankBookRecommendations(index,readingSeeds,opts).related.map(c=>c.book.id)
+ assert.ok(multiIds.includes('from-recent')&&multiIds.indexOf('from-recent')<multiIds.indexOf('from-stale'))
+})
+test('items 1-7: lexical cache reuse, multi-author/translator parsing, engagement weight, subtitle/volume dedupe, audience penalty, booklists and seed annotations',async()=>{
+ // 1. Lexical key ignores readingStatus/progress while corpusKey tracks them
+ const b1=book('lex-1','computing-ai',['控制论'],{readingStatus:'reading',progress:0.2,lastReadAt:100})
+ const lexBefore=m.recommendationLexicalKey([b1]),corpusBefore=m.recommendationCorpusKey([b1])
+ b1.readingStatus='wanted';b1.progress=0.8;b1.lastReadAt=200
+ assert.equal(m.recommendationLexicalKey([b1]),lexBefore)
+ assert.notEqual(m.recommendationCorpusKey([b1]),corpusBefore)
+ // 2. Multi-author & nationality prefix / translator suffix
+ const aSeed=book('a-seed','computing-ai',[],{title:'控制论导论',author:'[美] 诺伯特·维纳 著 / 郝季仁 译'})
+ const aTarget=book('a-target','philosophy-religion',[],{title:'人有人的用处',author:'诺伯特·维纳, 史蒂芬·列维'})
+ const aOtherTrans=book('a-trans','arts-design',[],{title:'西方美术史',author:'[英] 贡布里希 著 / 郝季仁 译'})
+ assert.deepEqual(m.authorsOf(aSeed),['诺伯特·维纳'])
+ assert.deepEqual(m.authorsOf(aTarget),['诺伯特·维纳','史蒂芬·列维'])
+ // 3. Engagement weight
+ assert.equal(m.seedEngagementWeight(book('deep','computing-ai',[],{lastReadAt:100,readingSeconds:3600,progress:0.5})),1.08)
+ assert.equal(m.seedEngagementWeight(book('shallow','computing-ai',[],{lastReadAt:100,readingSeconds:30,progress:0.01})),0.85)
+ // 4. Volume & subtitle workGroup deduplication
+ const subSeed=book('sub-seed','computing-ai',['系统科学'],{title:'猜想与反驳：科学知识的增长',author:'卡尔·波普尔'})
+ const subDup=book('sub-dup','computing-ai',['系统科学'],{title:'猜想与反驳（上）',author:'卡尔·波普尔'})
+ const vol1=book('vol-a','history-archaeology',['通史'],{title:'国史大纲（上）',author:'钱穆',publisher:'商务'})
+ const vol2=book('vol-b','history-archaeology',['通史'],{title:'国史大纲（下）',author:'钱穆',publisher:'商务'})
+ // 5. Paper kind & juvenile audience penalty
+ const paperSeed=book('p-seed','computing-ai',['神经网络'],{title:'深度残差网络论文',kind:'paper',classification:{...classification('computing-ai',['神经网络']),feature:{value:'学术论文',locked:false,source:'manual'}}})
+ const paperMatch=book('p-peer','computing-ai',['神经网络'],{title:'卷积神经网络结构分析',kind:'paper',classification:{...classification('computing-ai',['神经网络']),feature:{value:'学术论文',locked:false,source:'manual'}}})
+ const kidsBook=book('p-kids','computing-ai',['神经网络'],{title:'卷积神经网络结构分析',kind:'book',classification:{...classification('computing-ai',['神经网络']),facets:{audience:'少儿绘本'}}})
+ // 6 & 7. Booklist co-occurrence and seed annotations
+ const noteSeed=book('n-seed','computing-ai',[],{title:'通用系统概论',description:'一般导论'})
+ const noteTarget=book('n-target','computing-ai',[],{title:'马尔可夫链蒙特卡洛方法',description:'深入探讨马尔可夫链与贝叶斯推断'})
+ const listTarget=book('l-target','computing-ai',[],{title:'系统动力学模型',description:'通用系统建模'})
+ const all=[aSeed,aTarget,aOtherTrans,subSeed,subDup,vol1,vol2,paperSeed,paperMatch,kidsBook,noteSeed,noteTarget,listTarget]
+ const idx=await m.buildRecommendationIndex(all,async()=>{})
+ const rAuthor=m.rankBookRecommendations(idx,[aSeed],opts)
+ assert.ok(rAuthor.related.some(c=>c.book.id==='a-target'&&c.evidence.kind==='author'))
+ assert.ok(!rAuthor.related.some(c=>c.book.id==='a-trans'))
+ const rSub=m.rankBookRecommendations(idx,[subSeed],opts)
+ assert.ok(!rSub.related.some(c=>c.book.id==='sub-dup'))
+ assert.equal(rSub.related.filter(c=>c.book.author==='钱穆').length,0)
+ const histSeed=book('hist-seed','history-archaeology',['通史'],{title:'中国历代政治得失',author:'钱穆',publisher:'三联'})
+ const volIdx=await m.buildRecommendationIndex([histSeed,vol1,vol2],async()=>{})
+ const rVol=m.rankBookRecommendations(volIdx,[histSeed],opts)
+ assert.equal(rVol.related.length,1);assert.equal(rVol.related[0].recordCount,2)
+ const rPaper=m.rankBookRecommendations(idx,[paperSeed],opts).related.map(c=>c.book.id)
+ assert.ok(rPaper.includes('p-peer')&&rPaper.indexOf('p-peer')<rPaper.indexOf('p-kids'))
+ const rEnriched=m.rankBookRecommendations(idx,[noteSeed],{
+  ...opts,
+  booklists:new Map([['n-seed',['list-1']],['l-target',['list-1']]]),
+  seedAnnotations:new Map([['n-seed',[{note:'重点研究马尔可夫链与贝叶斯推断的收敛性质',text:'马尔可夫链转移矩阵'}]]]),
+ })
+ const enrichedIds=rEnriched.related.map(c=>c.book.id)
+ assert.ok(enrichedIds.includes('n-target'))
+ assert.ok(enrichedIds.includes('l-target'))
+ // End-to-end via actions with storage listBooklists & listAnnotations
+ const f=fixture()
+ f.storage.listBooklists=async()=>[{id:'bl-1',name:'Core',createdAt:1,updatedAt:1}]
+ f.storage.listBooklistBookIds=async()=>['source','related']
+ f.storage.listAnnotations=async id=>id==='source'?[{id:'an-1',bookId:'source',cfi:'cfi',text:'复杂系统涌现',note:'自组织临界性',createdAt:1}]:[]
+ const res1=await get(f.actions);assert.equal(res1.ok,true)
+ f.rows.get('related').readingStatus='wanted'
+ const res2=await get(f.actions);assert.equal(res2.ok,true)
+ assert.equal(res2.result.related.find(c=>c.book.id==='related').book.readingStatus,'wanted')
+})
 test('frozen 2243-record host workload records build/rank latency without claiming device targets',async()=>{
  const count=2243,seed=13,categories=['computing-ai','science-mathematics','economics-finance','psychology-cognition']
  const books=Array.from({length:count},(_,i)=>book(`bench-${String(i).padStart(5,'0')}`,categories[(i+seed)%categories.length],['复杂系统','演化机制'],{title:`Synthetic complexity ${i}`,author:`Synthetic author ${i%300}`,lastReadAt:i===0?10:undefined}))

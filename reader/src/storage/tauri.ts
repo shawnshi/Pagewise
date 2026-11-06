@@ -4,11 +4,12 @@
  *  - 元数据与原生设置/导入共用 Android SQLite, 不再混用 bundled sqlx
  */
 import type {
-  AnnotationRec, BookClassificationUpdate, BookDescriptionSnapshot, BookReadingStatusSnapshot, ReadingStatus, LegacyBookTagsUpdate, BooklistRec, BooklistWantedRec, BookMeta, CatalogSourceRec, LibraryStorage, LocalFileRef, NewBookMeta,
+  AnnotationRec, BookClassificationUpdate, BookDescriptionSnapshot, BookMetadataSnapshot, BookMetadataFields, BookReadingStatusSnapshot, ReadingStatus, LegacyBookTagsUpdate, BooklistRec, BooklistWantedRec, BookMeta, CatalogSourceRec, LibraryStorage, LocalFileRef, NewBookMeta,
 } from './types'
 import { BUILTIN_SOURCES, getLibraryRoot, newId } from './types'
 import { RecommendationError, RecommendationStatusConflictError, validateRecommendationStatusUpdate } from '../services/bookRecommendations.ts'
 import { BookDescriptionConflictError, validateBookDescriptionUpdate } from '../services/bookDescription.ts'
+import { BookMetadataConflictError, validateBookMetadataUpdate } from '../services/bookMetadata.ts'
 import { isReadingStatus, normalizeReadingStatus } from '../services/readingStatus'
 import { prepareClassificationUpdates, rejectClassificationPatch, validatedBookClassification } from '../services/bookTagActions'
 import { parseClassification } from '../services/bookClassification'
@@ -344,6 +345,45 @@ export class TauriStorage implements LibraryStorage {
     )
     if (result.rowsAffected === 0) throw new BookDescriptionConflictError()
     if (result.rowsAffected !== 1) throw new Error('Unexpected description update result')
+  }
+
+  async updateBookMetadata(id: string, expected: BookMetadataSnapshot, patch: BookMetadataFields): Promise<void> {
+    validateBookMetadataUpdate(id, expected, patch)
+    const newAuthor = patch.author !== undefined ? patch.author : expected.author
+    const newPublisher = patch.publisher !== undefined ? patch.publisher : expected.publisher
+    const newPubDate = patch.publicationDate !== undefined ? patch.publicationDate : expected.publicationDate
+    const newLang = patch.language !== undefined ? patch.language : expected.language
+
+    const result = await this.db.execute(
+      `UPDATE books SET
+         author = $1,
+         publisher = $2,
+         publication_date = $3,
+         language = $4
+       WHERE id = $5 AND title = $6
+         AND COALESCE(author, '') = $7
+         AND COALESCE(publisher, '') = $8
+         AND COALESCE(publication_date, '') = $9
+         AND COALESCE(language, '') = $10`,
+      [
+        newAuthor,
+        newPublisher,
+        newPubDate,
+        newLang,
+        id,
+        expected.title,
+        expected.author,
+        expected.publisher,
+        expected.publicationDate,
+        expected.language,
+      ],
+    )
+    if (result.rowsAffected === 0) {
+      const book = await this.getBook(id)
+      if (!book) throw new Error('Book not found')
+      throw new BookMetadataConflictError()
+    }
+    if (result.rowsAffected !== 1) throw new Error('Unexpected metadata update result')
   }
 
   async updateBookReadingStatus(id:string,expected:BookReadingStatusSnapshot,status:ReadingStatus):Promise<void> {

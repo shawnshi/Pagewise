@@ -233,6 +233,11 @@ internal class NativePagesController(
             "阅读时长" to "Reading time",
             "加入时间" to "Added",
             "编辑书目信息" to "Edit book details",
+            "前情提要" to "Catch-up",
+            "导出读书笔记" to "Export notes",
+            "跨书对比预览" to "Cross-book matrix",
+            "仅补全空白字段" to "Fill empty fields only",
+            "覆盖已有字段" to "Overwrite existing fields",
             "AI 分类" to "AI classification",
             "秒" to "seconds",
             "分钟" to "minutes",
@@ -1941,7 +1946,6 @@ internal class NativePagesController(
             },
         )
         val classification = book.optJSONObject("classification")
-        val tags = book.optJSONArray("tags") ?: JSONArray()
         overview.addView(
             text(label("分类与标签"), 16f, true).apply {
                 setTypeface(Typeface.SERIF, Typeface.BOLD)
@@ -1989,13 +1993,6 @@ internal class NativePagesController(
                 )
             }
         }
-        overview.addView(
-            text(
-                label("标签") + ": " +
-                    if (tags.length() == 0) label("暂无标签") else (0 until tags.length()).joinToString(" · ") { tags.optString(it) },
-                14f,
-            ),
-        )
         actions(
             overview,
             listOf("标签" to { editTags(book) }, "AI 分类" to { openClassification(bookId, true) }),
@@ -2032,6 +2029,15 @@ internal class NativePagesController(
                 setPadding(dp(14), dp(4), dp(14), dp(4))
             }
         fileActions.addView(editBookBtn)
+        val catchupBtn =
+            button("前情提要") { showBookCatchup(book) }.apply {
+                background = NativeUi.hairlineShape(activity, this@NativePagesController.background, true)
+                minHeight = dp(38)
+                minimumHeight = dp(38)
+                gravity = Gravity.CENTER
+                setPadding(dp(14), dp(4), dp(14), dp(4))
+            }
+        fileActions.addView(catchupBtn)
         overview.addView(
             fileActions,
             LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT).apply {
@@ -2178,7 +2184,131 @@ internal class NativePagesController(
         }
     }
 
+    private fun showBookCatchup(book: JSONObject) {
+        val bookId = book.getString("id")
+        val payload =
+            JSONObject()
+                .put("bookId", bookId)
+                .put("query", "")
+                .put("filter", "all")
+                .put("offset", 0)
+                .put("limit", 5)
+        call("library.annotations", payload) { response ->
+            val items = response.optJSONArray("items") ?: JSONArray()
+            val box = column().apply { setPadding(dp(16), dp(10), dp(16), dp(10)) }
+            val prog = if (book.isNull("progress")) 0 else kotlin.math.round(book.optDouble("progress", 0.0) * 100).toInt().coerceIn(0, 100)
+            val lastRead = book.optLong("lastReadAt", 0L)
+            val idleDays = if (lastRead > 0L && System.currentTimeMillis() >= lastRead) ((System.currentTimeMillis() - lastRead) / 86_400_000L).toInt() else -1
+            box.addView(text("《${book.optString("title")}》", 16f, true))
+            val summaryLine =
+                buildString {
+                    append("${label("阅读进度")}: $prog%")
+                    if (idleDays >= 0) append(" · 距上次阅读 ${idleDays} 天")
+                }
+            box.addView(text(summaryLine, 14f))
+            if (!book.isNull("description") && book.optString("description").isNotBlank()) {
+                box.addView(text(book.optString("description").take(220), 13f))
+            }
+            box.addView(line())
+            if (items.length() == 0) {
+                box.addView(text(label("本书还没有笔记"), 14f))
+            } else {
+                box.addView(text("最近留下的标注 (${items.length()})：", 14f, true))
+                for (i in 0 until items.length()) {
+                    val ann = items.getJSONObject(i)
+                    val quoteText = ann.optString("text").ifBlank { ann.optString("note") }.take(120)
+                    box.addView(text("• “$quoteText”", 13f))
+                    val cfi = ann.optString("cfi")
+                    if (cfi.isNotBlank()) {
+                        box.addView(
+                            button("回到原文") {
+                                currentDialog?.dismiss()
+                                openReader(book, cfi)
+                            },
+                        )
+                    }
+                }
+            }
+            dialog("前情提要", ScrollView(activity).apply { addView(box) }) {
+                currentDialog?.dismiss()
+                openReader(book)
+            }
+        }
+    }
+
+    private fun exportNotesMarkdownDialog(
+        bookId: String,
+        items: JSONArray,
+    ) {
+        val sb = StringBuilder()
+        sb.append("# 读书笔记与标注导出\n\n")
+        if (bookId.isNotEmpty()) sb.append("- 书籍 ID: `$bookId`\n")
+        sb.append("- 导出条数: ${items.length()}\n\n")
+        for (i in 0 until items.length()) {
+            val item = items.getJSONObject(i)
+            val bTitle = item.optString("bookTitle", "书籍")
+            val kind = if (item.optString("kind") == "bookmark") "书签" else "划线"
+            val cfi = item.optString("cfi")
+            sb.append("## ${i + 1}. 《$bTitle》 [$kind]\n")
+            if (item.optString("text").isNotBlank()) {
+                sb.append("> ${item.optString("text").trim()}\n\n")
+            }
+            if (!item.isNull("note") && item.optString("note").isNotBlank()) {
+                sb.append("**想法**: ${item.optString("note").trim()}\n\n")
+            }
+            if (cfi.isNotBlank()) {
+                sb.append("- 锚点: `$cfi`\n\n")
+            }
+        }
+        val mdView =
+            text(sb.toString(), 13f).apply {
+                setTextIsSelectable(true)
+                setPadding(dp(16), dp(12), dp(16), dp(12))
+            }
+        dialog("导出读书笔记", ScrollView(activity).apply { addView(mdView) }) {
+            currentDialog?.dismiss()
+        }
+    }
+
+    private fun showCrossBookMatrixDialog(items: JSONArray) {
+        val grouped = linkedMapOf<String, MutableList<JSONObject>>()
+        for (i in 0 until items.length()) {
+            val item = items.getJSONObject(i)
+            val title = item.optString("bookTitle", label("已移除的书籍"))
+            grouped.getOrPut(title) { mutableListOf() }.add(item)
+        }
+        val box = column().apply { setPadding(dp(16), dp(10), dp(16), dp(10)) }
+        box.addView(text("跨书观点与批注对照 (${grouped.size} 本书)", 16f, true))
+        grouped.forEach { (title, list) ->
+            val card =
+                column().apply {
+                    setPadding(dp(12), dp(8), dp(12), dp(8))
+                    background = NativeUi.shape(activity, this@NativePagesController.background)
+                    layoutParams = LinearLayout.LayoutParams(-1, -2).apply { bottomMargin = dp(8) }
+                }
+            card.addView(text("《$title》 (${list.size} 条标注)", 14f, true))
+            list.take(3).forEach { note ->
+                val snippet = note.optString("note").ifBlank { note.optString("text") }.take(100)
+                if (snippet.isNotBlank()) card.addView(text("• $snippet", 13f))
+            }
+            box.addView(card)
+        }
+        dialog("跨书对比预览", ScrollView(activity).apply { addView(box) }) {
+            currentDialog?.dismiss()
+        }
+    }
+
     private fun editBook(book: JSONObject) {
+        val limits =
+            mapOf(
+                "title" to 512,
+                "author" to 256,
+                "publisher" to 256,
+                "publicationDate" to 64,
+                "language" to 32,
+                "description" to 16000,
+            )
+        var fillEmptyOnly = false
         val fields =
             linkedMapOf(
                 "title" to "书名",
@@ -2189,12 +2319,21 @@ internal class NativePagesController(
                 "description" to "简介",
             )
         val form = column()
+        val modeBtn =
+            button("覆盖已有字段") {}.apply {
+                setOnClickListener {
+                    fillEmptyOnly = !fillEmptyOnly
+                    text = label(if (fillEmptyOnly) "仅补全空白字段" else "覆盖已有字段")
+                }
+            }
+        form.addView(modeBtn)
         val editors = linkedMapOf<String, EditText>()
         fields.forEach { (key, title) ->
-            form.addView(text(label(title), 14f))
+            val origVal = if (book.isNull(key)) "" else book.optString(key)
+            form.addView(text("${label(title)} (${if (origVal.isEmpty()) "空白" else "已有"})", 14f))
             val editor =
                 input(
-                    if (book.isNull(key)) "" else book.optString(key),
+                    origVal,
                     title,
                     key == "description",
                 )
@@ -2203,11 +2342,16 @@ internal class NativePagesController(
         }
         dialog("编辑书目信息", ScrollView(activity).apply { addView(form) }) {
             val patch = JSONObject()
-            editors.forEach { (key, editor) ->
-                val value = editor.text.toString()
-                if (value !=
-                    if (book.isNull(key)) "" else book.optString(key)
-                ) {
+            for ((key, editor) in editors) {
+                val value = editor.text.toString().replace("\u0000", "").trim()
+                val orig = if (book.isNull(key)) "" else book.optString(key)
+                val maxLen = limits[key] ?: 512
+                if (value.length > maxLen) {
+                    editor.error = "超出长度上限 ($maxLen)"
+                    return@dialog
+                }
+                if (fillEmptyOnly && orig.isNotBlank()) continue
+                if (value != orig) {
                     patch.put(key, value)
                 }
             }
@@ -2277,6 +2421,15 @@ internal class NativePagesController(
         if (bookId.isNotEmpty()) payload.put("bookId", bookId)
         call("library.annotations", payload) { response ->
             val items = response.getJSONArray("items")
+            if (items.length() > 0) {
+                actions(
+                    body,
+                    listOf(
+                        "导出读书笔记" to { exportNotesMarkdownDialog(bookId, items) },
+                        "跨书对比预览" to { showCrossBookMatrixDialog(items) },
+                    ),
+                )
+            }
             if (items.length() == 0) {
                 val unfiltered = query.isBlank() && noteFilter == "all"
                 val empty =

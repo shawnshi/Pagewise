@@ -1,7 +1,7 @@
 /** Web 端存储实现: IndexedDB (Dexie), 书籍与封面以 Blob 存库 */
 import Dexie, { type Table } from 'dexie'
 import type {
-  AnnotationRec, BookClassificationUpdate, BookDescriptionSnapshot, BookReadingStatusSnapshot, ReadingStatus, LegacyBookTagsUpdate, BooklistRec, BooklistWantedRec, BookMeta, CatalogSourceRec, LibraryStorage, NewBookMeta,
+  AnnotationRec, BookClassificationUpdate, BookDescriptionSnapshot, BookMetadataSnapshot, BookMetadataFields, BookReadingStatusSnapshot, ReadingStatus, LegacyBookTagsUpdate, BooklistRec, BooklistWantedRec, BookMeta, CatalogSourceRec, LibraryStorage, NewBookMeta,
 } from './types'
 import { BUILTIN_SOURCES, newId } from './types'
 import { isReadingStatus, normalizeReadingStatus } from '../services/readingStatus'
@@ -9,6 +9,7 @@ import { readReferencedFile, validateSourceRef, validateAvailability } from './s
 import { classificationMetadataMatches, prepareClassificationUpdates, rejectClassificationPatch, validatedBookClassification } from '../services/bookTagActions'
 import { RecommendationError, RecommendationStatusConflictError, recommendationStatusMatches, validateRecommendationStatusUpdate } from '../services/bookRecommendations.ts'
 import { bookDescriptionMatches, BookDescriptionConflictError, validateBookDescriptionUpdate } from '../services/bookDescription.ts'
+import { bookMetadataMatches, BookMetadataConflictError, validateBookMetadataUpdate } from '../services/bookMetadata.ts'
 
 interface BookRow extends BookMeta {
   /** Safari 的 IndexedDB 存 Blob 会报错, 统一存 ArrayBuffer */
@@ -151,6 +152,20 @@ export class DexieStorage implements LibraryStorage {
       const current = await this.db.books.get(id)
       if (!current || !bookDescriptionMatches(current, expected)) throw new BookDescriptionConflictError()
       await this.db.books.update(id, { description })
+    })
+  }
+
+  async updateBookMetadata(id: string, expected: BookMetadataSnapshot, patch: BookMetadataFields): Promise<void> {
+    validateBookMetadataUpdate(id, expected, patch)
+    await this.db.transaction('rw', this.db.books, async () => {
+      const current = await this.db.books.get(id)
+      if (!current || !bookMetadataMatches(current, expected)) throw new BookMetadataConflictError()
+      const changes: Partial<BookRow> = {}
+      if (patch.author !== undefined) changes.author = patch.author
+      if (patch.publisher !== undefined) changes.publisher = patch.publisher
+      if (patch.publicationDate !== undefined) changes.publicationDate = patch.publicationDate
+      if (patch.language !== undefined) changes.language = patch.language
+      await this.db.books.update(id, changes)
     })
   }
 

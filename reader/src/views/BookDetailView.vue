@@ -13,7 +13,19 @@ import AppIcon from '../components/AppIcon.vue'
 import BookClassificationPanel from '../components/BookClassificationPanel.vue'
 import BookRelinkDialog from '../components/BookRelinkDialog.vue'
 import BookIntroductionDialog from '../components/BookIntroductionDialog.vue'
+import BookMetadataDialog from '../components/BookMetadataDialog.vue'
+import ReadingManagerDialog from '../components/ReadingManagerDialog.vue'
 import BookRecommendationsPanel from '../components/BookRecommendationsPanel.vue'
+import {
+  buildLocalAnnotationMarkdown,
+  buildLocalCatchupSnapshot,
+  formatAnnotationJumpPath,
+  generateReadingCatchupWithAi,
+  synthesizeBookAnnotationsWithAi,
+  ReadingManagerAiError,
+  type AnnotationSynthesisResult,
+  type ReadingCatchupResult,
+} from '../services/readingManagerAi'
 import { bookFileProblem } from '../services/bookAvailability'
 import { useFolderLibrary } from '../services/folderLibrary'
 import { toast } from '../services/toast'
@@ -36,6 +48,9 @@ const readable = computed(() => book.value ? isSupportedBookFormat(book.value.fo
 const fileProblem = computed(() => book.value ? bookFileProblem(book.value) : undefined)
 const showRelink = ref(false)
 const showIntroduction = ref(false)
+const showMetadata = ref(false)
+const showReadingManager = ref(false)
+const showCatchup = ref(false)
 const introductionDialog = ref<{ requestClose(): void; isSaving(): boolean } | null>(null)
 
 const progress = computed(() => {
@@ -109,6 +124,144 @@ async function loadToc() {
 const annotations = ref<AnnotationRec[]>([])
 const loadingAnnotations = ref(false)
 
+// P1: 断点前情提要状态
+const catchupLoading = ref(false)
+const catchupResult = ref<ReadingCatchupResult | null>(null)
+const catchupError = ref('')
+let catchupController: AbortController | null = null
+
+const catchupSnapshot = computed(() => {
+  if (!book.value) return null
+  return buildLocalCatchupSnapshot(book.value, annotations.value)
+})
+
+async function runAiCatchup() {
+  if (!book.value || catchupLoading.value) return
+  if (catchupController) catchupController.abort()
+  const controller = new AbortController()
+  catchupController = controller
+  catchupLoading.value = true
+  catchupError.value = ''
+  try {
+    const tocTitles = toc.value.map(item => item.label || item.title || '').filter(Boolean)
+    const res = await generateReadingCatchupWithAi({
+      book: book.value,
+      annotations: annotations.value,
+      tocTitles,
+      signal: controller.signal,
+    })
+    if (controller.signal.aborted) return
+    catchupResult.value = res
+  } catch (err: any) {
+    if (controller.signal.aborted) return
+    if (err instanceof ReadingManagerAiError && err.code === 'unconfigured') {
+      catchupError.value = t('bookIntroduction.error.unconfigured')
+    } else {
+      catchupError.value = err?.message || t('bookMetadata.error')
+    }
+  } finally {
+    if (catchupController === controller) {
+      catchupLoading.value = false
+      catchupController = null
+    }
+  }
+}
+
+// P0: 单书批注聚类综述与 Markdown 导出状态
+const synthesisLoading = ref(false)
+const synthesisResult = ref<AnnotationSynthesisResult | null>(null)
+const synthesisError = ref('')
+let synthesisController: AbortController | null = null
+
+async function runAnnotationSynthesis() {
+  if (!book.value || synthesisLoading.value) return
+  if (synthesisController) synthesisController.abort()
+  const controller = new AbortController()
+  synthesisController = controller
+  synthesisLoading.value = true
+  synthesisError.value = ''
+  try {
+    const res = await synthesizeBookAnnotationsWithAi({
+      book: book.value,
+      annotations: annotations.value,
+      signal: controller.signal,
+    })
+    if (controller.signal.aborted) return
+    synthesisResult.value = res
+  } catch (err: any) {
+    if (controller.signal.aborted) return
+    if (err instanceof ReadingManagerAiError && err.code === 'unconfigured') {
+      synthesisError.value = t('bookIntroduction.error.unconfigured')
+    } else {
+      synthesisError.value = err?.message || t('bookMetadata.error')
+    }
+  } finally {
+    if (synthesisController === controller) {
+      synthesisLoading.value = false
+      synthesisController = null
+    }
+  }
+}
+
+async function copyNotesMarkdown() {
+  if (!book.value) return
+  const md = buildLocalAnnotationMarkdown(book.value, annotations.value, synthesisResult.value)
+  try {
+    await navigator.clipboard.writeText(md)
+    toast(t('readingManager.copiedSuccess'), 'success', 2000)
+  } catch {
+    toast(t('bookMetadata.error'), 'error')
+  }
+}
+
+function exportNotesMarkdown() {
+  if (!book.value) return
+  const md = buildLocalAnnotationMarkdown(book.value, annotations.value, synthesisResult.value)
+  const blob = new Blob([md], { type: 'text/markdown;charset=utf-8' })
+  const url = URL.createObjectURL(blob)
+  const a = document.createElement('a')
+  a.href = url
+  const safeTitle = (book.value.title || '读书笔记').replace(/[\\/:*?"<>|]/g, '_').slice(0, 40)
+  a.download = `${safeTitle}-读书笔记.md`
+  a.click()
+  URL.revokeObjectURL(url)
+  toast(t('readingManager.exportedSuccess'), 'success', 2000)
+}
+
+function jumpToAnnotationCfi(cfi: string) {
+  if (!book.value) return
+  const path = formatAnnotationJumpPath(book.value, cfi)
+  if (path) router.push(path)
+}
+
+function openTocItem(item: TocItem) {
+  if (!book.value) return
+  if (item.href) {
+    jumpToAnnotationCfi(item.href)
+  } else {
+    openReader()
+  }
+}
+
+// 墨水屏定高步进分页 (消除长目录与长批注列表滚动拖影)
+const DETAIL_PAGE_SIZE = 10
+const tocPage = ref(1)
+const tocTotalPages = computed(() => Math.max(1, Math.ceil(toc.value.length / DETAIL_PAGE_SIZE)))
+const pagedToc = computed(() => {
+  const start = (tocPage.value - 1) * DETAIL_PAGE_SIZE
+  return toc.value.slice(start, start + DETAIL_PAGE_SIZE).map((item, idx) => ({
+    item,
+    globalIndex: start + idx,
+  }))
+})
+
+const recordsPage = ref(1)
+const recordsTotalPages = computed(() => Math.max(1, Math.ceil(annotations.value.length / DETAIL_PAGE_SIZE)))
+const pagedAnnotations = computed(() => {
+  const start = (recordsPage.value - 1) * DETAIL_PAGE_SIZE
+  return annotations.value.slice(start, start + DETAIL_PAGE_SIZE)
+})
+
 async function loadAnnotations() {
   if (!book.value) return
   loadingAnnotations.value = true
@@ -134,6 +287,7 @@ onMounted(async () => {
   if (book.value) {
     selectedStatus.value = resolveReadingStatus(book.value).effective ?? 'unmarked'
     showRelink.value = route.query.recover === '1' && fileProblem.value === 'missing'
+    if (route.query.catchup === '1') showCatchup.value = true
     coverUrl.value = await storage.getCoverUrl(book.value.id) || null
     void loadAnnotations()
   }
@@ -203,6 +357,22 @@ function onIntroductionSaved(id: string, description: string) {
   book.value.description = description
   if (rawBook.value?.id === id) rawBook.value.description = description
   void library.refresh().catch(() => { toast(t('bookIntroduction.refreshAfterSave'), 'info') })
+}
+
+function onMetadataSaved(id: string, patch: any) {
+  if (id !== bookId.value || book.value?.id !== id) return
+  if (patch.author !== undefined) book.value.author = patch.author
+  if (patch.publisher !== undefined) book.value.publisher = patch.publisher
+  if (patch.publicationDate !== undefined) book.value.publicationDate = patch.publicationDate
+  if (patch.language !== undefined) book.value.language = patch.language
+
+  if (rawBook.value?.id === id) {
+    if (patch.author !== undefined) rawBook.value.author = patch.author
+    if (patch.publisher !== undefined) rawBook.value.publisher = patch.publisher
+    if (patch.publicationDate !== undefined) rawBook.value.publicationDate = patch.publicationDate
+    if (patch.language !== undefined) rawBook.value.language = patch.language
+  }
+  void library.refresh().catch(() => {})
 }
 
 async function onClassificationUpdated() {
@@ -294,6 +464,19 @@ const recommendationCount = ref<number | null>(null)
               <AppIcon name="pin" :size="16" aria-hidden="true" />
               <span>{{ book.pinnedAt ? t('library.unpin') : t('library.pin') }}</span>
             </button>
+            <button
+              v-if="catchupSnapshot?.needsCatchup"
+              type="button"
+              class="btn btn-sm"
+              @click="showCatchup = !showCatchup"
+            >
+              <AppIcon name="history" :size="16" aria-hidden="true" />
+              <span>{{ t('readingManager.catchupBtn') }}</span>
+            </button>
+            <button type="button" class="btn btn-sm" @click="showReadingManager = true">
+              <AppIcon name="ai" :size="16" aria-hidden="true" />
+              <span>{{ t('readingManager.hubBtn') }}</span>
+            </button>
             <button v-if="!book.sourceRef" type="button" class="btn btn-danger btn-sm" @click="removeBook">
               <AppIcon name="delete" :size="16" aria-hidden="true" />
               <span>{{ t('book.removeFromLibrary') }}</span>
@@ -318,6 +501,57 @@ const recommendationCount = ref<number | null>(null)
       </section>
       <BookRelinkDialog v-if="showRelink && book" :book="book" @close="showRelink = false" @recovered="onFileRecovered" />
       <BookIntroductionDialog ref="introductionDialog" v-model="showIntroduction" :book-id="bookId" :book="book?.id === bookId ? book : null" @saved="onIntroductionSaved" />
+      <BookMetadataDialog v-model="showMetadata" :book-id="bookId" :book="book?.id === bookId ? book : null" @saved="onMetadataSaved" />
+      <ReadingManagerDialog v-model="showReadingManager" :default-book-id="bookId" />
+
+      <!-- P1: 断点前情提要面板 -->
+      <section v-if="showCatchup && catchupSnapshot" class="card catchup-card" role="region" :aria-label="t('readingManager.catchupTitle')">
+        <header class="catchup-header">
+          <div class="catchup-title-group">
+            <strong>{{ t('readingManager.catchupTitle') }}</strong>
+            <span v-if="catchupSnapshot.daysSinceLastRead != null" class="badge">
+              {{ t('readingManager.catchupDaysAgo', { v0: catchupSnapshot.daysSinceLastRead }) }}
+            </span>
+          </div>
+          <div class="catchup-actions">
+            <button type="button" class="btn btn-primary btn-sm" :disabled="catchupLoading" @click="runAiCatchup">
+              {{ catchupLoading ? t('readingManager.catchupGenerating') : t('readingManager.catchupGenerateBtn') }}
+            </button>
+            <button type="button" class="btn btn-ghost btn-sm" @click="showCatchup = false">✕</button>
+          </div>
+        </header>
+
+        <div v-if="catchupError" class="manager-inline-error" role="alert">{{ catchupError }}</div>
+
+        <div v-if="catchupResult" class="catchup-ai-body">
+          <div class="catchup-block">
+            <h4>{{ t('readingManager.catchupWhereLeftOff') }}</h4>
+            <p>{{ catchupResult.whereYouLeftOff }}</p>
+          </div>
+          <div v-if="catchupResult.keyThreads.length" class="catchup-block">
+            <h4>{{ t('readingManager.catchupKeyThreads') }}</h4>
+            <ul>
+              <li v-for="(thread, i) in catchupResult.keyThreads" :key="i">{{ thread }}</li>
+            </ul>
+          </div>
+          <div class="catchup-block">
+            <h4>{{ t('readingManager.catchupNextStep') }}</h4>
+            <p>{{ catchupResult.nextStepSuggestion }}</p>
+          </div>
+        </div>
+
+        <div v-if="catchupSnapshot.recentAnnotations.length" class="catchup-recent">
+          <h4>{{ t('readingManager.catchupRecentNotes') }}</h4>
+          <ul class="catchup-notes-list">
+            <li v-for="ann in catchupSnapshot.recentAnnotations.slice(0, 3)" :key="ann.id">
+              <span>“{{ (ann.text || ann.note || '').slice(0, 90) }}”</span>
+              <button v-if="ann.cfi" type="button" class="link-jump-btn" @click="jumpToAnnotationCfi(ann.cfi)">
+                [定位原文]
+              </button>
+            </li>
+          </ul>
+        </div>
+      </section>
 
       <!-- 选项卡导航 -->
       <nav class="tabs-nav" role="tablist">
@@ -359,6 +593,18 @@ const recommendationCount = ref<number | null>(null)
 
       <!-- 概览面板 -->
       <section v-if="activeTab === 'overview'" class="tab-panel card" role="tabpanel">
+        <div class="overview-header-row">
+          <span class="overview-section-title">{{ t("uiV02.copy.概览信息") }}</span>
+          <button
+            type="button"
+            class="btn btn-ghost btn-sm"
+            :disabled="book.id !== bookId"
+            @click="showMetadata = true"
+          >
+            <AppIcon name="info" :size="14" aria-hidden="true" />
+            <span>{{ t('bookMetadata.triggerButton') }}</span>
+          </button>
+        </div>
         <dl class="meta-grid">
           <div class="meta-item">
             <dt>{{ t("uiV02.copy.格式：") }}</dt>
@@ -404,15 +650,6 @@ const recommendationCount = ref<number | null>(null)
             <dt>{{ t("uiV02.copy.文件名：") }}</dt>
             <dd class="text-truncate">{{ book.fileName }}</dd>
           </div>
-          <div class="meta-item full-width">
-            <dt>{{ t("uiV02.copy.标签：") }}</dt>
-            <dd class="tags-list">
-              <template v-if="book.tags?.length">
-                <span v-for="tag in book.tags" :key="tag" class="tag">{{ tag }}</span>
-              </template>
-              <span v-else class="tag-placeholder">{{ t('book.noTags') }}</span>
-            </dd>
-          </div>
           <div class="meta-item full-width intro-item">
             <div class="intro-header">
               <dt>{{ t("uiV02.copy.书籍简介：") }}</dt>
@@ -426,27 +663,87 @@ const recommendationCount = ref<number | null>(null)
         <BookClassificationPanel :book="book" @updated="onClassificationUpdated" />
       </section>
 
-      <!-- 目录面板 -->
+      <!-- 目录面板 (支持点击直跳章节 + 定高步进翻页) -->
       <section v-else-if="activeTab === 'toc'" class="tab-panel card" role="tabpanel">
         <div v-if="loadingToc" class="loading-box">{{ t('common.loading') }}</div>
         <div v-else-if="tocError" class="empty-box">{{ tocError }}</div>
         <div v-else-if="!toc.length" class="empty-box">{{ t("uiV02.copy.暂无目录或格式不支持提取目录") }}</div>
-        <ul v-else class="toc-list">
-          <li v-for="(item, idx) in toc" :key="idx" class="toc-item">
-            <span class="toc-title">{{ item.label || item.title || t("uiV02.copy.\u7B2C {v0} \u8282", { v0: idx + 1 }) }}</span>
-          </li>
-        </ul>
+        <template v-else>
+          <div v-if="tocTotalPages > 1" class="step-pager-bar">
+            <span class="pager-meta">{{ toc.length }} 章</span>
+            <div class="pager-controls">
+              <button type="button" class="btn btn-sm" :disabled="tocPage <= 1" @click="tocPage--">‹</button>
+              <span class="pager-num">{{ tocPage }} / {{ tocTotalPages }}</span>
+              <button type="button" class="btn btn-sm" :disabled="tocPage >= tocTotalPages" @click="tocPage++">›</button>
+            </div>
+          </div>
+          <ul class="toc-list">
+            <li v-for="{ item, globalIndex } in pagedToc" :key="globalIndex" class="toc-item">
+              <button type="button" class="toc-jump-btn" @click="openTocItem(item)">
+                <span class="toc-title">{{ item.label || item.title || t("uiV02.copy.\u7B2C {v0} \u8282", { v0: globalIndex + 1 }) }}</span>
+                <span class="toc-arrow" aria-hidden="true">→</span>
+              </button>
+            </li>
+          </ul>
+        </template>
       </section>
 
-      <!-- 标注与记录面板 -->
+      <!-- 标注与记录面板 (P0 批注聚类综述与结构化导出 + 定高步进翻页) -->
       <section v-else-if="activeTab === 'records'" class="tab-panel card" role="tabpanel">
+        <div v-if="annotations.length > 0" class="records-toolbar">
+          <button
+            type="button"
+            class="btn btn-primary btn-sm"
+            :disabled="synthesisLoading"
+            @click="runAnnotationSynthesis"
+          >
+            {{ synthesisLoading ? t('readingManager.synthesisGenerating') : t('readingManager.synthesisBtn') }}
+          </button>
+          <button type="button" class="btn btn-sm" @click="copyNotesMarkdown">
+            {{ t('readingManager.copyMarkdownBtn') }}
+          </button>
+          <button type="button" class="btn btn-sm" @click="exportNotesMarkdown">
+            {{ t('readingManager.exportMarkdownBtn') }}
+          </button>
+          <div v-if="recordsTotalPages > 1" class="pager-controls ml-auto">
+            <button type="button" class="btn btn-sm" :disabled="recordsPage <= 1" @click="recordsPage--">‹</button>
+            <span class="pager-num">{{ recordsPage }} / {{ recordsTotalPages }}</span>
+            <button type="button" class="btn btn-sm" :disabled="recordsPage >= recordsTotalPages" @click="recordsPage++">›</button>
+          </div>
+        </div>
+
+        <div v-if="synthesisError" class="manager-inline-error" role="alert">{{ synthesisError }}</div>
+
+        <div v-if="synthesisResult" class="synthesis-box">
+          <h3 class="synthesis-heading">{{ t('readingManager.synthesisTitle') }}</h3>
+          <p class="synthesis-summary">{{ synthesisResult.summary }}</p>
+
+          <div v-if="synthesisResult.themes.length" class="synthesis-themes">
+            <h4>{{ t('readingManager.synthesisThemes') }}</h4>
+            <div v-for="(theme, tIdx) in synthesisResult.themes" :key="tIdx" class="theme-cluster-item">
+              <strong>{{ tIdx + 1 }}. {{ theme.title }}</strong>
+              <p>{{ theme.insight }}</p>
+            </div>
+          </div>
+
+          <div v-if="synthesisResult.keyTakeaways.length" class="synthesis-takeaways">
+            <h4>{{ t('readingManager.synthesisTakeaways') }}</h4>
+            <ul>
+              <li v-for="(item, kIdx) in synthesisResult.keyTakeaways" :key="kIdx">{{ item }}</li>
+            </ul>
+          </div>
+        </div>
+
         <div v-if="loadingAnnotations" class="loading-box">{{ t('common.loading') }}</div>
         <div v-else-if="!annotations.length" class="empty-box">{{ t("uiV02.copy.暂无笔记与高亮标注") }}</div>
         <ul v-else class="annotations-list">
-          <li v-for="ann in annotations" :key="ann.id" class="annotation-item">
+          <li v-for="ann in pagedAnnotations" :key="ann.id" class="annotation-item">
             <div class="annotation-header">
               <span class="badge">{{ ann.kind === 'bookmark' ? t("uiV02.copy.\u4E66\u7B7E") : t("uiV02.copy.\u9AD8\u4EAE") }}</span>
               <span class="annotation-time">{{ new Date(ann.createdAt).toLocaleDateString() }}</span>
+              <button v-if="ann.cfi" type="button" class="link-jump-btn" @click="jumpToAnnotationCfi(ann.cfi)">
+                [定位原文]
+              </button>
             </div>
             <p v-if="ann.text" class="annotation-text">“{{ ann.text }}”</p>
             <p v-if="ann.note" class="annotation-note">{{ t("uiV02.copy.想法：") }}{{ ann.note }}</p>
@@ -670,6 +967,18 @@ const recommendationCount = ref<number | null>(null)
   border-radius: 2px;
   background: var(--eink-surface-pure);
 }
+.overview-header-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  margin-bottom: 14px;
+  padding-bottom: 10px;
+  border-bottom: 1px solid var(--eink-border-hairline, #eee);
+}
+.overview-section-title {
+  font-weight: 600;
+  font-size: 14px;
+}
 .meta-grid {
   display: grid;
   grid-template-columns: repeat(auto-fit, minmax(280px, 1fr));
@@ -692,19 +1001,6 @@ const recommendationCount = ref<number | null>(null)
 .meta-item dd {
   margin: 0;
   color: var(--text);
-}
-.tags-list {
-  display: flex;
-  flex-wrap: wrap;
-  gap: 6px;
-}
-.tag {
-  font-size: 12px;
-  padding: 2px 8px;
-  border-radius: var(--radius-sm);
-  background: var(--surface-2);
-  border: 1px solid var(--border);
-  color: var(--text-2);
 }
 .intro-item {
   flex-direction: column !important;
@@ -745,11 +1041,54 @@ const recommendationCount = ref<number | null>(null)
   gap: 8px;
 }
 .toc-item {
-  padding: 10px 14px;
   border-radius: var(--radius-sm);
   background: var(--card);
   border: 1px solid var(--border);
   font-size: 13px;
+}
+.toc-jump-btn {
+  width: 100%;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  padding: 10px 14px;
+  border: none;
+  background: transparent;
+  color: inherit;
+  font: inherit;
+  text-align: left;
+  cursor: pointer;
+}
+.toc-jump-btn:active {
+  background: var(--eink-solid-black, #000000);
+  color: var(--eink-surface-pure, #ffffff);
+}
+.toc-arrow {
+  font-size: 14px;
+  font-weight: 700;
+}
+.step-pager-bar {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  margin-bottom: 12px;
+  padding-bottom: 8px;
+  border-bottom: 1px solid var(--border, #bbbbbb);
+  font-size: 12px;
+}
+.pager-controls {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+}
+.pager-controls.ml-auto {
+  margin-left: auto;
+}
+.pager-num {
+  font-size: 12px;
+  font-weight: 700;
+  font-variant-numeric: tabular-nums;
 }
 .annotation-item {
   padding: 12px 14px;
@@ -815,9 +1154,104 @@ const recommendationCount = ref<number | null>(null)
   border: 1px solid var(--border);
   padding: 1px 4px;
 }
-.tag-placeholder {
-  color: var(--text-3);
-  font-style: italic;
+
+.catchup-card {
+  padding: 16px 20px;
+  margin-bottom: 18px;
+  border: 1px solid var(--eink-solid-black, #111);
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+.catchup-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  flex-wrap: wrap;
+}
+.catchup-title-group,
+.catchup-actions {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+.catchup-ai-body {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  border-top: 1px solid var(--border, #ddd);
+  padding-top: 10px;
+}
+.catchup-block h4,
+.catchup-recent h4,
+.synthesis-themes h4,
+.synthesis-takeaways h4 {
+  margin: 0 0 4px;
+  font-size: 13px;
+}
+.catchup-block p {
+  margin: 0;
+  font-size: 13px;
+  line-height: 1.6;
+}
+.catchup-block ul,
+.catchup-notes-list,
+.synthesis-takeaways ul {
+  margin: 0;
+  padding-inline-start: 18px;
+  font-size: 13px;
+  line-height: 1.5;
+}
+.records-toolbar {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  margin-bottom: 14px;
+  padding-bottom: 12px;
+  border-bottom: 1px solid var(--border, #ddd);
+}
+.synthesis-box {
+  padding: 14px;
+  margin-bottom: 16px;
+  border: 1px solid var(--text, #111);
+  border-radius: 4px;
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+.synthesis-heading {
+  margin: 0;
+  font-size: 15px;
+  font-weight: 700;
+}
+.synthesis-summary {
+  margin: 0;
+  font-size: 13px;
+  line-height: 1.6;
+}
+.theme-cluster-item {
+  margin-top: 6px;
+  font-size: 13px;
+}
+.theme-cluster-item p {
+  margin: 4px 0 0;
+  line-height: 1.5;
+}
+.manager-inline-error {
+  padding: 8px 12px;
+  border-inline-start: 3px solid var(--text, #111);
+  font-size: 13px;
+  margin-bottom: 10px;
+}
+.link-jump-btn {
+  background: none;
+  border: none;
+  padding: 0 4px;
+  font-size: 12px;
+  text-decoration: underline;
+  cursor: pointer;
+  color: inherit;
 }
 
 @media (max-width: 640px) {

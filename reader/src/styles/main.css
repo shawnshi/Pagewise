@@ -581,8 +581,8 @@ input[type='range'] {
   position: fixed;
   inset: 0;
   background: var(--overlay);
-  -webkit-backdrop-filter: blur(2px);
-  backdrop-filter: blur(2px);
+  -webkit-backdrop-filter: none;
+  backdrop-filter: none;
   display: flex;
   align-items: center;
   justify-content: center;

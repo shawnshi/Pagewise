@@ -1,5 +1,5 @@
 import { defineStore } from 'pinia'
-import type { BookMeta, ReadingStatus } from '../storage'
+import type { BookMeta, BookMetadataFields, BookMetadataSnapshot, ReadingStatus } from '../storage'
 import { getStorage } from '../storage'
 import { recordReading } from '../services/readingLog.ts'
 
@@ -58,6 +58,22 @@ export const useLibrary = defineStore('library', {
       await storage.updateBook(id, { readingStatus })
       const book = this.books.find(b => b.id === id)
       if (book) book.readingStatus = readingStatus
+    },
+    /** 更新单本书籍的出版著录元数据 (CAS 快照防覆盖) */
+    async updateBookMetadata(id: string, expected: BookMetadataSnapshot, patch: BookMetadataFields) {
+      const storage = await getStorage()
+      if (storage.updateBookMetadata) {
+        await storage.updateBookMetadata(id, expected, patch)
+      } else {
+        await storage.updateBook(id, patch)
+      }
+      const book = this.books.find(b => b.id === id)
+      if (book) {
+        if (patch.author !== undefined) book.author = patch.author
+        if (patch.publisher !== undefined) book.publisher = patch.publisher
+        if (patch.publicationDate !== undefined) book.publicationDate = patch.publicationDate
+        if (patch.language !== undefined) book.language = patch.language
+      }
     },
     /** 批量更新阅读状态, 精确统计成功与失败, 避免全量历史覆写 */
     async batchSetReadingStatus(ids: string[], readingStatus: ReadingStatus) {

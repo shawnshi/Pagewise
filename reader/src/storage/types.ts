@@ -157,6 +157,23 @@ export interface BookDescriptionSnapshot {
   readonly description: string
 }
 
+/** Canonical fields used to guard a user-confirmed metadata replacement. */
+export interface BookMetadataSnapshot {
+  readonly id: string
+  readonly title: string
+  readonly author: string
+  readonly publisher: string
+  readonly publicationDate: string
+  readonly language: string
+}
+
+export interface BookMetadataFields {
+  author?: string
+  publisher?: string
+  publicationDate?: string
+  language?: string
+}
+
 /** Snapshot guarding a user-requested status-only change; never changes CFI or progress. */
 export interface BookReadingStatusSnapshot {
   readonly readingStatus: ReadingStatus | null
@@ -179,6 +196,8 @@ export interface LibraryStorage {
   updateBook(id: string, patch: Partial<Omit<BookMeta, 'id'>>): Promise<void>
   /** Atomic metadata/old-description CAS; absence is unsupported, never an unsafe updateBook fallback. */
   updateBookDescription?(id: string, expected: BookDescriptionSnapshot, description: string): Promise<void>
+  /** Atomic metadata patch CAS; checks expected fields before updating. */
+  updateBookMetadata?(id: string, expected: BookMetadataSnapshot, patch: BookMetadataFields): Promise<void>
   updateBookReadingStatus?(id: string, expected: BookReadingStatusSnapshot, status: ReadingStatus): Promise<void>
   /**
    * 原子累加累计阅读秒数并返回新值。可选: 不支持的实现回退到读-改-写。

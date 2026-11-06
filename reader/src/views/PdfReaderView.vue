@@ -4364,16 +4364,12 @@ onBeforeUnmount(() => {
   justify-content: center;
   gap: 7px;
   padding: 0 12px;
-  border: 1px solid rgba(255, 255, 255, 0.16);
-  border-radius: 11px;
-  background: rgba(18, 20, 24, 0.72);
-  color: rgba(255, 255, 255, 0.9);
+  border: 1px solid var(--eink-solid-black, #000000);
+  border-radius: var(--radius, 2px);
+  background: var(--eink-surface-pure, #ffffff);
+  color: var(--eink-text-primary, #000000);
   font-size: 12px;
-  font-weight: 560;
-  box-shadow: 0 10px 28px rgba(0, 0, 0, 0.24);
-  backdrop-filter: blur(14px) saturate(130%);
-  opacity: 0.78;
-  transition: opacity 160ms ease, background-color 160ms ease, transform 120ms ease;
+  font-weight: 700;
 }
 .fullscreen-exit {
   right: max(18px, var(--lr-safe-right));
@@ -4415,15 +4411,11 @@ onBeforeUnmount(() => {
   gap: 6px;
   min-height: 38px;
   padding: 4px;
-  border: 1px solid rgba(255, 255, 255, 0.12);
-  border-radius: 11px;
-  background: rgba(18, 20, 24, 0.68);
-  color: rgba(255, 255, 255, 0.86);
-  box-shadow: 0 10px 28px rgba(0, 0, 0, 0.22);
-  backdrop-filter: blur(14px);
+  border: 1px solid var(--eink-solid-black, #000000);
+  border-radius: var(--radius, 2px);
+  background: var(--eink-surface-pure, #ffffff);
+  color: var(--eink-text-primary, #000000);
   transform: translateX(-50%);
-  opacity: 0.45;
-  transition: opacity 160ms ease;
 }
 .presentation-controls:hover,
 .presentation-controls:focus-within {
@@ -4458,15 +4450,14 @@ onBeforeUnmount(() => {
   display: grid;
   place-items: center;
   padding: 24px;
-  background: rgba(20, 24, 32, 0.34);
-  backdrop-filter: blur(4px);
+  background: rgba(0, 0, 0, 0.35);
 }
 .document-dialog {
   width: min(560px, 100%);
   max-height: min(720px, calc(100dvh - 48px));
   overflow: auto;
-  border-radius: 16px;
-  box-shadow: 0 22px 70px rgba(29, 33, 41, 0.22);
+  border: 2px solid var(--eink-solid-black, #000000);
+  border-radius: var(--radius, 2px);
 }
 .document-dialog > header {
   position: sticky;
@@ -4922,11 +4913,10 @@ onBeforeUnmount(() => {
   z-index: 2;
   padding: 7px 16px;
   color: var(--text-3);
-  background: color-mix(in srgb, var(--reflow-bg) 92%, transparent);
-  border-bottom: 1px solid color-mix(in srgb, var(--reflow-fg) 10%, transparent);
+  background: var(--reflow-bg);
+  border-bottom: 1px solid var(--border);
   font-size: 12px;
   text-align: center;
-  backdrop-filter: blur(8px);
 }
 .reflow-article {
   box-sizing: border-box;
@@ -5640,17 +5630,10 @@ onBeforeUnmount(() => {
   min-height: 46px;
   padding: 6px;
   overflow-x: auto;
-  border: 1px solid color-mix(in srgb, var(--border) 72%, transparent);
-  border-radius: 15px;
-  background: color-mix(in srgb, var(--card) 92%, transparent);
-  box-shadow:
-    0 18px 48px rgba(31, 42, 68, 0.15),
-    0 3px 10px rgba(31, 42, 68, 0.08),
-    inset 0 1px 0 rgba(255, 255, 255, 0.86);
-  backdrop-filter: blur(18px) saturate(145%);
-  -webkit-backdrop-filter: blur(18px) saturate(145%);
+  border: 2px solid var(--eink-solid-black, #000000);
+  border-radius: var(--radius, 2px);
+  background: var(--eink-surface-pure, #ffffff);
   transform: translateX(-50%);
-  animation: sel-bar-in 180ms cubic-bezier(0.22, 1, 0.36, 1);
   scrollbar-width: none;
 }
 .sel-bar::-webkit-scrollbar {
@@ -5929,10 +5912,9 @@ onBeforeUnmount(() => {
   align-items: center;
   gap: 10px;
   padding: 10px 14px;
-  border-radius: 12px;
-  border: 1px solid rgba(29, 33, 41, 0.08);
-  box-shadow: 0 8px 26px rgba(22, 100, 255, 0.12), 0 2px 8px rgba(29, 33, 41, 0.08);
-  backdrop-filter: blur(14px);
+  border-radius: var(--radius, 2px);
+  border: 1px solid var(--eink-solid-black, #000000);
+  background: var(--eink-surface-pure, #ffffff);
 }
 .auto-panel label {
   font-size: 13px;
