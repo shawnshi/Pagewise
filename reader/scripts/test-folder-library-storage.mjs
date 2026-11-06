@@ -41,10 +41,9 @@ before(async () => {
     plugins: [{ name: 'synthetic-metadata-contract', enforce: 'pre',
       resolveId(source) {
         if (/(?:^|\/)monitoredFolder(?:\.ts)?$/.test(source)) return '\0metadata-native'
-        if (source === '@tauri-apps/plugin-sql') return '\0metadata-sql'
         if (source === '@tauri-apps/plugin-fs') return '\0metadata-fs'
       },
-      load(id) { return ({ '\0metadata-native': virtualNative, '\0metadata-sql': virtualSql, '\0metadata-fs': virtualFs })[id] },
+      load(id) { return ({ '\0metadata-native': virtualNative, '\0metadata-fs': virtualFs })[id] },
       configureServer(vite) { vite.middlewares.use((req, res, next) => {
         if (req.url === '/__metadata_test') { res.setHeader('Content-Type', 'text/html'); res.end('<!doctype html><title>Synthetic metadata QA</title>') }
         else next()

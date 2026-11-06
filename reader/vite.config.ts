@@ -15,13 +15,22 @@ const pkg = JSON.parse(readFileSync(new URL('./package.json', import.meta.url), 
  */
 function foliatePaginatorFork(): Plugin {
   const fork = fileURLToPath(new URL('./src/vendor/foliate/paginator.js', import.meta.url))
+  const retiredStub = '\0lightread:retired-foliate-format'
   return {
     name: 'lightread:foliate-paginator-fork',
     enforce: 'pre',
     resolveId(source, importer) {
       if (source === 'foliate-js/paginator.js') return fork
-      if (source === './paginator.js' && importer
-        && /[\\/]foliate-js[\\/]view\.js(?:\?|$)/.test(importer)) return fork
+      if (importer && /[\\/]foliate-js[\\/]/.test(importer)) {
+        if (source === './paginator.js') return fork
+        if (source === './fb2.js' || source === './comic-book.js') return retiredStub
+      }
+      return null
+    },
+    load(id) {
+      if (id === retiredStub) {
+        return 'export const makeFB2 = () => { throw new Error("Retired format: fb2") }; export const makeComicBook = () => { throw new Error("Retired format: comic-book") };'
+      }
       return null
     },
   }
