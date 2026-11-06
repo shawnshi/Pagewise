@@ -4,28 +4,28 @@
 
 # 知页阅读器 · Pagewise
 
-面向文石（Onyx BOOX）Android 墨水屏设备的本地阅读应用。当前版本为 **2.2.0**，Android 版本码为 **2002000**。
+面向文石（Onyx BOOX）Android 墨水屏设备的本地阅读应用。当前版本为 **2.3.0**，Android 版本码为 **2003000**。
 
 项目专为 BOOX Android 设备设计与调优。浏览器仅用于前端组件开发与单元测试，不提供桌面、iOS 或 PWA 发行版。
 
 ## 当前状态
 
-2.2.0 已在 **Note X3 Pro（Android API 32, Carta 1200 墨水屏）** 上完成构建与真机部署：
+2.3.0 已在 **Note X3 Pro（Android API 32, Carta 1200 墨水屏）** 上完成构建与验证：
 
 | 变体 | 桌面显示名称 | 包名 | 下载 |
 |---|---|---|---|
-| Release | 知页 | `io.pagewise.reader` | [Pagewise-2.2.0-release.apk](https://github.com/shawnshi/Pagewise/releases/download/v2.2.0/Pagewise-2.2.0-release.apk) |
-| Debug | 知页 2.2.0 测试版 | `io.pagewise.reader.debug` | [Pagewise-2.2.0-debug.apk](https://github.com/shawnshi/Pagewise/releases/download/v2.2.0/Pagewise-2.2.0-debug.apk) |
+| Release | 知页 | `io.pagewise.reader` | [Pagewise-2.3.0-release.apk](https://github.com/shawnshi/Pagewise/releases/download/v2.3.0/Pagewise-2.3.0-release.apk) |
+| Debug | 知页 2.3.0 测试版 | `io.pagewise.reader.debug` | [Pagewise-2.3.0-debug.apk](https://github.com/shawnshi/Pagewise/releases/download/v2.3.0/Pagewise-2.3.0-debug.apk) |
 
 ### 校验信息 (SHA-256)
-- **Release APK (`Pagewise-2.2.0-release.apk`)**:
-  `54d1f4421bf8174704327bcb526403de30a68ce645e4de6f04e1c38c67926f6f`
-- **Debug APK (`Pagewise-2.2.0-debug.apk`)**:
-  `0e7865ca50954e071c00b248f7adfab03bef0c9acae89d991622a9c8443d1902`
+- **Release APK (`Pagewise-2.3.0-release.apk`)**:
+  `2d1b807d929c24991316f633d22e03bd68b8887858690799e24a7d90001abb00`
+- **Debug APK (`Pagewise-2.3.0-debug.apk`)**:
+  `9fb019e901077b0b76975afe1ccad82f1b3321f52a6b4a12b8941d129a4db872`
 
-### 2.2.0 核心演进：AI 原生个人阅读管理器、二级著录元数据补全与双平面视觉统一
+### 2.3.0 核心演进：AI 原生个人阅读管理器、二级著录元数据补全与供应链精简
 
-本版在 2.1.0 视觉降噪的基础上，完成了向 AI 原生个人阅读管理器的全链路演进与双平面交互对齐：
+本版在 2.2.0 双平面视觉统一的基础上，完成了向 AI 原生个人阅读管理器的全链路演进、原生层交互对齐与底层依赖瘦身：
 
 1. **二级渐进著录元数据补全与 CAS 快照校验**：在书籍详情页支持对作者、出版社、出版日期、语种发起“第一级：开放书目并发检索（OpenLibrary / Google Books / 豆瓣读书 API，支持 `AbortSignal` 超时取消）”与“第二级：AI 著录推理补全”；提供「仅补全空白字段」与「覆盖已有字段」双模式、墨水屏黑白反色差异徽章预览及 IndexedDB / SQLite 原子快照一致性（CAS）校验。
 2. **AI 原生阅读管理闭环（P0–P2）**：

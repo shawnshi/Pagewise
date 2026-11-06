@@ -1,6 +1,6 @@
 [package]
 name = "pagewise"
-version = "2.2.0"
+version = "2.3.0"
 description = "面向文石 Note X3 Pro 的个人 EPUB 阅读器。专注阅读，随页理解。"
 authors = ["云中江树"]
 license = "AGPL-3.0-or-later"
@@ -21,6 +21,7 @@ serde_json = "1.0"
 serde = { version = "1.0", features = ["derive"] }
 log = "0.4"
 tauri = { version = "2.11.5", features = [] }
+tauri-plugin-log = "2"
 tauri-plugin-fs = "2"
 tauri-plugin-http = { version = "2", features = ["socks"] }
 tauri-plugin-dialog = "2"
