@@ -146,7 +146,7 @@ class SQLiteDatabase private constructor(path:String):Closeable{
 }
 `)
   put('DatabaseErrorHandler.kt', 'package android.database\nfun interface DatabaseErrorHandler { fun onCorruption(db:android.database.sqlite.SQLiteDatabase) }\n')
-  put('SqlBridgeOutsideScope.kt', 'package io.pagewise.reader\nclass NativeSqlDatabase(context:android.content.Context,root:String?):java.io.Closeable { fun command(action:String,payload:org.json.JSONObject):org.json.JSONObject=throw UnsupportedOperationException("SQL adapter is exercised by the real API32 harness, not this state-only host"); override fun close(){} }\n')
+  put('SqlBridgeOutsideScope.kt', 'package io.pagewise.reader\nclass NativeSqlDatabase(context:android.content.Context,root:String?,initializing:Boolean=false):java.io.Closeable { fun command(action:String,payload:org.json.JSONObject):org.json.JSONObject=throw UnsupportedOperationException("SQL adapter is exercised by the real API32 harness, not this state-only host"); override fun close(){} }\n')
   put('App.kt', 'package android.app\nclass Activity(dataDir:java.io.File):android.content.Context(dataDir)\n')
   put('Annotations.kt', 'package app.tauri.annotation\nannotation class Command\nannotation class TauriPlugin\n')
   put('Plugin.kt', `package app.tauri.plugin

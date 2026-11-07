@@ -15,6 +15,25 @@ internal class CanonicalDatabaseFailure(
 ) : IOException(code, cause)
 
 internal object CanonicalDatabase {
+    const val CANONICAL_DB_NAME = "pagewise.db"
+    const val LEGACY_DB_NAME = "lightread.db"
+
+    @Synchronized
+    fun resolveDatabaseFile(directory: File): File {
+        val target = File(directory, CANONICAL_DB_NAME)
+        val legacy = File(directory, LEGACY_DB_NAME)
+        if (!target.exists() && legacy.exists()) {
+            for (suffix in listOf("", "-wal", "-shm", "-journal")) {
+                val src = File(directory, "$LEGACY_DB_NAME$suffix")
+                val dst = File(directory, "$CANONICAL_DB_NAME$suffix")
+                if (src.exists()) {
+                    src.renameTo(dst)
+                }
+            }
+        }
+        return target
+    }
+
     private val quarantined = ConcurrentHashMap.newKeySet<String>()
     private val header = "SQLite format 3\u0000".toByteArray(Charsets.US_ASCII)
 

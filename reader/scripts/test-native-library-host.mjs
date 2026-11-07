@@ -27,7 +27,7 @@ test('native library repository: shared-schema SQLite, CAS, retained files, clas
   const schemaSource = readFileSync(join(root, 'src/storage/tauri.ts'), 'utf8')
   const start = schemaSource.indexOf('CREATE TABLE IF NOT EXISTS books')
   const schema = schemaSource.slice(start, schemaSource.indexOf('`)', start))
-  const dbPath = join(custom, 'lightread.db')
+  const dbPath = join(custom, 'pagewise.db')
   const db = new DatabaseSync(dbPath)
   for (const { name } of db.prepare("SELECT name FROM sqlite_master WHERE type='table' AND name NOT LIKE 'sqlite_%'").all()) db.exec(`DROP TABLE "${name}"`)
   db.exec(schema)
@@ -167,7 +167,7 @@ fun main(args:Array<String>){
  expect("migration_not_initialized"){NativeLibraryRepository(Context(context.dataDir,null))}
  expect("unsupported_library_root"){NativeLibraryRepository(Context(context.dataDir,"content:synthetic"))}
  expect("library_database_missing"){NativeLibraryRepository(Context(context.dataDir,""))}
- check(!File(context.dataDir,"lightread.db").exists())
+ check(!File(context.dataDir,"pagewise.db").exists())
  NativeLibraryRepository(context).use{repo->
   fun cmd(a:String,p:JSONObject=JSONObject())=repo.command(a,p)
   fun book(id:String)=cmd("book",JSONObject().put("id",id)).getJSONObject("book")
@@ -194,7 +194,7 @@ fun main(args:Array<String>){
   check(cmd("books",JSONObject().put("query","%' OR 1=1 --")).getLong("total")==0L)
   val original=book("early");check(original.isNull("publisher")&&original.isNull("classification"))
   // Separate connection simulates the reader updating progress after the management draft was opened.
-  android.database.sqlite.SQLiteDatabase.openDatabase(File(custom,"lightread.db").path,null,0).use{it.execSQL("UPDATE books SET progress=.9,location='new-cfi',reading_seconds=45 WHERE id='early'")}
+  android.database.sqlite.SQLiteDatabase.openDatabase(File(custom,"pagewise.db").path,null,0).use{it.execSQL("UPDATE books SET progress=.9,location='new-cfi',reading_seconds=45 WHERE id='early'")}
   val edited=patch("early",original,JSONObject().put("title","Edited title")).getJSONObject("book")
   check((edited.get("progress") as Number).toDouble()==.9&&edited.getString("location")=="new-cfi"&&edited.getLong("readingSeconds")==45L)
   expect("book_conflict"){patch("early",original,JSONObject().put("title","Stale title"))}
@@ -261,9 +261,9 @@ fun main(args:Array<String>){
  }
  check(HostSql.opens==HostSql.closes)
  // Constructor failure closes its connection; no table recreation/migration takes place.
- android.database.sqlite.SQLiteDatabase.openDatabase(File(custom,"lightread.db").path,null,0).use{it.execSQL("UPDATE native_core_migration SET state='staging' WHERE id=1")}
+ android.database.sqlite.SQLiteDatabase.openDatabase(File(custom,"pagewise.db").path,null,0).use{it.execSQL("UPDATE native_core_migration SET state='staging' WHERE id=1")}
  expect("native_state_not_ready"){NativeLibraryRepository(context)}
- android.database.sqlite.SQLiteDatabase.openDatabase(File(custom,"lightread.db").path,null,0).use{it.execSQL("UPDATE native_core_migration SET state='complete' WHERE id=1");it.execSQL("DROP TABLE annotations")}
+ android.database.sqlite.SQLiteDatabase.openDatabase(File(custom,"pagewise.db").path,null,0).use{it.execSQL("UPDATE native_core_migration SET state='complete' WHERE id=1");it.execSQL("DROP TABLE annotations")}
  expect("library_schema_mismatch"){NativeLibraryRepository(context)}
  check(HostSql.opens==HostSql.closes)
  println("PASS: SQLite CAS, rollback, lost commit ACK, bounded pages/search, raw/manual classifications, source guard and file retention")
@@ -307,6 +307,6 @@ fun main(args:Array<String>){
   assert.equal(parseFixtureJson(finalDb.prepare("SELECT source_ref FROM books WHERE id='linked'").get().source_ref).documentId, 'doc')
   finalDb.close()
   assert.ok(existsSync(sourceFile) && existsSync(coverFile))
-  assert.equal(existsSync(join(data, 'lightread.db')), false)
+  assert.equal(existsSync(join(data, 'pagewise.db')), false)
   writeFileSync(join(out, 'summary.json'), JSON.stringify({ status: 'passed', oracle: 'production Kotlin + real Python SQLite, cross-checked with actual readingLog.ts and readingStats.ts', totalSeconds: statistics.totalSeconds, activeDays: statistics.activeDays, output }, null, 2))
 })

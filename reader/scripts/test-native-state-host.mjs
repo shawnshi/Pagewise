@@ -97,7 +97,7 @@ test('actual NativeStateStore and NativeStatePlugin compile; real SQLite state c
     mkdirSync(directory, { recursive: true })
     const library = custom ? join(directory, 'custom-library') : directory
     mkdirSync(library, { recursive: true })
-    const f = { directory, library, database: join(library, 'lightread.db'), root: custom ? library : '' }
+    const f = { directory, library, database: join(library, 'pagewise.db'), root: custom ? library : '' }
     f.files = [
       ['legacy-settings.json', rawSettings],
       ['legacy-identity.json', rawIdentity],
@@ -277,7 +277,7 @@ test('actual NativeStateStore and NativeStatePlugin compile; real SQLite state c
       await failure(f, 'status', {}, 'library_root_conflict', { root: '' })
       renameSync(f.database, f.database + '.preserved')
       await failure(f, 'status', {}, 'library_database_missing', { root: undefined })
-      eq(existsSync(f.database), false); eq(existsSync(join(f.directory, 'lightread.db')), false)
+      eq(existsSync(f.database), false); eq(existsSync(join(f.directory, 'pagewise.db')), false)
       const normal = fixture('canonical-missing')
       await ready(normal)
       renameSync(normal.database, normal.database + '.preserved')

@@ -13,7 +13,7 @@
 本阶段保留 Vue 页面和现有书库，不另建书籍、批注或分类存储。权威代码位于 `reader/src-tauri/android/`；生成 Android 工程由 `prepare-android-project.mjs` 原子同步。
 
 - `NativeBookMetadata.kt` 读取 EPUB OPF、MOBI/EXTH/KF8、TXT、Markdown；`NativePdfMetadata.kt` 使用 PDFium 读 PDF 书目，使用 Android `PdfRenderer` 提取首页面封面。封面失败可独立降级，不能把书籍解析、目录权限或数据库错误伪装成空结果。
-- `NativeBookImporter.kt` 与 `NativeImportDatabase.kt` 在现有 `application.dataDir/lightread.db` 中逐书提交，仅增加 `native_import_batches` 回执表。已有书籍只按引用 CAS 更新文件关联和可用性，不覆盖手动分类、标签、批注或阅读历史；只有无扫描错误的完整目录结果才可标记未见文件缺失。自定义书库路径明确拒绝，不偷偷改用默认库。
+- `NativeBookImporter.kt` 与 `NativeImportDatabase.kt` 在现有 `application.dataDir/pagewise.db` 中逐书提交，仅增加 `native_import_batches` 回执表。已有书籍只按引用 CAS 更新文件关联和可用性，不覆盖手动分类、标签、批注或阅读历史；只有无扫描错误的完整目录结果才可标记未见文件缺失。自定义书库路径明确拒绝，不偷偷改用默认库。
 - `NativeFileJobs.kt` 复用既有前台服务，`index`、`import` 共用单写入 lane。提交期取消/超时必须等提交结果落定；SQLite 回执与逐书写入同事务，提交结果未知保留恢复入口。
 - `nativeBookImport.ts` 在上传前保存批次身份、已分配暂存路径和输入位置，重载后复用同一 SQL 批次，而非重新生成 ID、重新上传整批。最后一本提交后即保存可恢复的完成回执；原生任务 JSON 尚未写成功的崩溃窗口通过请求指纹和 SQLite 对账。中断、数据库错误及提交结果未知的恢复输入不再被观察回执的一小时 TTL 删除；仍须考虑 Android 自行回收 cache 的可能性。提交结果未知在释放提交保护的同一临界区落定，优先于提交期间及 catch/finally 间隙的新取消意图。
 - 上传前即预留字节，失败或丢失响应的上传仍计入单批 1 GiB 额度。`ExportPlugin.kt` 登记排队和执行中的上传路径；原生清理与入库读取先等这些所有者物理结束，再封闭 token，迟到 IPC 不得重新创建已释放路径。进程内跟踪最多 16384 个路径，满额明确报资源限制。改名后的 inspect 使用完整请求身份，并保留旧任务的取消／释放回执，不能把新文件名塞进旧任务。

@@ -40,7 +40,7 @@ class NativeStatePlugin(
                                 .orEmpty()
                     val directory = if (root.isEmpty()) context.dataDir else java.io.File(root)
                     val result =
-                        CanonicalDatabase.protect(java.io.File(directory, "lightread.db")) {
+                        CanonicalDatabase.protect(CanonicalDatabase.resolveDatabaseFile(directory)) {
                             if (action.startsWith("sql.")) {
                                 NativeSqlDatabase(context, requestedRoot, action == "sql.initialize").use { it.command(action, payload) }
                             } else {

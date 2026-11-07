@@ -154,7 +154,7 @@ fun main(args: Array<String>) {
     fun raw(
         ctx: BootstrapContext,
         action: (SQLiteDatabase) -> Unit,
-    ) = CanonicalDatabase.open(File(ctx.dataDir, "lightread.db")).use(action)
+    ) = CanonicalDatabase.open(CanonicalDatabase.resolveDatabaseFile(ctx.dataDir)).use(action)
 
     fun tableNames(ctx: BootstrapContext): Set<String> {
         val names = mutableSetOf<String>()
@@ -282,7 +282,7 @@ fun main(args: Array<String>) {
     record("incomplete schema request rolls back") { rejected(migrated("incomplete"), JSONArray().put(schema.getString(0))) }
     record("initialized missing database is not recreated") {
         val ctx = migrated("missing")
-        val file = File(ctx.dataDir, "lightread.db")
+        val file = CanonicalDatabase.resolveDatabaseFile(ctx.dataDir)
         check(file.delete())
         check(runCatching { initialize(ctx) }.isFailure)
         check(!file.exists())

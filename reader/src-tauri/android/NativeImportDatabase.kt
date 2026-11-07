@@ -11,7 +11,7 @@ internal class NativeImportDatabase(
     context: Context,
 ) : Closeable {
     private val database: SQLiteDatabase
-    private val canonicalFile = File(context.dataDir, "lightread.db")
+    private val canonicalFile = CanonicalDatabase.resolveDatabaseFile(context.dataDir)
 
     init {
         val path = canonicalFile
@@ -219,7 +219,7 @@ internal class NativeImportDatabase(
             jobId: String,
             expectedHash: String? = null,
         ): JSONObject? {
-            val file = File(context.dataDir, "lightread.db")
+            val file = CanonicalDatabase.resolveDatabaseFile(context.dataDir)
             if (!file.isFile) return null
             return CanonicalDatabase.protect(file) {
                 CanonicalDatabase.open(file, readOnly = true).use { db ->

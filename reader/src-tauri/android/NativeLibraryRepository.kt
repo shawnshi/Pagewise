@@ -32,7 +32,7 @@ internal class NativeLibraryRepository(
             if (root.startsWith("content:") || (root.isNotEmpty() && !File(root).isAbsolute)) fail("unsupported_library_root")
             directory = (if (root.isEmpty()) context.dataDir else File(root)).canonicalFile
             if (!directory.isDirectory) fail("library_root_unavailable")
-            val file = File(directory, "lightread.db")
+            val file = CanonicalDatabase.resolveDatabaseFile(directory)
             if (!file.isFile) fail("library_database_missing")
             opened = CanonicalDatabase.open(file)
             database = opened

@@ -33,7 +33,7 @@ internal class NativeSqlDatabase(
         defaultRoot = requested.isEmpty()
         directory = if (defaultRoot) context.dataDir else File(requested).canonicalFile
         if (!directory.isDirectory) fail("library_root_unavailable")
-        val file = File(directory, "lightread.db")
+        val file = CanonicalDatabase.resolveDatabaseFile(directory)
         newlyCreated = located == null && defaultRoot && !file.exists()
         database = CanonicalDatabase.open(file, create = newlyCreated)
         try {

@@ -724,10 +724,11 @@ export class TauriStorage implements LibraryStorage {
 }
 
 
-/** 目标文件夹是否已有轻阅书库 */
+/** 目标文件夹是否已有知页书库 */
 export async function hasLibraryAt(root: string): Promise<boolean> {
   const fs = await import('@tauri-apps/plugin-fs')
-  return fs.exists(`${root.replace(/\/+$/, '')}/lightread.db`)
+  const base = root.replace(/\/+$/, '')
+  return (await fs.exists(`${base}/pagewise.db`)) || (await fs.exists(`${base}/lightread.db`))
 }
 
 /**
@@ -754,11 +755,15 @@ export async function migrateLibraryTo(
   }
 
   onProgress?.('复制索引数据库…')
-  for (const dbFile of ['lightread.db', 'lightread.db-wal', 'lightread.db-shm']) {
-    const [src, opts] = srcDbLoc(dbFile)
+  const primaryDbExists = await fs.exists(srcDbLoc('pagewise.db')[0], srcDbLoc('pagewise.db')[1])
+  const prefix = primaryDbExists ? 'pagewise.db' : 'lightread.db'
+  for (const suffix of ['', '-wal', '-shm']) {
+    const srcName = `${prefix}${suffix}`
+    const dstName = `pagewise.db${suffix}`
+    const [src, opts] = srcDbLoc(srcName)
     if (await fs.exists(src, opts)) {
       const bytes = await fs.readFile(src, opts)
-      await fs.writeFile(`${root}/${dbFile}`, bytes)
+      await fs.writeFile(`${root}/${dstName}`, bytes)
     }
   }
 

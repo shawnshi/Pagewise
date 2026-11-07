@@ -14,7 +14,7 @@ test('native batch end-to-end: actual SQLite, metadata, publication, partial fai
   const source = readFileSync(join(root, 'src/storage/tauri.ts'), 'utf8')
   const start = source.indexOf('CREATE TABLE IF NOT EXISTS books')
   const schema = source.slice(start, source.indexOf('`)', start))
-  const db = new DatabaseSync(join(fixture, 'data/lightread.db'))
+  const db = new DatabaseSync(join(fixture, 'data/pagewise.db'))
   db.exec(schema)
   const migrations = [...source.matchAll(/"(ALTER TABLE books[^"\r\n]+)"/g), ...source.matchAll(/'(ALTER TABLE books[^'\r\n]+)'/g)].map(m => m[1])
   for (const sql of migrations) if (!db.prepare('PRAGMA table_info(books)').all().some(column => column.name === sql.split(' ')[5])) db.exec(sql)
@@ -414,7 +414,7 @@ fun main(args:Array<String>){
   assert.match(output, /HOST_PASS assertions=/)
   console.log(output)
   // A second independent connection verifies the final persisted DB, not a mocked write list.
-  const after = new DatabaseSync(join(fixture, 'data/lightread.db'))
+  const after = new DatabaseSync(join(fixture, 'data/pagewise.db'))
   assert.equal(after.prepare("SELECT text FROM annotations WHERE id='note'").get().text, 'KEEP NOTE')
   assert.equal(after.prepare("SELECT count(*) AS n FROM books WHERE source_ref IS NULL").get().n, 10)
   after.close()

@@ -83,7 +83,7 @@
 | 原生管理界面 | Kotlin、Android Views | 藏书管理、阅读状态流转、详情卡片、笔记归档与设置控制 |
 | 正文阅读与排版服务 | Vue 3、TypeScript、Vite、foliate-js | EPUB/PDF 正文渲染、双语混排、阅读器视窗与排版预设 |
 | 应用容器与本地桥接 | Tauri 2、Rust、NDK aarch64 | Android 平台生命周期、底层 SQLite、文件 I/O 与安全 IPC |
-| 存储与系统能力 | SQLite (`lightread.db`)、Android SAF、Onyx SDK 桥接 | 统一本地数据库、只读目录监测、TTS / MediaSession 调度 |
+| 存储与系统能力 | SQLite (`pagewise.db`)、Android SAF、Onyx SDK 桥接 | 统一本地数据库、只读目录监测、TTS / MediaSession 调度 |
 
 ### 项目结构
 

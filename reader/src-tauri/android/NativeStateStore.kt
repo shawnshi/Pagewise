@@ -128,7 +128,7 @@ internal class NativeStateStore(
         }
         val directory = if (root.isEmpty()) context.dataDir else File(root).canonicalFile
         if (!directory.isDirectory) throw NativeStateFailure("library_root_unavailable")
-        val file = File(directory, "lightread.db")
+        val file = CanonicalDatabase.resolveDatabaseFile(directory)
         if ((located != null || root.isNotEmpty()) && !file.isFile) throw NativeStateFailure("library_database_missing")
         database = CanonicalDatabase.open(file, create = located == null && root.isEmpty() && !file.exists())
         try {

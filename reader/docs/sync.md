@@ -165,7 +165,7 @@ SyncDoc 增加可选字段 `readingLog: { [device]: { [day]: { [hash]: 秒 } } }
 
 - 每个请求都有整体超时：普通请求（PROPFIND、读同步文档、建目录）60 秒，下载书籍文件 15 分钟，上传 60 秒 + 每 MB 10 秒（上限 30 分钟）。超时会中止请求并报「连接云端超时」（`sync.err.timeout`），不会让同步一直挂着、挡住之后的自动同步。
 - 桌面 / 安卓上的 PUT（书籍文件、封面、同步文档）不走 `@tauri-apps/plugin-http`（它把请求体转成数字数组再 JSON 序列化走 IPC，整本书上传极慢、内存暴涨），改走原生命令 `http_upload`（`src-tauri/src/http_upload.rs`，前端 `src/services/nativeUpload.ts`）：
-  - 书籍文件只传书库里的相对路径（`LibraryStorage.getBookFileRef`，`books/<id>.<扩展名>`，根目录为自定义书库或应用数据目录），由 Rust 直接读盘上传，书的内容不经过 WebView。Rust 侧只允许 `books/`、`covers/` 下的文件，自定义根目录必须含 `lightread.db`。读盘失败时退回读进 JS 再上传。
+  - 书籍文件只传书库里的相对路径（`LibraryStorage.getBookFileRef`，`books/<id>.<扩展名>`，根目录为自定义书库或应用数据目录），由 Rust 直接读盘上传，书的内容不经过 WebView。Rust 侧只允许 `books/`、`covers/` 下的文件，自定义根目录必须含 `pagewise.db`。读盘失败时退回读进 JS 再上传。
   - 其他请求体走 Tauri 2 的原始二进制 IPC（Android 上 Tauri 只有 postMessage 通道，仍是数字数组，但封面和同步文档都不大）。
   - 连接超时 30 秒，整体超时同上；代理沿用设置页的「HTTP 代理」（http / https / socks5）。
   - 其余请求（PROPFIND、GET、MKCOL）要读完整响应，仍走 plugin-http。

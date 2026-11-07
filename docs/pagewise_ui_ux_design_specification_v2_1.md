@@ -12,7 +12,7 @@
 
 依据项目最新的 Android 原生页面架构规范（`android-native-pages.md`）与 E-Ink UI 改造计划（`eink-ui-plan-20261023.md`），Pagewise 摒弃了早期全量依赖重型 WebView 启动的单体模式，确立了**“原生管理层先行渲染 + Web 阅读核心层按需挂载”**的混合架构边界：
 
-- **Android 原生管理层（Kotlin Native Pages）**：涵盖书架（Bookshelf）、在读列表（Reading List）、书籍详情（Book Detail）、全部笔记（All Notes）、阅读统计（Reading Stats）、系统设置（Settings）及用户手册（User Manual）。所有原生页面直接读写底层共享 SQLite 数据库（`lightread.db`）与 Android SAF（Storage Access Framework）授权目录，通过静态 Splash 直达原生列表，消除 WebView 冷启动白屏，显著缩短首帧显示时间（TTID）与完整绘制时间（TTFD）。
+- **Android 原生管理层（Kotlin Native Pages）**：涵盖书架（Bookshelf）、在读列表（Reading List）、书籍详情（Book Detail）、全部笔记（All Notes）、阅读统计（Reading Stats）、系统设置（Settings）及用户手册（User Manual）。所有原生页面直接读写底层共享 SQLite 数据库（`pagewise.db`）与 Android SAF（Storage Access Framework）授权目录，通过静态 Splash 直达原生列表，消除 WebView 冷启动白屏，显著缩短首帧显示时间（TTID）与完整绘制时间（TTFD）。
 - **Web 阅读引擎层（Vue 3 + Tauri 2 + Foliate-js / PDFium / MuPDF）**：仅在打开具体书籍进入 EPUB 流式阅读（`ReadingView.vue`）或 PDF 文献阅读（`PdfReaderView.vue`）时挂载单实例 Web 视图。阅读层通过 Native-Web IPC 桥接器调用 `OnyxInkLayer.vue`，接管文石（Onyx BOOX）底层 EPD 刷新控制与原笔迹手写硬件直通接口。
 
 ### 1.2 五大核心设计原则（E-Ink Human Interface Principles）
