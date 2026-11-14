@@ -52,6 +52,8 @@ export interface ReaderLayoutInput {
   portrait: boolean
   /** 大字 / 歌词等阅读模式要求单栏 */
   forceSingleColumn?: boolean
+  /** 墨水屏模式优先整页翻页，避免竖屏强行切滚动导致半行裁切与拖动残影 */
+  einkActive?: boolean
 }
 
 export interface ReaderLayout {
@@ -63,7 +65,7 @@ export interface ReaderLayout {
 
 /** 重排书 (EPUB / TXT …) 的生效排版 */
 export function effectiveReaderLayout(input: ReaderLayoutInput): ReaderLayout {
-  const locked = input.portraitScroll && input.portrait
+  const locked = input.portraitScroll && input.portrait && !input.einkActive
   return {
     flow: locked ? 'scrolled' : input.flow,
     maxColumnCount: locked || input.forceSingleColumn ? 1 : input.maxColumnCount,

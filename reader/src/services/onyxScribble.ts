@@ -104,13 +104,52 @@ export function strokeToSvgPath(stroke: OnyxInkStroke, widthPx = 1000, heightPx 
     const y = (pts[0].y * heightPx).toFixed(1)
     return `M ${x} ${y} L ${x} ${y}`
   }
-  const parts: string[] = []
-  for (let i = 0; i < pts.length; i++) {
-    const x = (pts[i].x * widthPx).toFixed(1)
-    const y = (pts[i].y * heightPx).toFixed(1)
-    parts.push(i === 0 ? `M ${x} ${y}` : `L ${x} ${y}`)
+  if (pts.length === 2) {
+    const x0 = (pts[0].x * widthPx).toFixed(1)
+    const y0 = (pts[0].y * heightPx).toFixed(1)
+    const x1 = (pts[1].x * widthPx).toFixed(1)
+    const y1 = (pts[1].y * heightPx).toFixed(1)
+    return `M ${x0} ${y0} L ${x1} ${y1}`
   }
+  const parts: string[] = [`M ${(pts[0].x * widthPx).toFixed(1)} ${(pts[0].y * heightPx).toFixed(1)}`]
+  for (let i = 1; i < pts.length - 1; i++) {
+    const cx = pts[i].x * widthPx
+    const cy = pts[i].y * heightPx
+    const mx = ((cx + pts[i + 1].x * widthPx) / 2).toFixed(1)
+    const my = ((cy + pts[i + 1].y * heightPx) / 2).toFixed(1)
+    parts.push(`Q ${cx.toFixed(1)} ${cy.toFixed(1)} ${mx} ${my}`)
+  }
+  const last = pts[pts.length - 1]
+  parts.push(`L ${(last.x * widthPx).toFixed(1)} ${(last.y * heightPx).toFixed(1)}`)
   return parts.join(' ')
+}
+
+export function findIntersectingStrokeIds(
+  strokes: OnyxInkStroke[],
+  eraserPoints: OnyxNormPoint[],
+  radiusNorm = 0.025,
+): Set<string> {
+  const hitIds = new Set<string>()
+  if (!eraserPoints.length || !strokes.length) return hitIds
+  const r2 = radiusNorm * radiusNorm
+  for (const stroke of strokes) {
+    for (const sp of stroke.points) {
+      let hit = false
+      for (const ep of eraserPoints) {
+        const dx = sp.x - ep.x
+        const dy = sp.y - ep.y
+        if (dx * dx + dy * dy <= r2) {
+          hit = true
+          break
+        }
+      }
+      if (hit) {
+        hitIds.add(stroke.id)
+        break
+      }
+    }
+  }
+  return hitIds
 }
 
 export function eraseIntersectingStrokes(

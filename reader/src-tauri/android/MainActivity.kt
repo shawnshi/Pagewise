@@ -32,6 +32,12 @@ class MainActivity : TauriActivity() {
 
     internal fun managementWebView(): WebView? = nativeBackView
 
+    internal fun onyxBridgeInstance(): OnyxSdkBridge? = onyxBridge
+
+    internal fun repaintManagementNow(mode: String = "gc") {
+        onyxBridge?.repaintScreen(nativeBackView, mode)
+    }
+
     internal fun attachManagementSurface(surface: NativeManagementSurface) {
         check(nativeManagementSurface == null || nativeManagementSurface === surface)
         nativeManagementSurface = surface
@@ -429,6 +435,17 @@ class MainActivity : TauriActivity() {
             targetWidth: Int,
             targetHeight: Int,
         ): String = onyxBridge?.renderNativePdfPageDataUrl(bookRelPath, pageNumber, targetWidth, targetHeight) ?: ""
+
+        @JavascriptInterface
+        fun lookupSystemDictionary(word: String): Boolean = onyxBridge?.lookupSystemDictionary(word) ?: false
+
+        @JavascriptInterface
+        fun updateSleepCover(
+            title: String,
+            author: String,
+            progressPercent: Int,
+            coverPath: String,
+        ): String = onyxBridge?.generateSleepCover(title, author, progressPercent, coverPath) ?: ""
 
         @JavascriptInterface
         fun get(): String = insetsJson

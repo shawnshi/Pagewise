@@ -10,6 +10,7 @@ import android.text.InputType
 import android.text.TextWatcher
 import android.view.View
 import android.view.ViewGroup
+import android.view.inputmethod.BaseInputConnection
 import android.view.inputmethod.EditorInfo
 import android.widget.Button
 import android.widget.CheckBox
@@ -70,6 +71,7 @@ internal class NativeLibraryUiState {
     var reading = JSONObject()
     var mode = ""
     var tab = "reading"
+    var viewMode = "list"
     var manage = false
     var returnToId = ""
     var outcomeUnknown = false
@@ -92,6 +94,7 @@ internal class NativeLibraryPanel(
     private val onFailure: () -> Unit = {},
     private val onSummary: (String?) -> Unit = {},
     private val onRecommendations: (() -> Unit)? = null,
+    private val makeGridCard: ((JSONObject, () -> Unit, () -> Unit) -> View)? = null,
 ) {
     private val main = Handler(Looper.getMainLooper())
     private val root = column()
@@ -363,7 +366,9 @@ internal class NativeLibraryPanel(
                     clear.visibility = if (s.isNullOrEmpty()) View.GONE else View.VISIBLE
                     keywordSearch.edit(s?.toString() ?: "")
                     main.removeCallbacks(searchCommit)
-                    main.postDelayed(searchCommit, 250)
+                    // Defer search refresh while IME is still composing (e.g. Pinyin) to avoid E-Ink flicker.
+                    if (s is android.text.Spannable && BaseInputConnection.getComposingSpanStart(s) >= 0) return
+                    main.postDelayed(searchCommit, 550)
                 }
 
                 override fun afterTextChanged(s: Editable?) = Unit
@@ -812,6 +817,100 @@ internal class NativeLibraryPanel(
                     },
                 )
             }
+            val bg = if (ink == android.graphics.Color.BLACK) android.graphics.Color.WHITE else android.graphics.Color.BLACK
+            val facetsObj = result.optJSONObject("facets")
+            val viewStrip =
+                NativeActionFlow(activity).apply {
+                    layoutParams =
+                        LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT).apply {
+                            topMargin = NativeUi.dp(activity, 2)
+                            bottomMargin = NativeUi.dp(activity, 6)
+                        }
+                }
+            for ((modeKey, modeLabel) in listOf(
+                "list" to tr("列表", "List"),
+                "two-col" to tr("双列", "2-Col"),
+                "grid" to tr("封面网格", "Grid"),
+            )) {
+                viewStrip.addView(
+                    button(modeLabel) {
+                        if (state.viewMode != modeKey) {
+                            state.viewMode = modeKey
+                            draw(current, epoch)
+                            repaint()
+                        }
+                    }.apply {
+                        NativeUi.styleTab(this, state.viewMode == modeKey, ink, bg)
+                        minHeight = NativeUi.dp(activity, 36)
+                        minimumHeight = NativeUi.dp(activity, 36)
+                        textSize = 12f
+                    },
+                )
+            }
+            if (facetsObj != null) {
+                viewStrip.addView(
+                    button(tr("排序", "Sort")) {
+                        choose(
+                            tr("排序", "Sort"),
+                            listOf(
+                                "added" to tr("加入时间", "Added"),
+                                "recent" to tr("最近阅读", "Last read"),
+                                "published" to tr("出版时间", "Publication"),
+                                "title" to tr("书名", "Title"),
+                                "author" to tr("作者", "Author"),
+                                "progress" to tr("进度", "Progress"),
+                            ),
+                        ) {
+                            session.put("sortBy", it)
+                            filtersChanged()
+                        }
+                    }.apply {
+                        minHeight = NativeUi.dp(activity, 36)
+                        minimumHeight = NativeUi.dp(activity, 36)
+                        textSize = 12f
+                    },
+                )
+                viewStrip.addView(
+                    button(tr("筛选", "Filter")) { advanced(facetsObj) }.apply {
+                        minHeight = NativeUi.dp(activity, 36)
+                        minimumHeight = NativeUi.dp(activity, 36)
+                        textSize = 12f
+                    },
+                )
+            }
+            root.addView(viewStrip)
+
+            val activeChips = collectActiveFilterChips()
+            if (activeChips.isNotEmpty()) {
+                val chipFlow =
+                    NativeActionFlow(activity).apply {
+                        layoutParams =
+                            LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT).apply {
+                                bottomMargin = NativeUi.dp(activity, 8)
+                            }
+                    }
+                for ((chipLabel, clearAction) in activeChips) {
+                    chipFlow.addView(
+                        button("$chipLabel ×") { clearAction() }.apply {
+                            minHeight = NativeUi.dp(activity, 34)
+                            minimumHeight = NativeUi.dp(activity, 34)
+                            textSize = 12f
+                            setPadding(NativeUi.dp(activity, 10), NativeUi.dp(activity, 2), NativeUi.dp(activity, 10), NativeUi.dp(activity, 2))
+                        },
+                    )
+                }
+                chipFlow.addView(
+                    NativeUi.primaryButton(activity, tr("清空筛选", "Reset filters"), ink, bg) {
+                        clearAllFilters()
+                    }.apply {
+                        minHeight = NativeUi.dp(activity, 34)
+                        minimumHeight = NativeUi.dp(activity, 34)
+                        textSize = 12f
+                        setPadding(NativeUi.dp(activity, 10), NativeUi.dp(activity, 2), NativeUi.dp(activity, 10), NativeUi.dp(activity, 2))
+                    },
+                )
+                root.addView(chipFlow)
+            }
         }
         val items = result.getJSONArray("items")
         if (state.manage) management(result, items)
@@ -856,10 +955,36 @@ internal class NativeLibraryPanel(
                     setTextColor(NativeUi.secondary(bg))
                 },
             )
+            if (!emptyLibrary && !reading) {
+                emptyCard.addView(
+                    NativeUi.primaryButton(activity, tr("清除全部筛选", "Clear all filters"), ink, bg) {
+                        clearAllFilters()
+                    }.apply {
+                        layoutParams =
+                            LinearLayout.LayoutParams(ViewGroup.LayoutParams.WRAP_CONTENT, ViewGroup.LayoutParams.WRAP_CONTENT).apply {
+                                topMargin = NativeUi.dp(activity, 10)
+                            }
+                    },
+                )
+            }
             root.addView(emptyCard)
         }
         val metadataQueue = java.util.ArrayDeque<() -> Unit>()
         val advance: () -> Unit = { if (!closed && token == epoch && metadataQueue.isNotEmpty()) metadataQueue.removeFirst().invoke() }
+        val useGridContainer = !reading && state.viewMode in listOf("grid", "two-col")
+        val itemHost: ViewGroup =
+            if (useGridContainer) {
+                NativeBookGridLayout(
+                    activity,
+                    minCellDp = if (state.viewMode == "grid") 160 else 340,
+                    maxColumns = if (state.viewMode == "grid") 4 else 2,
+                    spacingDp = 12,
+                ).also { root.addView(it, LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT)) }
+            } else {
+                root
+            }
+        val cardBuilder: (JSONObject, () -> Unit, () -> Unit) -> View =
+            if (!reading && state.viewMode == "grid" && makeGridCard != null) makeGridCard else makeCard
         for (i in 0 until items.length()) {
             val view = items.getJSONObject(i)
             val id = view.getString("id")
@@ -883,7 +1008,7 @@ internal class NativeLibraryPanel(
                 }
             wrapper.addView(check)
             val placeholder =
-                makeCard(view, {
+                cardBuilder(view, {
                     if (!view.optBoolean("supported", true)) {
                         status.text =
                             tr("此旧格式已停止阅读支持；元数据保留。", "This legacy format is no longer readable; metadata is retained.")
@@ -892,7 +1017,7 @@ internal class NativeLibraryPanel(
                     }
                 }, { if (state.manage) check.isChecked = !check.isChecked else remember(id) { openDetails(view) } })
             wrapper.addView(placeholder)
-            root.addView(wrapper)
+            itemHost.addView(wrapper)
             metadataQueue.add {
                 ask("library.book", JSONObject().put("id", id)) { metadata, error ->
                     if (token != epoch) return@ask
@@ -911,7 +1036,7 @@ internal class NativeLibraryPanel(
                             ).put("effectiveReadingStatus", view.getString("effectiveReadingStatus"))
                             .put("supported", view.getBoolean("supported"))
                     val card =
-                        makeCard(book, {
+                        cardBuilder(book, {
                             if (!book.getBoolean("supported")) {
                                 status.text =
                                     tr("此旧格式已停止阅读支持；元数据保留。", "This legacy format is no longer readable; metadata is retained.")
@@ -1011,6 +1136,86 @@ internal class NativeLibraryPanel(
         pagingBar.addView(pagerButtons)
         root.addView(pagingBar)
         root.addView(NativeUi.colophonTailpiece(activity, "EX LIBRIS CATALOG · ${result.getInt("total")}", panelBg))
+    }
+
+    private fun clearAllFilters() {
+        val reset =
+            JSONObject(defaults.toString())
+                .put("pageSize", session.optInt("pageSize", 12))
+                .put("orderedBookIds", JSONArray())
+                .put("lastViewedBookId", "")
+                .put("returnedFromReader", false)
+        if (reading) state.reading = reset else state.library = reset
+        keywordInput?.setText(this.session.optString("keyword"))
+        state.selected.clear()
+        load(persist = true)
+    }
+
+    private fun collectActiveFilterChips(): List<Pair<String, () -> Unit>> {
+        val chips = mutableListOf<Pair<String, () -> Unit>>()
+        val kw = session.optString("keyword")
+        if (kw.isNotBlank()) {
+            chips.add((tr("关键词: ", "Query: ") + kw.take(18)) to {
+                session.put("keyword", "")
+                keywordInput?.setText("")
+                filtersChanged()
+            })
+        }
+        val cat = session.optString("categoryFilter")
+        if (cat.isNotBlank()) {
+            val catLabel =
+                if (cat == "__unclassified__") {
+                    tr("未分类", "Unclassified")
+                } else {
+                    val catList = current.optJSONObject("facets")?.optJSONArray("categoryFilter")
+                    (0 until (catList?.length() ?: 0))
+                        .map { catList!!.getJSONObject(it) }
+                        .firstOrNull { it.optString("value") == cat }
+                        ?.optString("label")
+                        ?.takeIf { it.isNotBlank() } ?: cat
+                }
+            chips.add((tr("类别: ", "Category: ") + catLabel) to {
+                session.put("categoryFilter", "")
+                filtersChanged()
+            })
+        }
+        for (key in listOf(
+            "statusFilter",
+            "availabilityFilter",
+            "classificationStatusFilter",
+            "textbookFilter",
+            "ancientTextFilter",
+            "formatFilter",
+            "languageFilter",
+            "audienceFilter",
+            "workCountryFilter",
+            "workPeriodFilter",
+        )) {
+            val valStr = session.optString(key)
+            if (valStr.isNotBlank()) {
+                val title =
+                    when (key) {
+                        "formatFilter" -> tr("格式", "Format")
+                        "languageFilter" -> tr("语言", "Language")
+                        "audienceFilter" -> tr("受众", "Audience")
+                        "workCountryFilter" -> tr("国家", "Country")
+                        "workPeriodFilter" -> tr("时期", "Period")
+                        else -> filterTitle(key)
+                    }
+                chips.add("$title: ${filterSummary(valStr)}" to {
+                    session.put(key, "")
+                    filtersChanged()
+                })
+            }
+        }
+        val tags = session.optJSONArray("tagFilter")
+        if (tags != null && tags.length() > 0) {
+            chips.add((tr("标签: ", "Tags: ") + tags.length()) to {
+                session.put("tagFilter", JSONArray())
+                filtersChanged()
+            })
+        }
+        return chips
     }
 
     private fun filterTitle(key: String) =

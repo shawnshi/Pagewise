@@ -78,9 +78,10 @@ internal object NativeUi {
             addState(intArrayOf(android.R.attr.state_focused), shape(context, background).apply { setStroke(dp(context, 2), ink) })
             addState(
                 intArrayOf(android.R.attr.state_pressed),
-                shape(context, background).apply {
-                    setColor(activeSubtle(background))
+                GradientDrawable().apply {
+                    setColor(ink)
                     setStroke(dp(context, 2), ink)
+                    cornerRadius = 0f
                 },
             )
             addState(intArrayOf(), shape(context, background, outlined).apply { if (selected) setColor(activeSubtle(background)) })
@@ -110,8 +111,12 @@ internal object NativeUi {
             ellipsize = TextUtils.TruncateAt.END
             setTextColor(
                 android.content.res.ColorStateList(
-                    arrayOf(intArrayOf(-android.R.attr.state_enabled), intArrayOf()),
-                    intArrayOf(disabled(background), ink),
+                    arrayOf(
+                        intArrayOf(-android.R.attr.state_enabled),
+                        intArrayOf(android.R.attr.state_pressed),
+                        intArrayOf(),
+                    ),
+                    intArrayOf(disabled(background), surface(background), ink),
                 ),
             )
             this.background = actionable(context, background)
@@ -1235,4 +1240,65 @@ private class NativeUiIcon(
 
     @Deprecated("Deprecated in Android")
     override fun getOpacity() = android.graphics.PixelFormat.TRANSLUCENT
+}
+
+/** Responsive measured-width multi-column grid for cover shelf and dual-column archival cards. */
+internal class NativeBookGridLayout(
+    context: Context,
+    private val minCellDp: Int = 156,
+    private val maxColumns: Int = 4,
+    private val spacingDp: Int = 12,
+) : ViewGroup(context) {
+    private var rects = emptyList<NativeFlowRect>()
+    private val gap = NativeUi.dp(context, spacingDp)
+
+    override fun generateDefaultLayoutParams() = LayoutParams(LayoutParams.WRAP_CONTENT, LayoutParams.WRAP_CONTENT)
+
+    override fun onMeasure(
+        widthMeasureSpec: Int,
+        heightMeasureSpec: Int,
+    ) {
+        val width = MeasureSpec.getSize(widthMeasureSpec)
+        val available = (width - paddingLeft - paddingRight).coerceAtLeast(0)
+        val minCellPx = NativeUi.dp(context, minCellDp).coerceAtLeast(1)
+        val cols = ((available + gap) / (minCellPx + gap)).coerceIn(1, maxColumns)
+        val cellWidth = ((available - gap * (cols - 1)).coerceAtLeast(0)) / cols
+        val children = (0 until childCount).map { getChildAt(it) }.filter { it.visibility != GONE }
+        children.forEach {
+            it.measure(MeasureSpec.makeMeasureSpec(cellWidth, MeasureSpec.EXACTLY), MeasureSpec.makeMeasureSpec(0, MeasureSpec.UNSPECIFIED))
+        }
+        val placed = ArrayList<NativeFlowRect>(children.size)
+        var y = 0
+        for (row in children.indices.chunked(cols)) {
+            val rowH = row.maxOf { children[it].measuredHeight }
+            row.forEachIndexed { col, idx ->
+                val left = col * (cellWidth + gap)
+                placed.add(NativeFlowRect(left, y, (left + cellWidth).coerceAtMost(available), y + rowH))
+            }
+            y += rowH + gap
+        }
+        rects = placed
+        val totalHeight = (placed.maxOfOrNull { it.bottom } ?: 0) + paddingTop + paddingBottom
+        setMeasuredDimension(resolveSize(width, widthMeasureSpec), resolveSize(totalHeight, heightMeasureSpec))
+    }
+
+    override fun onLayout(
+        changed: Boolean,
+        left: Int,
+        top: Int,
+        right: Int,
+        bottom: Int,
+    ) {
+        val width = (right - left - paddingLeft - paddingRight).coerceAtLeast(0)
+        val children = (0 until childCount).map { getChildAt(it) }.filter { it.visibility != GONE }
+        children.forEachIndexed { index, child ->
+            val rect = rects.getOrNull(index) ?: return@forEachIndexed
+            val x = if (layoutDirection == LAYOUT_DIRECTION_RTL) width - rect.right else rect.left
+            child.measure(
+                MeasureSpec.makeMeasureSpec(rect.right - rect.left, MeasureSpec.EXACTLY),
+                MeasureSpec.makeMeasureSpec(rect.bottom - rect.top, MeasureSpec.EXACTLY),
+            )
+            child.layout(paddingLeft + x, paddingTop + rect.top, paddingLeft + x + rect.right - rect.left, paddingTop + rect.bottom)
+        }
+    }
 }

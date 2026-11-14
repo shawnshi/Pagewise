@@ -28,7 +28,9 @@ internal class NativeClassificationEditor(
     private val form =
         LinearLayout(activity).apply {
             orientation = LinearLayout.VERTICAL
-            setPadding(24, 12, 24, 12)
+            val padH = NativeUi.dp(activity, 20)
+            val padV = NativeUi.dp(activity, 12)
+            setPadding(padH, padV, padH, padV)
         }
     private val category = Spinner(activity)
     private val categoryLock = CheckBox(activity).apply { text = "锁定类别" }

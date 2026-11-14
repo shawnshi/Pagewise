@@ -705,6 +705,7 @@ function zoomStep(dir: 1 | -1) {
 const SUMATRA_ZOOM_LEVELS = [0.0833, 0.125, 0.18, 0.25, 0.3333, 0.5, 0.6667, 0.75, 1, 1.25, 1.5, 2, 3, 4]
 const ZOOM_PRESETS = [0.125, 0.25, 0.5, 0.6667, 0.75, 1, 1.25, 1.5, 2, 3, 4]
 const zoomMenu = ref(false)
+const pdfContrast = ref<'normal' | 'dark' | 'bleach'>('normal')
 
 function pickZoom(z: PdfZoom) {
   zoomMenu.value = false
@@ -1066,6 +1067,7 @@ function prevPage() {
     const target = scrollPageGroups.value[Math.max(0, index - 1)]?.[0]
     if (target) scrollGoto(target, true)
   } else scrollGoto(currentPage.value - 1, true)
+  onyxEpd.notifyPageTurn()
 }
 function nextPage() {
   markPdfEndInput()
@@ -1081,6 +1083,7 @@ function nextPage() {
   } else {
     scrollGoto(currentPage.value + 1, true)
   }
+  onyxEpd.notifyPageTurn()
 }
 
 /* ================= 跳转返回 (引文 / 目录跳转后回到原位) ================= */
@@ -3375,7 +3378,7 @@ onBeforeUnmount(() => {
   <div
     ref="paperRoot"
     class="paper"
-    :class="{ 'is-fullscreen': isFullscreen, 'is-presentation': presentationMode, 'lr-eink': settings.readingMode.eink.enabled }"
+    :class="[{ 'is-fullscreen': isFullscreen, 'is-presentation': presentationMode, 'lr-eink': settings.readingMode.eink.enabled }, `pdf-contrast-${pdfContrast}`]"
     :data-reader-theme="resolveReaderTheme(settings.reader.theme, resolvedTheme === 'dark')"
   >
     <BookEndRecommendationsDialog v-if="endRecommendationsOpen" ref="endRecommendationsDialog" v-model="endRecommendationsOpen" :book-id="bookId" @navigate="navigatePdfEndRecommendation" />
@@ -4053,6 +4056,26 @@ onBeforeUnmount(() => {
                 :class="{ active: spreadMode === 'book' }"
                 @click="setSpreadMode('book')"
               >{{ t('reader.bookView') }}</button>
+            </div>
+            <div class="zoom-layout-row">
+              <button
+                type="button"
+                class="zoom-layout-chip"
+                :class="{ active: pdfContrast === 'normal' }"
+                @click="pdfContrast = 'normal'"
+              >{{ settings.language === 'en' ? 'Normal' : '原版对比度' }}</button>
+              <button
+                type="button"
+                class="zoom-layout-chip"
+                :class="{ active: pdfContrast === 'dark' }"
+                @click="pdfContrast = 'dark'"
+              >{{ settings.language === 'en' ? 'Darken' : '扫描加黑' }}</button>
+              <button
+                type="button"
+                class="zoom-layout-chip"
+                :class="{ active: pdfContrast === 'bleach' }"
+                @click="pdfContrast = 'bleach'"
+              >{{ settings.language === 'en' ? 'Bleach' : '漂白去灰' }}</button>
             </div>
           </div>
           <button
@@ -5261,6 +5284,12 @@ onBeforeUnmount(() => {
   display: block;
   border-radius: 2px;
 }
+.paper.pdf-contrast-dark .p-canvas :deep(canvas) {
+  filter: contrast(1.45) brightness(0.96);
+}
+.paper.pdf-contrast-bleach .p-canvas :deep(canvas) {
+  filter: grayscale(1) contrast(1.85) brightness(1.08);
+}
 /* PDF 搜索命中层 */
 .p-search {
   position: absolute;
@@ -5301,6 +5330,17 @@ onBeforeUnmount(() => {
   background: rgba(64, 128, 255, 0.3);
   border-radius: 1px;
   mix-blend-mode: multiply;
+}
+/* 深色模式下禁止 multiply 导致像素相乘变全黑 */
+.paper[data-reader-theme='dark'] .p-sel-rect {
+  background: rgba(106, 155, 255, 0.4);
+  mix-blend-mode: normal;
+}
+.paper[data-reader-theme='dark'] .p-hl-rect {
+  mix-blend-mode: screen;
+}
+.paper[data-reader-theme='dark'] .p-search-rect {
+  mix-blend-mode: screen;
 }
 .p-holder {
   cursor: text;

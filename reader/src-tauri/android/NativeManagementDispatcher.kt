@@ -129,6 +129,8 @@ internal class NativeManagementDispatcher(
     companion object {
         val WEB_ACTIONS =
             setOf(
+                "metadataSearchOpen",
+                "metadataInferAi",
                 "importBooks",
                 "selectFolder",
                 "recheckFolder",

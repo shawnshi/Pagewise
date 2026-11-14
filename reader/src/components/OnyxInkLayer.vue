@@ -4,6 +4,7 @@ import { t } from '../i18n'
 import { onyxEpd } from '../services/onyxEpd'
 import {
   eraseIntersectingStrokes,
+  findIntersectingStrokeIds,
   normalizePointsToRect,
   onyxScribble,
   strokeToSvgPath,
@@ -37,6 +38,7 @@ const strokeWidth = ref(3)
 const strokes = ref<OnyxInkStroke[]>([])
 const activePoints = ref<OnyxTouchPointCss[]>([])
 const drawingPointerId = ref<number | null>(null)
+const erasingIds = ref<Set<string>>(new Set())
 
 function loadCurrentStrokes() {
   strokes.value = onyxScribble.loadPageStrokes(props.bookId, props.pageKey)
@@ -139,6 +141,12 @@ function onPointerDown(e: PointerEvent) {
 function onPointerMove(e: PointerEvent) {
   if (drawingPointerId.value !== e.pointerId || !props.enabled) return
   activePoints.value.push({ x: e.clientX, y: e.clientY, p: e.pressure || 0.5, t: Date.now() })
+  if (tool.value === 'eraser' && strokes.value.length) {
+    const rect = currentLimitRect()
+    if (rect) {
+      erasingIds.value = findIntersectingStrokeIds(strokes.value, normalizePointsToRect(activePoints.value, rect))
+    }
+  }
 }
 
 function onPointerUp(e: PointerEvent) {
@@ -146,6 +154,7 @@ function onPointerUp(e: PointerEvent) {
   drawingPointerId.value = null
   const pts = activePoints.value
   activePoints.value = []
+  erasingIds.value = new Set()
   commitPoints(pts, tool.value === 'eraser' ? 'erase' : 'stroke')
 }
 
@@ -224,8 +233,8 @@ onBeforeUnmount(() => {
         :key="s.id"
         :d="strokeToSvgPath(s, 1000, 1000)"
         :stroke-width="s.width * 1.4"
-        :stroke-opacity="s.tool === 'marker' ? 0.38 : 1"
-        :stroke-dasharray="s.tool === 'pencil' ? '2 1' : undefined"
+        :stroke-opacity="erasingIds.has(s.id) ? 0.42 : (s.tool === 'marker' ? 0.38 : 1)"
+        :stroke-dasharray="erasingIds.has(s.id) ? '4 4' : (s.tool === 'pencil' ? '2 1' : undefined)"
         fill="none"
         stroke="currentColor"
         stroke-linecap="round"

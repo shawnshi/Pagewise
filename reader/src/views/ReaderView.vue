@@ -499,6 +499,7 @@ const readerLayout = computed(() => effectiveReaderLayout({
   maxColumnCount: effectiveReader.value.maxColumnCount,
   portraitScroll: effectiveReader.value.portraitScroll,
   portrait: portraitView.value,
+  einkActive: lateModes.value?.einkActive.value,
 }))
 const effectiveFlow = computed(() => readerLayout.value.flow)
 // 阅读模式与伴读在下方声明, 二者初始化时会互相 / 回头读取这里的值;
@@ -526,7 +527,8 @@ const typographyPage = computed(() => {
 })
 const typographyBottomInset = computed(() => {
   const page = typographyPage.value
-  return Math.max(24, page ? page.bottom - page.top : 0)
+  const floor = (lateModes.value?.einkActive.value || portraitView.value) ? 56 : 24
+  return Math.max(floor, page ? page.bottom - page.top : 0)
 })
 
 /** Portrait flowable pages use page edges; explicit percent margins take precedence over ruler defaults. */
@@ -596,8 +598,9 @@ function applyPrefs(strict = false) {
     appliedGeometry = JSON.stringify(geo)
     view.renderer.setAttribute('gap', geo.gap)
     view.renderer.setAttribute('max-inline-size', geo.maxInline)
-    // 大字 / 歌词运行时、竖屏单页滚动时强制单栏, 不改用户自己的分栏设置
-    view.renderer.setAttribute('max-column-count', String(modes.forceSingleColumn.value ? 1 : layout.maxColumnCount))
+    // 大字 / 歌词运行时、竖屏单页滚动或宽屏分屏伴读宽度不足双栏时强制单栏, 不改用户自己的分栏设置
+    const dockedNarrow = panel.value !== 'none' && (container.value?.clientWidth ?? 9999) < 680
+    view.renderer.setAttribute('max-column-count', String((modes.forceSingleColumn.value || dockedNarrow) ? 1 : layout.maxColumnCount))
     view.renderer.setAttribute('margin', geo.margin)
     for (const { doc } of view.renderer.getContents?.() ?? []) {
       prepareTypographyDocument(doc, bookTypographyContext.value, effectiveTypography.value.profile)
@@ -735,6 +738,12 @@ watch([() => effectiveReader.value, appDark, readerLayout, portraitView], () => 
   clearTimeout(prefsTimer)
   prefsTimer = setTimeout(applyPrefs, 120)
 }, { deep: true })
+// 侧栏开关时重算分屏宽度并重排正文, 避免分屏面板遮挡或双栏挤压
+watch(panel, () => {
+  void nextTick(() => {
+    if (view && !typographyApplying.value) applyPrefs()
+  })
+})
 // 拖动窗口 / 分屏改变宽度: 竖屏留白按像素算, 跨过手机宽度时边带也变; 几何没变就不重排
 let geometryTimer: ReturnType<typeof setTimeout> | undefined
 function onWindowResize() {
@@ -1101,7 +1110,10 @@ async function turnPage(dir: 'left' | 'right') {
   interruptTTSForReposition()
   hideBars()
   pageTurning = true
-  try { await (dir === 'left' ? view?.goLeft() : view?.goRight()) }
+  try {
+    await (dir === 'left' ? view?.goLeft() : view?.goRight())
+    onyxEpd.notifyPageTurn()
+  }
   catch { toast(t('reader.cantGoto'), 'error') }
   finally { pageTurning = false; consumeEndRecommendationOffer() }
 }
@@ -2778,10 +2790,44 @@ async function copySelectedText() {
     toast(t('reader.selectionCopied'), 'success')
   } catch { toast(t('common.copyFailed'), 'error') }
 }
+const hasNativeDictionary = typeof window !== 'undefined' && typeof (window as Window & { LightReadInsets?: { lookupSystemDictionary?: (word: string) => boolean } }).LightReadInsets?.lookupSystemDictionary === 'function'
+function lookupSelectedDictionary() {
+  const selected = selection.value
+  if (!selected) return
+  const ok = (window as Window & { LightReadInsets?: { lookupSystemDictionary?: (word: string) => boolean } }).LightReadInsets?.lookupSystemDictionary?.(selected.text)
+  if (!ok) toast(settings.language === 'en' ? 'No system dictionary app found' : '未检测到系统词典应用', 'info')
+}
 function selectSectionText() {
   const doc = selectionRange?.startContainer.ownerDocument
   if (doc?.body) doc.getSelection()?.selectAllChildren(doc.body)
 }
+
+/** 划词浮条就近吸附在当前选区上方/下方，单手握持触手可及 */
+const highlightBarStyle = computed(() => {
+  if (!selection.value || !selectionRange) return {}
+  try {
+    const rangeRect = selectionRange.getBoundingClientRect()
+    if (rangeRect.width === 0 && rangeRect.height === 0) return {}
+    const doc = selectionRange.startContainer?.ownerDocument
+    const iframe = doc?.defaultView?.frameElement as HTMLIFrameElement | null
+    const iframeRect = iframe?.getBoundingClientRect() ?? { left: 0, top: 0 }
+    const x = iframeRect.left + rangeRect.left + rangeRect.width / 2
+    const barHeight = 52
+    const safeTop = parseInt(getComputedStyle(document.documentElement).getPropertyValue('--safe-top') || '0', 10) || 0
+    const minTop = 56 + safeTop
+    const topAbove = iframeRect.top + rangeRect.top - barHeight - 10
+    const topBelow = iframeRect.top + rangeRect.bottom + 10
+    const top = topAbove >= minTop ? topAbove : Math.min(topBelow, window.innerHeight - barHeight - 16)
+    const clampedX = Math.max(20, Math.min(window.innerWidth - 20, x))
+    return {
+      left: `${clampedX}px`,
+      top: `${Math.max(minTop, top)}px`,
+      transform: 'translateX(-50%)',
+    }
+  } catch {
+    return {}
+  }
+})
 
 let highlightSaving = false
 
@@ -3158,6 +3204,7 @@ function gotoChapter(dir: -1 | 1) {
 function onSlide(e: Event) {
   const value = parseFloat((e.target as HTMLInputElement).value)
   slidePreview.value = null
+  onyxEpd.scheduleExitFastMode(180)
   void jumpTo({ fraction: value })
 }
 
@@ -3165,6 +3212,8 @@ function onSlide(e: Event) {
 const slidePreview = ref<{ fraction: number; label: string; text: string } | null>(null)
 
 function onSlideInput(e: Event) {
+  onyxEpd.enterFastMode('slider', 'du')
+  onyxEpd.scheduleExitFastMode(300)
   const value = parseFloat((e.target as HTMLInputElement).value)
   let label = ''
   let page = 0
@@ -3526,6 +3575,10 @@ onMounted(async () => {
     }
     bookOpened = true
     if (!readerContext.current(context)) { openedView.close?.(); return }
+    try {
+      const bridge = (window as Window & { LightReadInsets?: { updateSleepCover?: (t: string, a: string, p: number, c: string) => string } }).LightReadInsets
+      bridge?.updateSleepCover?.(meta.value.title ?? '', meta.value.author ?? '', Math.round((meta.value.progress ?? 0) * 100), '')
+    } catch { /* 休眠封面生成失败不阻塞阅读 */ }
     // 跨章连续滚动的渲染器事件 (view 不转发): 主章切换、远处分节卸载。旧版渲染器不会派发
     view.renderer?.addEventListener?.('section-change', onRendererSectionChange)
     view.renderer?.addEventListener?.('unload', onRendererUnload)
@@ -3805,23 +3858,145 @@ onBeforeRouteLeave(async () => {
       </div>
     </header>
 
-    <!-- 正文 -->
-    <div ref="container" class="content" :style="{ '--pw-extra-bottom': `${typographyBottomInset}px` }" :class="{ 'typography-loading': loading }" :aria-busy="loading" />
-    <p v-if="typographyFontWarning" class="typography-font-warning" role="status">{{ t('reader.typographyFontFallback') }}</p>
+    <!-- 正文与宽屏分屏工作区 -->
+    <div class="reader-stage" :class="{ 'has-panel': panel !== 'none' }">
+      <div ref="container" class="content" :style="{ '--pw-extra-bottom': `${typographyBottomInset}px` }" :class="{ 'typography-loading': loading }" :aria-busy="loading" />
+      <p v-if="typographyFontWarning" class="typography-font-warning" role="status">{{ t('reader.typographyFontFallback') }}</p>
 
-    <div v-if="loading" class="state">{{ t('reader.opening') }}</div>
-    <div v-if="error" class="state">
-      <p>{{ error }}</p>
-      <button class="btn" @click="router.push('/library')">{{ t('reader.backToLibrary') }}</button>
+      <div v-if="loading" class="state">{{ t('reader.opening') }}</div>
+      <div v-if="error" class="state">
+        <p>{{ error }}</p>
+        <button class="btn" @click="router.push('/library')">{{ t('reader.backToLibrary') }}</button>
+      </div>
+
+      <!-- 翻页按钮 -->
+      <button v-if="!loading && !error" class="nav prev" :title="t('reader.prevPage')" @click="turnPage('left')">
+        <svg viewBox="0 0 24 24" width="22" height="22"><path fill="currentColor" d="M14.7 5.3a1 1 0 0 1 0 1.4L9.42 12l5.3 5.3a1 1 0 0 1-1.42 1.4l-6-6a1 1 0 0 1 0-1.4l6-6a1 1 0 0 1 1.42 0z"/></svg>
+      </button>
+      <button v-if="!loading && !error" class="nav next" :title="t('reader.nextPage')" @click="turnPage('right')">
+        <svg viewBox="0 0 24 24" width="22" height="22"><path fill="currentColor" d="M9.3 5.3a1 1 0 0 1 1.4 0l6 6a1 1 0 0 1 0 1.4l-6 6a1 1 0 0 1-1.4-1.4l5.29-5.3-5.3-5.3a1 1 0 0 1 0-1.4z"/></svg>
+      </button>
+
+      <!-- 侧栏面板 (宽屏右侧分屏不遮挡正文, 窄屏底部半屏抽屉) -->
+      <aside v-if="panel !== 'none'" ref="panelEl" class="panel card">
+        <template v-if="panel === 'toc'">
+          <h3>{{ t('reader.toc') }}</h3>
+          <div class="panel-body">
+            <p v-if="tocAuto" class="panel-tip">{{ t('reader.tocAuto') }}</p>
+            <TocList :items="toc" :current-href="currentTocHref" @navigate="navigateToc" />
+            <p v-if="!toc.length" class="panel-empty">{{ t('reader.noToc') }}</p>
+          </div>
+        </template>
+
+        <template v-else-if="panel === 'annotations'">
+          <div class="anno-tabs">
+            <button :class="{ active: annoTab === 'highlight' }" @click="annoTab = 'highlight'">
+              {{ t('reader.highlightsTab') }} ({{ highlights.length }})
+            </button>
+            <button :class="{ active: annoTab === 'bookmark' }" @click="annoTab = 'bookmark'">
+              {{ t('reader.bookmarksTab') }} ({{ bookmarks.length }})
+            </button>
+          </div>
+          <div class="panel-body">
+            <template v-if="annoTab === 'highlight'">
+              <div v-for="a in highlights" :key="a.id" class="anno-item" @click="gotoAnnotation(a)">
+                <span class="anno-dot" :style="annotationSwatchStyle(a.color, modes.einkActive.value)" :title="t(annotationLabelKey(a.color, modes.einkActive.value))"><span v-if="modes.einkActive.value">{{ t(annotationLabelKey(a.color, true)) }}</span></span>
+                <span class="anno-body">
+                  <span class="anno-text">{{ a.text }}</span>
+                  <span v-if="a.note" class="anno-note"><svg viewBox="0 0 24 24" width="14" height="14" aria-hidden="true"><path fill="currentColor" d="M5 4h14a2 2 0 0 1 2 2v9a2 2 0 0 1-2 2H10l-4.3 3.4A1 1 0 0 1 4 19.6V6a2 2 0 0 1 1-2zm1 2v11.5L9.3 15H19V6H6zm2 2.5h8a1 1 0 1 1 0 2H8a1 1 0 1 1 0-2zm0 3h5a1 1 0 1 1 0 2H8a1 1 0 1 1 0-2z"/></svg>{{ a.note }}</span>
+                </span>
+              </div>
+              <p v-if="!highlights.length" class="panel-empty">{{ t('reader.highlightEmptyHint') }}</p>
+            </template>
+            <template v-else>
+              <div v-for="a in bookmarks" :key="a.id" class="anno-item" @click="gotoAnnotation(a)">
+                <svg viewBox="0 0 24 24" width="14" height="14" style="flex-shrink: 0; margin-top: 3px"><path fill="var(--brand)" d="M6 3h12a1 1 0 0 1 1 1v16.2a.8.8 0 0 1-1.24.67L12 17.6l-5.76 3.27A.8.8 0 0 1 5 20.2V4a1 1 0 0 1 1-1z"/></svg>
+                <span class="anno-body">
+                  <span class="anno-text">{{ a.text }}</span>
+                </span>
+                <button class="icon-btn anno-del" :title="t('common.delete')" :aria-label="t('common.delete')" @click.stop="removeAnnotation(a)"><svg viewBox="0 0 24 24" width="16" height="16" aria-hidden="true"><path fill="currentColor" d="M6.3 6.3a1 1 0 0 1 1.4 0L12 10.58l4.3-4.3a1 1 0 1 1 1.4 1.42L13.42 12l4.3 4.3a1 1 0 0 1-1.42 1.4L12 13.42l-4.3 4.3a1 1 0 0 1-1.4-1.42L10.58 12l-4.3-4.3a1 1 0 0 1 0-1.4z"/></svg></button>
+              </div>
+              <p v-if="!bookmarks.length" class="panel-empty">{{ t('reader.bookmarkEmptyHint') }}</p>
+            </template>
+          </div>
+        </template>
+
+        <template v-else-if="panel === 'ai'">
+          <h3 class="ai-title"><svg viewBox="0 0 24 24" width="14" height="14" aria-hidden="true"><path fill="currentColor" d="M10 3a1 1 0 0 1 .95.68l1.3 3.9a3 3 0 0 0 1.9 1.9l3.9 1.3a1 1 0 0 1 0 1.9l-3.9 1.3a3 3 0 0 0-1.9 1.9l-1.3 3.9a1 1 0 0 1-1.9 0l-1.3-3.9a3 3 0 0 0-1.9-1.9l-3.9-1.3a1 1 0 0 1 0-1.9l3.9-1.3a3 3 0 0 0 1.9-1.9l1.3-3.9A1 1 0 0 1 10 3zm8-1a1 1 0 0 1 .95.68l.4 1.2.97.32a1 1 0 0 1 0 1.9l-.97.32-.4 1.2a1 1 0 0 1-1.9 0l-.4-1.2-.97-.32a1 1 0 0 1 0-1.9l.97-.32.4-1.2A1 1 0 0 1 18 2z"/></svg>{{ t('ai.title') }}</h3>
+          <div v-if="!aiReady()" class="ai-setup">
+            <p>{{ t('ai.setupHint') }}</p>
+            <ol class="ai-steps">
+              <li>{{ t('ai.step1') }}</li>
+              <li>{{ t('ai.step2') }}</li>
+              <li>{{ t('ai.step3') }}</li>
+            </ol>
+            <div class="ai-setup-actions">
+              <button class="btn btn-sm btn-primary" @click="router.push('/settings')">{{ t('ai.goSettings') }}</button>
+            </div>
+            <p class="ai-setup-alt">{{ t('ai.setupAlt') }}</p>
+          </div>
+          <template v-else>
+            <div ref="aiListEl" class="panel-body ai-list">
+              <template v-if="!aiMessages.length">
+                <p class="panel-empty">{{ t('ai.intro') }}</p>
+                <div class="ai-quick-prompts">
+                  <button type="button" class="btn btn-sm ai-quick-chip" :disabled="aiStreaming" @click="sendAi(t('ai.quickSummary'))">{{ t('ai.quickSummary') }}</button>
+                  <button type="button" class="btn btn-sm ai-quick-chip" :disabled="aiStreaming" @click="sendAi(t('ai.quickLogic'))">{{ t('ai.quickLogic') }}</button>
+                  <button type="button" class="btn btn-sm ai-quick-chip" :disabled="aiStreaming" @click="sendAi(t('ai.quickConcepts'))">{{ t('ai.quickConcepts') }}</button>
+                </div>
+              </template>
+              <div v-for="(m, i) in aiMessages" :key="i" class="ai-msg" :class="m.role">
+                <div class="ai-bubble">{{ m.content }}<span v-if="m.role === 'assistant' && aiStreaming && i === aiMessages.length - 1" class="ai-cursor">▍</span></div>
+                <p v-if="m.role === 'assistant' && m.complete === false && (!aiStreaming || i !== aiMessages.length - 1)" class="analysis-scope">{{ t('ai.incompleteReply') }}</p>
+              </div>
+            </div>
+            <p class="analysis-scope">{{ t('reader.analysisScope') }} · {{ aiScope || chapterLabel || meta?.title }}<br />{{ t(aiMessages.length ? 'reader.analysisInSession' : 'reader.analysisEmpty') }}<br />{{ t('ai.contextHint') }}</p>
+            <button class="btn btn-sm" :aria-expanded="aiInputOpen" @click="aiInputOpen = !aiInputOpen">{{ t('reader.analysisFollowUp') }}</button>
+            <div v-if="aiInputOpen" class="ai-input-row">
+              <input
+                v-model="aiInput"
+                class="input"
+                :placeholder="t('ai.placeholder')"
+                :aria-label="t('ai.placeholder')"
+                :maxlength="READER_QUESTION_LIMIT"
+                :disabled="aiStreaming"
+                @keyup.enter="sendAi()"
+              />
+              <button v-if="aiStreaming" class="btn btn-sm" @click="stopAi">{{ t('common.stop') }}</button>
+              <button v-else class="btn btn-sm btn-primary" :disabled="!aiInput.trim()" @click="sendAi()">{{ t('ai.send') }}</button>
+            </div>
+            <button v-if="aiMessages.length" class="btn btn-sm ai-clear" @click="clearAi">{{ t('ai.clear') }}</button>
+          </template>
+        </template>
+
+        <template v-else>
+          <h3>{{ t('reader.searchInBook') }}</h3>
+          <form class="search-form" @submit.prevent="runSearch">
+            <input v-model="searchQuery" class="input" type="search" :placeholder="t('reader.searchPlaceholder')" />
+          </form>
+          <div class="search-opts">
+            <button type="button" class="search-opt" :class="{ active: searchOpts.caseSensitive }" :title="t('reader.matchCase')" :aria-label="t('reader.matchCase')" :aria-pressed="searchOpts.caseSensitive" @click="toggleSearchOpt('caseSensitive')">Aa</button>
+            <button type="button" class="search-opt" :class="{ active: searchOpts.wholeWord }" :title="t('reader.wholeWord')" :aria-label="t('reader.wholeWord')" :aria-pressed="searchOpts.wholeWord" @click="toggleSearchOpt('wholeWord')">\b</button>
+            <button type="button" class="search-opt" :class="{ active: searchOpts.regex }" :title="t('reader.useRegex')" :aria-label="t('reader.useRegex')" :aria-pressed="searchOpts.regex" @click="toggleSearchOpt('regex')">.*</button>
+            <span v-if="searching" class="search-count">{{ Math.round(searchProgress * 100) }}%</span>
+            <span v-else-if="searchQuery && searchResults.length" class="search-count">
+              {{ t('reader.resultCount', { n: searchResults.length }) }}{{ searchTruncated ? '+' : '' }}
+            </span>
+          </div>
+          <div class="panel-body">
+            <template v-for="(r, i) in searchResults" :key="i">
+              <div
+                v-if="i === 0 || r.chapter !== searchResults[i - 1].chapter"
+                class="search-chapter"
+              >{{ r.chapter || '·' }}</div>
+              <div class="search-item" @click="gotoSearchHit(r)"><template v-for="(seg, j) in r.segments" :key="j"><mark v-if="seg.hit">{{ seg.text }}</mark><template v-else>{{ seg.text }}</template></template></div>
+            </template>
+            <p v-if="!searching && searchQuery && !searchResults.length" class="panel-empty">{{ t('reader.noResults') }}</p>
+          </div>
+          <button class="btn btn-sm" style="margin-top: 8px" @click="closeSearch">{{ t('reader.clearAndClose') }}</button>
+        </template>
+      </aside>
     </div>
-
-    <!-- 翻页按钮 -->
-    <button v-if="!loading && !error" class="nav prev" :title="t('reader.prevPage')" @click="turnPage('left')">
-      <svg viewBox="0 0 24 24" width="22" height="22"><path fill="currentColor" d="M14.7 5.3a1 1 0 0 1 0 1.4L9.42 12l5.3 5.3a1 1 0 0 1-1.42 1.4l-6-6a1 1 0 0 1 0-1.4l6-6a1 1 0 0 1 1.42 0z"/></svg>
-    </button>
-    <button v-if="!loading && !error" class="nav next" :title="t('reader.nextPage')" @click="turnPage('right')">
-      <svg viewBox="0 0 24 24" width="22" height="22"><path fill="currentColor" d="M9.3 5.3a1 1 0 0 1 1.4 0l6 6a1 1 0 0 1 0 1.4l-6 6a1 1 0 0 1-1.4-1.4l5.29-5.3-5.3-5.3a1 1 0 0 1 0-1.4z"/></svg>
-    </button>
 
     <!-- 底栏: 章节跳转 + 进度; 手机端下方再加一排常用入口 (目录 / 笔记 / 听书 / 自动 / 排版) -->
     <footer class="bar bottom" :class="{ hidden: !barsVisible }" @mouseenter="cancelBarsTimer">
@@ -3973,10 +4148,11 @@ onBeforeRouteLeave(async () => {
       <button v-else class="btn btn-sm" @click="sourceError = ''">{{ t('common.close') }}</button>
     </div>
 
-    <!-- 高亮选区浮条 -->
-    <div v-if="selection" class="highlight-bar card">
+    <!-- 高亮选区浮条 (就近浮动式微型工具栏) -->
+    <div v-if="selection" class="highlight-bar card" :style="highlightBarStyle">
       <p v-if="localDraftError" role="alert" style="flex-basis: 100%; margin: 0">{{ localDraftError }}</p>
       <button class="btn btn-sm" @click="copySelectedText">{{ t('reader.copySelection') }}</button>
+      <button v-if="hasNativeDictionary" class="btn btn-sm" @click="lookupSelectedDictionary">{{ settings.language === 'en' ? 'Dictionary' : '查词典' }}</button>
       <button class="btn btn-sm" @click="selectSectionText">{{ t('reader.selectSection') }}</button>
       <span class="hl-hint">{{ t('reader.highlight') }}</span>
       <button
@@ -4207,125 +4383,7 @@ onBeforeRouteLeave(async () => {
       <p class="tts-hint">{{ ttsHint }}</p>
     </div>
 
-    <!-- 侧栏面板 -->
-    <aside v-if="panel !== 'none'" ref="panelEl" class="panel card">
-      <template v-if="panel === 'toc'">
-        <h3>{{ t('reader.toc') }}</h3>
-        <div class="panel-body">
-          <p v-if="tocAuto" class="panel-tip">{{ t('reader.tocAuto') }}</p>
-          <TocList :items="toc" :current-href="currentTocHref" @navigate="navigateToc" />
-          <p v-if="!toc.length" class="panel-empty">{{ t('reader.noToc') }}</p>
-        </div>
-      </template>
-
-      <template v-else-if="panel === 'annotations'">
-        <div class="anno-tabs">
-          <button :class="{ active: annoTab === 'highlight' }" @click="annoTab = 'highlight'">
-            {{ t('reader.highlightsTab') }} ({{ highlights.length }})
-          </button>
-          <button :class="{ active: annoTab === 'bookmark' }" @click="annoTab = 'bookmark'">
-            {{ t('reader.bookmarksTab') }} ({{ bookmarks.length }})
-          </button>
-        </div>
-        <div class="panel-body">
-          <template v-if="annoTab === 'highlight'">
-            <div v-for="a in highlights" :key="a.id" class="anno-item" @click="gotoAnnotation(a)">
-              <span class="anno-dot" :style="annotationSwatchStyle(a.color, modes.einkActive.value)" :title="t(annotationLabelKey(a.color, modes.einkActive.value))"><span v-if="modes.einkActive.value">{{ t(annotationLabelKey(a.color, true)) }}</span></span>
-              <span class="anno-body">
-                <span class="anno-text">{{ a.text }}</span>
-                <span v-if="a.note" class="anno-note"><svg viewBox="0 0 24 24" width="14" height="14" aria-hidden="true"><path fill="currentColor" d="M5 4h14a2 2 0 0 1 2 2v9a2 2 0 0 1-2 2H10l-4.3 3.4A1 1 0 0 1 4 19.6V6a2 2 0 0 1 1-2zm1 2v11.5L9.3 15H19V6H6zm2 2.5h8a1 1 0 1 1 0 2H8a1 1 0 1 1 0-2zm0 3h5a1 1 0 1 1 0 2H8a1 1 0 1 1 0-2z"/></svg>{{ a.note }}</span>
-              </span>
-            </div>
-            <p v-if="!highlights.length" class="panel-empty">{{ t('reader.highlightEmptyHint') }}</p>
-          </template>
-          <template v-else>
-            <div v-for="a in bookmarks" :key="a.id" class="anno-item" @click="gotoAnnotation(a)">
-              <svg viewBox="0 0 24 24" width="14" height="14" style="flex-shrink: 0; margin-top: 3px"><path fill="var(--brand)" d="M6 3h12a1 1 0 0 1 1 1v16.2a.8.8 0 0 1-1.24.67L12 17.6l-5.76 3.27A.8.8 0 0 1 5 20.2V4a1 1 0 0 1 1-1z"/></svg>
-              <span class="anno-body">
-                <span class="anno-text">{{ a.text }}</span>
-              </span>
-              <button class="icon-btn anno-del" :title="t('common.delete')" :aria-label="t('common.delete')" @click.stop="removeAnnotation(a)"><svg viewBox="0 0 24 24" width="16" height="16" aria-hidden="true"><path fill="currentColor" d="M6.3 6.3a1 1 0 0 1 1.4 0L12 10.58l4.3-4.3a1 1 0 1 1 1.4 1.42L13.42 12l4.3 4.3a1 1 0 0 1-1.42 1.4L12 13.42l-4.3 4.3a1 1 0 0 1-1.4-1.42L10.58 12l-4.3-4.3a1 1 0 0 1 0-1.4z"/></svg></button>
-            </div>
-            <p v-if="!bookmarks.length" class="panel-empty">{{ t('reader.bookmarkEmptyHint') }}</p>
-          </template>
-        </div>
-      </template>
-
-      <template v-else-if="panel === 'ai'">
-        <h3 class="ai-title"><svg viewBox="0 0 24 24" width="14" height="14" aria-hidden="true"><path fill="currentColor" d="M10 3a1 1 0 0 1 .95.68l1.3 3.9a3 3 0 0 0 1.9 1.9l3.9 1.3a1 1 0 0 1 0 1.9l-3.9 1.3a3 3 0 0 0-1.9 1.9l-1.3 3.9a1 1 0 0 1-1.9 0l-1.3-3.9a3 3 0 0 0-1.9-1.9l-3.9-1.3a1 1 0 0 1 0-1.9l3.9-1.3a3 3 0 0 0 1.9-1.9l1.3-3.9A1 1 0 0 1 10 3zm8-1a1 1 0 0 1 .95.68l.4 1.2.97.32a1 1 0 0 1 0 1.9l-.97.32-.4 1.2a1 1 0 0 1-1.9 0l-.4-1.2-.97-.32a1 1 0 0 1 0-1.9l.97-.32.4-1.2A1 1 0 0 1 18 2z"/></svg>{{ t('ai.title') }}</h3>
-        <div v-if="!aiReady()" class="ai-setup">
-          <p>{{ t('ai.setupHint') }}</p>
-          <ol class="ai-steps">
-            <li>{{ t('ai.step1') }}</li>
-            <li>{{ t('ai.step2') }}</li>
-            <li>{{ t('ai.step3') }}</li>
-          </ol>
-          <div class="ai-setup-actions">
-            <button class="btn btn-sm btn-primary" @click="router.push('/settings')">{{ t('ai.goSettings') }}</button>
-          </div>
-          <p class="ai-setup-alt">{{ t('ai.setupAlt') }}</p>
-        </div>
-        <template v-else>
-          <div ref="aiListEl" class="panel-body ai-list">
-            <template v-if="!aiMessages.length">
-              <p class="panel-empty">{{ t('ai.intro') }}</p>
-              <div class="ai-quick-prompts">
-                <button type="button" class="btn btn-sm ai-quick-chip" :disabled="aiStreaming" @click="sendAi(t('ai.quickSummary'))">{{ t('ai.quickSummary') }}</button>
-                <button type="button" class="btn btn-sm ai-quick-chip" :disabled="aiStreaming" @click="sendAi(t('ai.quickLogic'))">{{ t('ai.quickLogic') }}</button>
-                <button type="button" class="btn btn-sm ai-quick-chip" :disabled="aiStreaming" @click="sendAi(t('ai.quickConcepts'))">{{ t('ai.quickConcepts') }}</button>
-              </div>
-            </template>
-            <div v-for="(m, i) in aiMessages" :key="i" class="ai-msg" :class="m.role">
-              <div class="ai-bubble">{{ m.content }}<span v-if="m.role === 'assistant' && aiStreaming && i === aiMessages.length - 1" class="ai-cursor">▍</span></div>
-              <p v-if="m.role === 'assistant' && m.complete === false && (!aiStreaming || i !== aiMessages.length - 1)" class="analysis-scope">{{ t('ai.incompleteReply') }}</p>
-            </div>
-          </div>
-          <p class="analysis-scope">{{ t('reader.analysisScope') }} · {{ aiScope || chapterLabel || meta?.title }}<br />{{ t(aiMessages.length ? 'reader.analysisInSession' : 'reader.analysisEmpty') }}<br />{{ t('ai.contextHint') }}</p>
-          <button class="btn btn-sm" :aria-expanded="aiInputOpen" @click="aiInputOpen = !aiInputOpen">{{ t('reader.analysisFollowUp') }}</button>
-          <div v-if="aiInputOpen" class="ai-input-row">
-            <input
-              v-model="aiInput"
-              class="input"
-              :placeholder="t('ai.placeholder')"
-              :aria-label="t('ai.placeholder')"
-              :maxlength="READER_QUESTION_LIMIT"
-              :disabled="aiStreaming"
-              @keyup.enter="sendAi()"
-            />
-            <button v-if="aiStreaming" class="btn btn-sm" @click="stopAi">{{ t('common.stop') }}</button>
-            <button v-else class="btn btn-sm btn-primary" :disabled="!aiInput.trim()" @click="sendAi()">{{ t('ai.send') }}</button>
-          </div>
-          <button v-if="aiMessages.length" class="btn btn-sm ai-clear" @click="clearAi">{{ t('ai.clear') }}</button>
-        </template>
-      </template>
-
-      <template v-else>
-        <h3>{{ t('reader.searchInBook') }}</h3>
-        <form class="search-form" @submit.prevent="runSearch">
-          <input v-model="searchQuery" class="input" type="search" :placeholder="t('reader.searchPlaceholder')" />
-        </form>
-        <div class="search-opts">
-          <button type="button" class="search-opt" :class="{ active: searchOpts.caseSensitive }" :title="t('reader.matchCase')" :aria-label="t('reader.matchCase')" :aria-pressed="searchOpts.caseSensitive" @click="toggleSearchOpt('caseSensitive')">Aa</button>
-          <button type="button" class="search-opt" :class="{ active: searchOpts.wholeWord }" :title="t('reader.wholeWord')" :aria-label="t('reader.wholeWord')" :aria-pressed="searchOpts.wholeWord" @click="toggleSearchOpt('wholeWord')">\b</button>
-          <button type="button" class="search-opt" :class="{ active: searchOpts.regex }" :title="t('reader.useRegex')" :aria-label="t('reader.useRegex')" :aria-pressed="searchOpts.regex" @click="toggleSearchOpt('regex')">.*</button>
-          <span v-if="searching" class="search-count">{{ Math.round(searchProgress * 100) }}%</span>
-          <span v-else-if="searchQuery && searchResults.length" class="search-count">
-            {{ t('reader.resultCount', { n: searchResults.length }) }}{{ searchTruncated ? '+' : '' }}
-          </span>
-        </div>
-        <div class="panel-body">
-          <template v-for="(r, i) in searchResults" :key="i">
-            <div
-              v-if="i === 0 || r.chapter !== searchResults[i - 1].chapter"
-              class="search-chapter"
-            >{{ r.chapter || '·' }}</div>
-            <div class="search-item" @click="gotoSearchHit(r)"><template v-for="(seg, j) in r.segments" :key="j"><mark v-if="seg.hit">{{ seg.text }}</mark><template v-else>{{ seg.text }}</template></template></div>
-          </template>
-          <p v-if="!searching && searchQuery && !searchResults.length" class="panel-empty">{{ t('reader.noResults') }}</p>
-        </div>
-        <button class="btn btn-sm" style="margin-top: 8px" @click="closeSearch">{{ t('reader.clearAndClose') }}</button>
-      </template>
-    </aside>
+    <!-- 侧栏面板已移入 reader-stage -->
 
     <!-- 排版面板: 静态的外观与版式值只在这里调 (docs/reader-panels.md) -->
     <TypographyPanel
@@ -4365,7 +4423,7 @@ onBeforeRouteLeave(async () => {
   position: absolute;
   left: 0;
   right: 0;
-  z-index: 10;
+  z-index: 20;
   display: flex;
   align-items: center;
   gap: 10px;
@@ -4578,8 +4636,18 @@ onBeforeRouteLeave(async () => {
 .ai-quick-chip { justify-content: flex-start; text-align: left; padding: 10px 14px; height: auto; min-height: 42px; border: 1px solid var(--text); border-radius: 0; font-size: 14px; font-weight: 500; background: var(--card); color: var(--text); }
 .ai-quick-chip:active { background: var(--text); color: var(--card); }
 /* 正文让出状态栏 / 手势条 / 横屏刘海; 阅读背景仍铺满整屏 */
+.reader-stage {
+  position: relative;
+  flex: 1;
+  min-width: 0;
+  min-height: 0;
+  display: flex;
+  flex-direction: row;
+  overflow: hidden;
+}
 .content {
   flex: 1;
+  min-width: 0;
   height: 100%;
   padding: var(--safe-top) var(--lr-safe-right) calc(var(--safe-bottom) + var(--pw-extra-bottom, 0px)) var(--lr-safe-left);
 }
@@ -4839,17 +4907,53 @@ onBeforeRouteLeave(async () => {
   justify-content: flex-end;
 }
 .panel {
-  position: absolute;
-  top: calc(52px + var(--safe-top));
-  right: 12px;
-  bottom: calc(50px + var(--safe-bottom));
-  z-index: 15;
-  width: min(420px, calc(100% - 24px));
+  position: relative;
+  flex: 0 0 min(380px, 40%);
+  width: min(380px, 40%);
+  min-width: 280px;
   min-height: 0;
-  max-height: calc(100dvh - 104px - var(--safe-top) - var(--safe-bottom));
+  height: 100%;
+  z-index: 15;
   padding: 18px 20px;
+  border-radius: 0;
+  border-top: none;
+  border-bottom: none;
+  border-right: none;
+  border-left: 2px solid var(--border-strong);
   display: flex;
   flex-direction: column;
+}
+.reader.bars-on .panel {
+  padding-top: calc(12px + 68px + var(--safe-top));
+  padding-bottom: calc(12px + var(--footer-h) + var(--safe-bottom));
+}
+@media (max-width: 1023px) {
+  .reader.bars-on .panel {
+    padding-top: calc(12px + 124px + var(--safe-top));
+  }
+}
+@media (max-width: 767px) {
+  .reader-stage {
+    display: block;
+  }
+  .panel {
+    position: absolute;
+    top: auto;
+    left: 0;
+    right: 0;
+    bottom: 0;
+    width: auto;
+    min-width: 0;
+    height: 52%;
+    max-height: 70%;
+    border-left: none;
+    border-top: 2px solid var(--border-strong);
+    padding: 18px max(16px, var(--lr-safe-right)) calc(16px + var(--safe-bottom)) max(16px, var(--lr-safe-left));
+  }
+  .reader.bars-on .panel {
+    padding-top: 18px;
+    padding-bottom: calc(16px + var(--footer-h) + var(--safe-bottom));
+  }
 }
 .panel h3 {
   font-family: var(--font-serif);

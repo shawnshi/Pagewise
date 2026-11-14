@@ -52,6 +52,7 @@ class OnyxSdkBridge(
     private val epdHandler = Handler(Looper.getMainLooper())
     private var pendingFastExit: Runnable? = null
     private var pendingOverlayRepaint: Runnable? = null
+    private var managementOverlayView: View? = null
 
     private var touchHelperInstance: Any? = null
     private val externalOpenQueue = ArrayList<JSONObject>()
@@ -124,6 +125,18 @@ class OnyxSdkBridge(
         applyViewDefaultUpdateMode(webView, windowState.epdState.defaultMode)
     }
 
+    fun attachManagementOverlay(overlay: View) {
+        managementOverlayView = overlay
+        val enumVal = resolveUpdateModeEnum(OnyxWaveformMode.GU) ?: return
+        val modeCls = updateModeClass ?: return
+        invokeStatic(
+            epdClass,
+            "setViewDefaultUpdateMode",
+            arrayOf(View::class.java, modeCls),
+            arrayOf(overlay, enumVal),
+        )
+    }
+
     fun configureGcInterval(pages: Int): String {
         windowState.epdState.configureGcInterval(pages)
         return buildEpdStatusJson()
@@ -161,10 +174,11 @@ class OnyxSdkBridge(
         delayMs: Int,
     ) {
         pendingOverlayRepaint?.let { epdHandler.removeCallbacks(it) }
+        val resolvedMode = OnyxWaveformMode.fromWire(mode)
         val task =
             Runnable {
                 pendingOverlayRepaint = null
-                if (windowState.resumed) repaintScreen(webView, if (mode == "gc") "gc" else "regal")
+                if (windowState.resumed) repaintScreen(webView, resolvedMode)
             }
         pendingOverlayRepaint = task
         epdHandler.postDelayed(task, delayMs.coerceIn(0, 2000).toLong())
@@ -231,6 +245,8 @@ class OnyxSdkBridge(
         webView: WebView?,
         mode: OnyxWaveformMode,
     ) {
+        val targetView: View? =
+            managementOverlayView?.takeIf { it.isAttachedToWindow && it.visibility == View.VISIBLE } ?: webView
         val enumVal = resolveUpdateModeEnum(mode)
         if (enumVal != null && updateModeClass != null) {
             val repainted =
@@ -240,16 +256,16 @@ class OnyxSdkBridge(
                     arrayOf(updateModeClass),
                     arrayOf(enumVal),
                 )
-            if (!repainted && webView != null) {
+            if (!repainted && targetView != null) {
                 invokeStatic(
                     epdClass,
                     "invalidate",
                     arrayOf(View::class.java, updateModeClass),
-                    arrayOf(webView, enumVal),
+                    arrayOf(targetView, enumVal),
                 )
             }
         }
-        webView?.postInvalidate()
+        targetView?.postInvalidate()
     }
 
     private fun applyViewDefaultUpdateMode(
@@ -1181,5 +1197,130 @@ class OnyxSdkBridge(
             val target = File(root, cleanRel).canonicalFile
             if (target.path.startsWith(root.path + File.separator) && target.isFile) target else null
         }.getOrNull()
+    }
+
+    // =========================================================================
+    // 9. Stage 5: System Dictionary Lookup & Ex Libris Sleep Cover Generator
+    // =========================================================================
+
+    fun lookupSystemDictionary(rawWord: String): Boolean {
+        val word = rawWord.trim().take(120)
+        if (word.isEmpty()) return false
+        return runCatching {
+            val intent =
+                Intent(Intent.ACTION_PROCESS_TEXT).apply {
+                    type = "text/plain"
+                    putExtra(Intent.EXTRA_PROCESS_TEXT, word)
+                    putExtra(Intent.EXTRA_PROCESS_TEXT_READONLY, true)
+                    addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+                }
+            val pm = context.packageManager
+            if (intent.resolveActivity(pm) != null) {
+                context.startActivity(intent)
+                return true
+            }
+            val searchIntent =
+                Intent(Intent.ACTION_SEARCH).apply {
+                    putExtra("query", word)
+                    addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+                }
+            if (searchIntent.resolveActivity(pm) != null) {
+                context.startActivity(searchIntent)
+                return true
+            }
+            false
+        }.getOrDefault(false)
+    }
+
+    fun generateSleepCover(
+        title: String,
+        author: String,
+        progressPercent: Int,
+        coverRelPath: String,
+    ): String {
+        val cleanTitle = title.trim().ifEmpty { "Pagewise" }
+        val cleanAuthor = author.trim()
+        val pct = progressPercent.coerceIn(0, 100)
+        return runCatching {
+            val w = 1404
+            val h = 1872
+            val bmp = Bitmap.createBitmap(w, h, Bitmap.Config.ARGB_8888)
+            try {
+                val canvas = Canvas(bmp)
+                canvas.drawColor(Color.WHITE)
+                val inkPaint = android.graphics.Paint(android.graphics.Paint.ANTI_ALIAS_FLAG).apply { color = Color.BLACK }
+                val subPaint =
+                    android.graphics.Paint(android.graphics.Paint.ANTI_ALIAS_FLAG).apply {
+                        color = Color.parseColor("#444444")
+                        textAlign = android.graphics.Paint.Align.CENTER
+                    }
+                val rulePaint =
+                    android.graphics.Paint().apply {
+                        color = Color.BLACK
+                        style = android.graphics.Paint.Style.STROKE
+                        strokeWidth = 6f
+                    }
+                canvas.drawRect(72f, 72f, w - 72f, h - 72f, rulePaint)
+                rulePaint.strokeWidth = 2f
+                rulePaint.color = Color.parseColor("#BBBBBB")
+                canvas.drawRect(88f, 88f, w - 88f, h - 88f, rulePaint)
+
+                subPaint.textSize = 28f
+                subPaint.typeface = android.graphics.Typeface.MONOSPACE
+                canvas.drawText("EX LIBRIS · PAGEWISE", w / 2f, 180f, subPaint)
+
+                val coverFile = if (coverRelPath.isNotBlank()) resolveSafeBookFile(coverRelPath) else null
+                val coverBmp = coverFile?.let { android.graphics.BitmapFactory.decodeFile(it.absolutePath) }
+                if (coverBmp != null) {
+                    val boxW = 640
+                    val boxH = 880
+                    val left = (w - boxW) / 2f
+                    val top = 260f
+                    val dest = android.graphics.RectF(left, top, left + boxW, top + boxH)
+                    canvas.drawBitmap(coverBmp, null, dest, null)
+                    rulePaint.color = Color.BLACK
+                    rulePaint.strokeWidth = 4f
+                    canvas.drawRect(dest, rulePaint)
+                    coverBmp.recycle()
+                }
+
+                inkPaint.textAlign = android.graphics.Paint.Align.CENTER
+                inkPaint.textSize = 54f
+                inkPaint.typeface = android.graphics.Typeface.create(android.graphics.Typeface.SERIF, android.graphics.Typeface.BOLD)
+                canvas.drawText(cleanTitle.take(28), w / 2f, 1280f, inkPaint)
+
+                if (cleanAuthor.isNotEmpty()) {
+                    subPaint.textSize = 36f
+                    subPaint.typeface = android.graphics.Typeface.SERIF
+                    canvas.drawText(cleanAuthor.take(40), w / 2f, 1355f, subPaint)
+                }
+
+                // Fore-edge progress gauge
+                val barLeft = 280f
+                val barRight = w - 280f
+                val barTop = 1460f
+                val barBottom = 1484f
+                rulePaint.color = Color.BLACK
+                rulePaint.strokeWidth = 3f
+                canvas.drawRect(barLeft, barTop, barRight, barBottom, rulePaint)
+                if (pct > 0) {
+                    inkPaint.style = android.graphics.Paint.Style.FILL
+                    canvas.drawRect(barLeft, barTop, barLeft + (barRight - barLeft) * (pct / 100f), barBottom, inkPaint)
+                }
+                subPaint.textSize = 28f
+                subPaint.typeface = android.graphics.Typeface.MONOSPACE
+                canvas.drawText("READING PROGRESS · $pct%", w / 2f, 1545f, subPaint)
+
+                val outDir = File(context.filesDir, "exports").apply { mkdirs() }
+                val outFile = File(outDir, "pagewise_sleep_cover.png")
+                FileOutputStream(outFile).use { out ->
+                    bmp.compress(Bitmap.CompressFormat.PNG, 100, out)
+                    out.fd.sync()
+                }
+                outFile.absolutePath
+            } finally {
+                bmp.recycle()
+            }
+        }.getOrDefault("")
     }
 }

@@ -336,9 +336,14 @@ function onWarmLight(e: Event) {
   }
 }
 
-function toggleFrontLight() {
-  const current = props.modes.frontLightState?.value?.enabled ?? true
-  props.modes.setFrontLightEnabled?.(!current)
+function stepColdLight(delta: number) {
+  const current = props.modes.frontLightState?.value?.cold ?? 45
+  props.modes.setColdLight?.(Math.min(100, Math.max(0, current + delta)))
+}
+
+function stepWarmLight(delta: number) {
+  const current = props.modes.frontLightState?.value?.warm ?? 35
+  props.modes.setWarmLight?.(Math.min(100, Math.max(0, current + delta)))
 }
 
 // 场景提示
@@ -736,16 +741,31 @@ let systemFontsLoading = false
         <div class="seg" role="group" :aria-label="t('reader.frontLight')">
           <button
             type="button"
-            :class="{ active: modes.frontLightState.value.enabled }"
-            :aria-pressed="modes.frontLightState.value.enabled"
-            @click="toggleFrontLight"
+            :class="{ active: !modes.frontLightState.value.enabled }"
+            :aria-pressed="!modes.frontLightState.value.enabled"
+            @click="modes.setFrontLightEnabled?.(false)"
           >
-            {{ modes.frontLightState.value.enabled ? t('reader.frontLightOn') : t('reader.frontLightOff') }}
+            {{ t('reader.frontLightOff') }}
+          </button>
+          <button
+            type="button"
+            :class="{ active: modes.frontLightState.value.enabled && modes.frontLightState.value.cold >= modes.frontLightState.value.warm }"
+            @click="modes.applyFrontLightPreset?.('daylight')"
+          >
+            {{ t('reader.themeLight') }}
+          </button>
+          <button
+            type="button"
+            :class="{ active: modes.frontLightState.value.enabled && modes.frontLightState.value.warm > modes.frontLightState.value.cold }"
+            @click="modes.applyFrontLightPreset?.('night')"
+          >
+            {{ t('reader.themeDark') }}
           </button>
         </div>
       </div>
       <div class="set-row">
         <span class="tp-label">{{ t('reader.coldLight') }}</span>
+        <button type="button" class="btn btn-sm" @click="stepColdLight(-10)">−</button>
         <input
           type="range"
           min="0"
@@ -756,10 +776,12 @@ let systemFontsLoading = false
           :aria-valuetext="`${modes.frontLightState.value.cold}%`"
           @input="onColdLight"
         />
+        <button type="button" class="btn btn-sm" @click="stepColdLight(10)">+</button>
         <span class="tp-unit-val">{{ modes.frontLightState.value.cold }}%</span>
       </div>
       <div v-if="modes.frontLightState.value.ctmSupported" class="set-row">
         <span class="tp-label">{{ t('reader.warmLight') }}</span>
+        <button type="button" class="btn btn-sm" @click="stepWarmLight(-10)">−</button>
         <input
           type="range"
           min="0"
@@ -770,6 +792,7 @@ let systemFontsLoading = false
           :aria-valuetext="`${modes.frontLightState.value.warm}%`"
           @input="onWarmLight"
         />
+        <button type="button" class="btn btn-sm" @click="stepWarmLight(10)">+</button>
         <span class="tp-unit-val">{{ modes.frontLightState.value.warm }}%</span>
       </div>
     </section>

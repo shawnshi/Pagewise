@@ -117,6 +117,8 @@ internal class NativePagesController(
     private var settingsPanel: NativeSettingsPanel? = null
     private val obscuredAccessibility = linkedMapOf<View, Int>()
     private var pageTitle: TextView? = null
+    private var recoveryNeeded = false
+    private var recoveryToolbarButton: android.widget.ImageButton? = null
     private var sectionScrollListener: android.view.ViewTreeObserver.OnScrollChangedListener? = null
     private var sectionNavHost: NativeContentColumn? = null
 
@@ -138,6 +140,9 @@ internal class NativePagesController(
             "更多操作" to "More actions",
             "选择" to "Select",
             "继续阅读" to "Continue reading",
+            "再次阅读" to "Read again",
+            "开始阅读" to "Start reading",
+            "核对未保存设置 / 恢复" to "Inspect unsaved settings / recovery",
             "重新关联文件" to "Relink file",
             "重新授权" to "Reauthorize",
             "重新扫描" to "Rescan",
@@ -233,6 +238,8 @@ internal class NativePagesController(
             "阅读时长" to "Reading time",
             "加入时间" to "Added",
             "编辑书目信息" to "Edit book details",
+            "补全元数据" to "Complete metadata",
+            "著录元数据补全与精修" to "Metadata completion",
             "前情提要" to "Catch-up",
             "导出读书笔记" to "Export notes",
             "跨书对比预览" to "Cross-book matrix",
@@ -441,7 +448,11 @@ internal class NativePagesController(
                 "annotation_saved_draft_pending" -> "批注已保存，但旧草稿清理未确认；不要将它视为批注保存失败或重复提交。"
                 "partial_restore" -> "恢复未全部完成，部分记录可能已经提交；请保留备份并核对，不能假定已完全回滚或自动重放。"
                 "partial_import" -> "部分文件已入库，另有输入未完成；请核对批次回执，不要假定全部失败。"
-                "native_settings_unsaved" -> "仍有未保存的本地设置或排版草稿；请保持应用开启并核对，不能自动丢弃。"
+                "native_settings_unsaved" -> {
+                    recoveryNeeded = true
+                    recoveryToolbarButton?.visibility = View.VISIBLE
+                    "仍有未保存的本地设置或排版草稿；请保持应用开启并核对，不能自动丢弃。"
+                }
                 "permission_denied", "permission-denied" -> "没有文件访问权限，请在设置中重新授权。"
                 "ai_not_configured", "not_configured" -> "请先在设置中配置自己的 AI 服务、API Key 和模型。"
                 else -> "操作未完成（${code.take(80).replace(Regex("[^a-zA-Z0-9_-]"), "")}）。已有数据不会被当成空数据替换。"
@@ -493,6 +504,7 @@ internal class NativePagesController(
                 overlay,
                 ViewGroup.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.MATCH_PARENT),
             )
+            (activity as? MainActivity)?.onyxBridgeInstance()?.attachManagementOverlay(overlay)
             mounted = true
         }
         overlay.visibility = View.VISIBLE
@@ -575,14 +587,22 @@ internal class NativePagesController(
         ) {
             return false
         }
+        val volumeKeysPaging =
+            preferences
+                .optJSONObject("readingMode")
+                ?.optJSONObject("eink")
+                ?.optBoolean("volumeKeysEnabled", true) ?: true
         val direction =
             when (event.keyCode) {
-                KeyEvent.KEYCODE_PAGE_DOWN -> View.FOCUS_DOWN
-                KeyEvent.KEYCODE_PAGE_UP -> View.FOCUS_UP
+                KeyEvent.KEYCODE_PAGE_DOWN, KeyEvent.KEYCODE_DPAD_RIGHT -> View.FOCUS_DOWN
+                KeyEvent.KEYCODE_PAGE_UP, KeyEvent.KEYCODE_DPAD_LEFT -> View.FOCUS_UP
+                KeyEvent.KEYCODE_VOLUME_DOWN -> if (volumeKeysPaging) View.FOCUS_DOWN else return false
+                KeyEvent.KEYCODE_VOLUME_UP -> if (volumeKeysPaging) View.FOCUS_UP else return false
                 else -> return false
             }
         if (event.action == KeyEvent.ACTION_DOWN) {
             if (page == "settings") settingsPanel?.pageScroll(direction) else scroll.pageScroll(direction)
+            repaint()
         }
         return true
     }
@@ -616,21 +636,7 @@ internal class NativePagesController(
         closeEditorsAfterLeave()
         dialogIntent++
         generation++
-        shell.removeAllViews()
-        body.removeAllViews()
-        overlay.setBackgroundColor(background)
-        shell.addView(text(label("正在加载…")))
-        call("state.settingsGet") { state ->
-            preferences = JSONObject(state.getString("raw"))
-            val eink = preferences.optJSONObject("readingMode")?.optJSONObject("eink")?.optBoolean("enabled") == true
-            val dark =
-                !eink &&
-                    (
-                        preferences.optString("appearance") == "dark" ||
-                            (preferences.optString("appearance") == "system" && activity.resources.configuration.uiMode and 0x30 == 0x20)
-                    )
-            foreground = if (dark) Color.WHITE else Color.BLACK
-            background = if (dark) Color.BLACK else Color.WHITE
+        val renderContent = {
             frame()
             when (page) {
                 "library", "reading" -> books()
@@ -639,6 +645,27 @@ internal class NativePagesController(
                 "stats" -> statistics()
                 "settings" -> settings()
                 "manual" -> manual()
+            }
+        }
+        if (preferences.length() > 0) {
+            renderContent()
+        } else {
+            shell.removeAllViews()
+            body.removeAllViews()
+            overlay.setBackgroundColor(background)
+            shell.addView(text(label("正在加载…")))
+            call("state.settingsGet") { state ->
+                preferences = JSONObject(state.getString("raw"))
+                val eink = preferences.optJSONObject("readingMode")?.optJSONObject("eink")?.optBoolean("enabled") == true
+                val dark =
+                    !eink &&
+                        (
+                            preferences.optString("appearance") == "dark" ||
+                                (preferences.optString("appearance") == "system" && activity.resources.configuration.uiMode and 0x30 == 0x20)
+                        )
+                foreground = if (dark) Color.WHITE else Color.BLACK
+                background = if (dark) Color.BLACK else Color.WHITE
+                renderContent()
             }
         }
     }
@@ -699,7 +726,12 @@ internal class NativePagesController(
         if (page !=
             "settings"
         ) {
-            toolbar.addView(NativeUi.iconButton(activity, label("核对恢复"), "recovery", foreground, background, ::showSettingsRecovery))
+            val recBtn = NativeUi.iconButton(activity, label("核对恢复"), "recovery", foreground, background, ::showSettingsRecovery)
+            recBtn.visibility = if (recoveryNeeded) View.VISIBLE else View.GONE
+            recoveryToolbarButton = recBtn
+            toolbar.addView(recBtn)
+        } else {
+            recoveryToolbarButton = null
         }
         toolbar.addView(
             NativeUi.iconButton(activity, label("更多操作"), "more", foreground, background) {
@@ -707,6 +739,7 @@ internal class NativePagesController(
                 val actions =
                     (if (page in listOf("library", "reading")) libraryPanel?.menuActions().orEmpty() else emptyList()) +
                         listOf(label("刷新") to { refresh() }) +
+                        (if (page != "settings") listOf(label("核对未保存设置 / 恢复") to ::showSettingsRecovery) else emptyList()) +
                         pages.map { (key, title) -> label(title) to { navigate(pathFor(key)) } }
                 choose(label("菜单"), actions.map { it.first }) { index ->
                     if (!disposed && owner == generation) actions.getOrNull(index)?.second?.invoke()
@@ -771,7 +804,9 @@ internal class NativePagesController(
         for (key in nativeBottomPages) {
             bottom.addView(
                 NativeUi.navigationItem(activity, label(pages.getValue(key)), key, key == selected, foreground, background) {
-                    if (key != page) navigate(pathFor(key))
+                    if (key != page) {
+                        navigate(pathFor(key))
+                    }
                 },
                 LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f),
             )
@@ -795,31 +830,66 @@ internal class NativePagesController(
                 gravity = Gravity.CENTER_VERTICAL
                 setPadding(0, dp(6), 0, dp(10))
             }
-        val edit =
-            input(query, hint).apply {
+        val box =
+            LinearLayout(activity).apply {
+                orientation = LinearLayout.HORIZONTAL
+                gravity = Gravity.CENTER_VERTICAL
                 background =
                     NativeUi.shape(activity, this@NativePagesController.background).apply {
                         setColor(NativeUi.mutedSurface(this@NativePagesController.background))
+                        setStroke(dp(1), NativeUi.border(this@NativePagesController.background))
                     }
-                setPadding(dp(12), dp(8), dp(12), dp(8))
+                setPadding(dp(12), dp(2), dp(6), dp(2))
             }
-        bar.addView(edit, LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f).apply { marginEnd = dp(8) })
+        box.addView(
+            ImageView(activity).apply {
+                setImageDrawable(NativeUi.glyph(activity, "search-library", NativeUi.secondary(this@NativePagesController.background), 18))
+            },
+            LinearLayout.LayoutParams(dp(18), dp(18)).apply { marginEnd = dp(8) },
+        )
+        val edit =
+            input(query, hint).apply {
+                background = null
+                setPadding(0, dp(8), 0, dp(8))
+                imeOptions = android.view.inputmethod.EditorInfo.IME_ACTION_SEARCH
+            }
+        val commit = {
+            query = edit.text.toString()
+            offset = 0
+            (
+                activity.getSystemService(
+                    Activity.INPUT_METHOD_SERVICE,
+                ) as InputMethodManager
+            ).hideSoftInputFromWindow(edit.windowToken, 0)
+            refresh()
+        }
+        edit.setOnEditorActionListener { _, actionId, _ ->
+            if (actionId == android.view.inputmethod.EditorInfo.IME_ACTION_SEARCH) {
+                commit()
+                true
+            } else {
+                false
+            }
+        }
+        box.addView(edit, LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f))
+        if (query.isNotEmpty()) {
+            box.addView(
+                NativeUi.iconButton(activity, label("清除搜索"), "close", foreground, background) {
+                    edit.setText("")
+                    query = ""
+                    offset = 0
+                    refresh()
+                },
+            )
+        }
+        bar.addView(box, LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f).apply { marginEnd = dp(8) })
         bar.addView(
             NativeUi.primaryButton(
                 activity,
                 label("搜索"),
                 foreground,
                 background,
-            ) {
-                query = edit.text.toString()
-                offset = 0
-                (
-                    activity.getSystemService(
-                        Activity.INPUT_METHOD_SERVICE,
-                    ) as InputMethodManager
-                ).hideSoftInputFromWindow(edit.windowToken, 0)
-                refresh()
-            },
+            ) { commit() },
         )
         parent.addView(bar)
     }
@@ -1048,6 +1118,7 @@ internal class NativePagesController(
                     readingRecommendations = true
                     refresh()
                 },
+                makeGridCard = { book, read, details -> bookGridCard(book, read, details) },
             )
         libraryPanel = panel
         libraryNoticeHost?.addView(panel.notice)
@@ -1090,6 +1161,125 @@ internal class NativePagesController(
         recommendationPanel = panel
         target.removeAllViews()
         target.addView(panel.render())
+    }
+
+    private fun bookGridCard(
+        book: JSONObject,
+        read: (() -> Unit)? = null,
+        details: (() -> Unit)? = null,
+    ): View {
+        val card =
+            column().apply {
+                setPadding(dp(10), dp(10), dp(10), dp(10))
+                background = NativeUi.bookRowBackground(activity, this@NativePagesController.background, true)
+                isFocusable = true
+                isSelected = book.optString("id") in libraryState.selected
+                contentDescription = book.optString("title")
+            }
+        val coverBox =
+            FrameLayout(activity).apply {
+                background =
+                    NativeUi.shape(activity, this@NativePagesController.background).apply {
+                        setColor(NativeUi.mutedSurface(this@NativePagesController.background))
+                        setStroke(dp(1), NativeUi.border(this@NativePagesController.background))
+                    }
+                clipToOutline = true
+                setPadding(dp(3), dp(3), dp(3), dp(3))
+            }
+        coverBox.addView(
+            text(book.optString("title"), 12f, true).apply {
+                gravity = Gravity.CENTER
+                setPadding(dp(6), dp(8), dp(6), dp(8))
+                maxLines = 4
+            },
+            FrameLayout.LayoutParams(-1, -1),
+        )
+        val cover = ImageView(activity).apply { scaleType = ImageView.ScaleType.CENTER_CROP }
+        coverBox.addView(cover, FrameLayout.LayoutParams(-1, -1))
+        loadCover(cover, book.optString("coverPath"))
+        coverBox.addView(
+            text(book.optString("format").uppercase(), 9f, true).apply {
+                setTextColor(Color.WHITE)
+                setBackgroundColor(Color.argb(190, 0, 0, 0))
+                setPadding(dp(4), dp(1), dp(4), dp(1))
+            },
+            FrameLayout.LayoutParams(-2, -2, Gravity.TOP or Gravity.START).apply { setMargins(dp(4), dp(4), 0, 0) },
+        )
+        val selectionMark =
+            if (libraryState.manage) {
+                text(if (card.isSelected) "✓" else "□", 20f, true).apply {
+                    gravity = Gravity.CENTER
+                    setBackgroundColor(NativeUi.surface(this@NativePagesController.background))
+                }
+            } else {
+                null
+            }
+        selectionMark?.let { coverBox.addView(it, FrameLayout.LayoutParams(dp(28), dp(28), Gravity.TOP or Gravity.END)) }
+        // Strict E-Ink tap filter on grid cover to avoid accidental page-scroll opens.
+        var downX = 0f
+        var downY = 0f
+        var downTime = 0L
+        val maxSlop = dp(4).toFloat()
+        coverBox.setOnTouchListener { _, ev ->
+            when (ev.actionMasked) {
+                android.view.MotionEvent.ACTION_DOWN -> {
+                    downX = ev.x
+                    downY = ev.y
+                    downTime = ev.eventTime
+                }
+                android.view.MotionEvent.ACTION_UP -> {
+                    val dt = ev.eventTime - downTime
+                    val dx = kotlin.math.abs(ev.x - downX)
+                    val dy = kotlin.math.abs(ev.y - downY)
+                    if (dx <= maxSlop && dy <= maxSlop && dt in 20L..350L) {
+                        if (libraryState.manage) {
+                            card.performClick()
+                        } else {
+                            bookPrimary(book) { if (read != null) read() else openReader(book) }
+                        }
+                    }
+                }
+            }
+            true
+        }
+        card.addView(coverBox, LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, dp(196)).apply { bottomMargin = dp(8) })
+        val hasProgress = !book.isNull("progress") && book.optDouble("progress").isFinite()
+        val percent = if (hasProgress) (book.optDouble("progress").coerceIn(0.0, 1.0) * 100).toInt() else 0
+        if (hasProgress && percent > 0) {
+            card.addView(
+                NativeUi.foreEdgeProgressBar(activity, percent, foreground, background, 120).apply {
+                    (layoutParams as LinearLayout.LayoutParams).apply {
+                        width = ViewGroup.LayoutParams.MATCH_PARENT
+                        bottomMargin = dp(6)
+                    }
+                },
+            )
+        }
+        card.addView(
+            text(book.optString("title"), 14f, true).apply {
+                maxLines = 2
+                ellipsize = TextUtils.TruncateAt.END
+                setTypeface(Typeface.SERIF, Typeface.BOLD)
+                setPadding(0, 0, 0, dp(2))
+            },
+        )
+        val author = book.optString("author").takeUnless { it.isBlank() || it == "null" } ?: label("未知作者")
+        card.addView(
+            text(author, 12f).apply {
+                maxLines = 1
+                ellipsize = TextUtils.TruncateAt.END
+                setTextColor(NativeUi.secondary(this@NativePagesController.background))
+                setPadding(0, 0, 0, dp(2))
+            },
+        )
+        card.setOnClickListener {
+            if (details != null) details() else navigate("/book/${Uri.encode(book.getString("id"))}")
+            if (libraryState.manage) {
+                card.isSelected = book.optString("id") in libraryState.selected
+                selectionMark?.text = if (card.isSelected) "✓" else "□"
+            }
+        }
+        return card
     }
 
     private fun bookRow(
@@ -1643,23 +1833,19 @@ internal class NativePagesController(
                 setPadding(dp(12), dp(4), dp(12), dp(4))
             },
         )
+        val primaryBookActionLabel =
+            when {
+                book.optString("fileAvailability") == "permission-denied" -> "重新授权"
+                book.optString("fileAvailability") == "missing" -> "重新关联文件"
+                book.optString("effectiveReadingStatus") == "finished" || book.optDouble("progress", 0.0) >= 0.99 -> "再次阅读"
+                book.optDouble("progress", 0.0) > 0.0 -> "继续阅读"
+                else -> "开始阅读"
+            }
         statusActions.addView(
             NativeUi
                 .primaryButton(
                     activity,
-                    label(
-                        if (book.optString("fileAvailability") in
-                            setOf("missing", "permission-denied")
-                        ) {
-                            if (book.optString("fileAvailability") == "permission-denied") "重新授权" else "重新关联文件"
-                        } else if (book.optDouble("progress", 0.0) >
-                            0
-                        ) {
-                            "继续阅读"
-                        } else {
-                            "阅读"
-                        },
-                    ),
+                    label(primaryBookActionLabel),
                     foreground,
                     background,
                 ) { bookPrimary(book) }
@@ -1927,24 +2113,21 @@ internal class NativePagesController(
             LinearLayout.LayoutParams(ViewGroup.LayoutParams.WRAP_CONTENT, ViewGroup.LayoutParams.WRAP_CONTENT),
         )
         overview.addView(introHeader)
-        overview.addView(
-            text(
-                "",
-                14f,
-            ).apply {
-                text =
-                    if (description.isNotEmpty() &&
-                        description != "null"
-                    ) {
-                        formatBookDescription(description)
-                    } else {
-                        label("暂无简介，可按书目信息生成。")
-                    }
-                setTextIsSelectable(true)
-                setTypeface(Typeface.SERIF, Typeface.NORMAL)
-                setLineSpacing(0f, 1.45f)
-            },
-        )
+        if (description.isNotEmpty() && description != "null") {
+            overview.addView(
+                NativeManualRenderer(activity, foreground, background, compact = true) { href ->
+                    if (href.startsWith("https://")) manualLink(href)
+                }.render(description),
+            )
+        } else {
+            overview.addView(
+                text(label("暂无简介，可按书目信息生成。"), 14f).apply {
+                    setTextColor(NativeUi.secondary(this@NativePagesController.background))
+                    setTypeface(Typeface.SERIF, Typeface.NORMAL)
+                    setLineSpacing(0f, 1.45f)
+                },
+            )
+        }
         val classification = book.optJSONObject("classification")
         overview.addView(
             text(label("分类与标签"), 16f, true).apply {
@@ -2029,6 +2212,15 @@ internal class NativePagesController(
                 setPadding(dp(14), dp(4), dp(14), dp(4))
             }
         fileActions.addView(editBookBtn)
+        val metadataBtn =
+            button("补全元数据") { completeBookMetadata(book) }.apply {
+                background = NativeUi.hairlineShape(activity, this@NativePagesController.background, true)
+                minHeight = dp(38)
+                minimumHeight = dp(38)
+                gravity = Gravity.CENTER
+                setPadding(dp(14), dp(4), dp(14), dp(4))
+            }
+        fileActions.addView(metadataBtn)
         val catchupBtn =
             button("前情提要") { showBookCatchup(book) }.apply {
                 background = NativeUi.hairlineShape(activity, this@NativePagesController.background, true)
@@ -2260,13 +2452,32 @@ internal class NativePagesController(
                 sb.append("- 锚点: `$cfi`\n\n")
             }
         }
+        val markdown = sb.toString()
         val mdView =
-            text(sb.toString(), 13f).apply {
+            text(markdown, 13f).apply {
                 setTextIsSelectable(true)
                 setPadding(dp(16), dp(12), dp(16), dp(12))
             }
-        dialog("导出读书笔记", ScrollView(activity).apply { addView(mdView) }) {
-            currentDialog?.dismiss()
+        replaceDialog {
+            AlertDialog
+                .Builder(activity)
+                .setTitle("导出读书笔记")
+                .setView(ScrollView(activity).apply { addView(mdView) })
+                .setPositiveButton("系统分享") { _, _ ->
+                    val share =
+                        Intent(Intent.ACTION_SEND).apply {
+                            type = "text/markdown"
+                            putExtra(Intent.EXTRA_SUBJECT, "Pagewise 读书笔记")
+                            putExtra(Intent.EXTRA_TEXT, markdown)
+                        }
+                    runCatching {
+                        activity.startActivity(Intent.createChooser(share, label("导出读书笔记")))
+                    }.onFailure {
+                        showError("share_unavailable")
+                    }
+                }.setNegativeButton(label("关闭"), null)
+                .show()
+                .also { it.window?.setWindowAnimations(0) }
         }
     }
 
@@ -2341,6 +2552,186 @@ internal class NativePagesController(
             form.addView(editor)
         }
         dialog("编辑书目信息", ScrollView(activity).apply { addView(form) }) {
+            val patch = JSONObject()
+            for ((key, editor) in editors) {
+                val value = editor.text.toString().replace("\u0000", "").trim()
+                val orig = if (book.isNull(key)) "" else book.optString(key)
+                val maxLen = limits[key] ?: 512
+                if (value.length > maxLen) {
+                    editor.error = "超出长度上限 ($maxLen)"
+                    return@dialog
+                }
+                if (fillEmptyOnly && orig.isNotBlank()) continue
+                if (value != orig) {
+                    patch.put(key, value)
+                }
+            }
+            if (patch.has("title") && patch.getString("title").isBlank()) {
+                editors["title"]?.error = "书名不能为空"
+                return@dialog
+            }
+            if (patch.length() == 0) currentDialog?.dismiss() else patchBook(book, patch)
+        }
+    }
+
+    private fun completeBookMetadata(book: JSONObject) {
+        val limits =
+            mapOf(
+                "title" to 512,
+                "author" to 256,
+                "publisher" to 256,
+                "publicationDate" to 64,
+                "language" to 32,
+            )
+        var fillEmptyOnly = true
+        val fields =
+            linkedMapOf(
+                "title" to "书名",
+                "author" to "作者",
+                "publisher" to "出版社",
+                "publicationDate" to "出版日期",
+                "language" to "语言",
+            )
+        val form = column()
+        val statusText =
+            TextView(activity).apply {
+                text = label("点击下方按钮发起公开书目并发检索或 AI 推理补全。")
+                textSize = 13f
+                setTextColor(this@NativePagesController.foreground)
+                setPadding(dp(4), dp(4), dp(4), dp(6))
+            }
+        form.addView(statusText)
+
+        val editors = linkedMapOf<String, EditText>()
+        val actionRow = NativeActionFlow(activity)
+
+        val modeBtn =
+            button("仅补全空白字段") {}.apply {
+                setOnClickListener {
+                    fillEmptyOnly = !fillEmptyOnly
+                    text = label(if (fillEmptyOnly) "仅补全空白字段" else "覆盖已有字段")
+                }
+                background = NativeUi.hairlineShape(activity, this@NativePagesController.background, true)
+                minHeight = dp(34)
+                setPadding(dp(10), dp(4), dp(10), dp(4))
+            }
+        actionRow.addView(modeBtn)
+
+        val candidateContainer = column()
+
+        fun applyFields(patch: JSONObject) {
+            var appliedCount = 0
+            for ((key, editor) in editors) {
+                if (patch.has(key) && !patch.isNull(key)) {
+                    val newVal = patch.optString(key).trim()
+                    if (newVal.isNotEmpty()) {
+                        val currVal = editor.text.toString().trim()
+                        if (!fillEmptyOnly || currVal.isEmpty()) {
+                            editor.setText(newVal)
+                            appliedCount++
+                        }
+                    }
+                }
+            }
+            statusText.text = label("已采纳补全项 ($appliedCount 处更新)，保存后生效。")
+        }
+
+        val searchBtn =
+            button("检索公开书目 (第一级)") {}.apply {
+                background = NativeUi.hairlineShape(activity, this@NativePagesController.background, true)
+                minHeight = dp(34)
+                setPadding(dp(10), dp(4), dp(10), dp(4))
+                setOnClickListener {
+                    statusText.text = label("正在检索 OpenLibrary / Google Books / 豆瓣…")
+                    val p =
+                        JSONObject()
+                            .put("title", editors["title"]?.text?.toString()?.trim() ?: book.optString("title"))
+                            .put("author", editors["author"]?.text?.toString()?.trim() ?: book.optString("author"))
+                    request("action.metadataSearchOpen", p) { result, error ->
+                        activity.runOnUiThread {
+                            if (error != null || result?.optBoolean("ok") != true) {
+                                statusText.text = label("公开书目库未检索到匹配项，可尝试第二级 AI 推理。")
+                                return@runOnUiThread
+                            }
+                            val candidates = result.optJSONArray("candidates") ?: JSONArray()
+                            candidateContainer.removeAllViews()
+                            if (candidates.length() == 0) {
+                                statusText.text = label("公开书目库未检索到匹配项，可尝试第二级 AI 推理。")
+                            } else {
+                                statusText.text = label("检索到 ${candidates.length()} 个候选，点击即可采纳：")
+                                for (i in 0 until candidates.length()) {
+                                    val c = candidates.getJSONObject(i)
+                                    val cTitle = c.optString("title")
+                                    val cAuthor = c.optString("author")
+                                    val cPub = c.optString("publisher")
+                                    val cDate = c.optString("publicationDate")
+                                    val cSource = c.optString("source")
+                                    val info = listOf(cAuthor, cPub, cDate).filter { it.isNotBlank() }.joinToString(" · ")
+                                    val candBtn =
+                                        button("[$cSource] $cTitle ${if (info.isNotBlank()) "— $info" else ""}") {
+                                            applyFields(c)
+                                        }.apply {
+                                            textSize = 13f
+                                            gravity = Gravity.START or Gravity.CENTER_VERTICAL
+                                            setPadding(dp(8), dp(4), dp(8), dp(4))
+                                        }
+                                    candidateContainer.addView(candBtn)
+                                }
+                                val best = result.optJSONObject("bestMatch")
+                                if (best != null && best.length() > 0) {
+                                    applyFields(best)
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        actionRow.addView(searchBtn)
+
+        val aiBtn =
+            button("AI 智能推理 (第二级)") {}.apply {
+                background = NativeUi.hairlineShape(activity, this@NativePagesController.background, true)
+                minHeight = dp(34)
+                setPadding(dp(10), dp(4), dp(10), dp(4))
+                setOnClickListener {
+                    statusText.text = label("AI 正在推理著录信息…请稍候。")
+                    val curFields = JSONObject()
+                    editors.forEach { (k, ed) -> curFields.put(k, ed.text.toString().trim()) }
+                    val p =
+                        JSONObject()
+                            .put("title", editors["title"]?.text?.toString()?.trim() ?: book.optString("title"))
+                            .put("fileName", book.optString("fileName"))
+                            .put("current", curFields)
+                    request("action.metadataInferAi", p) { result, error ->
+                        activity.runOnUiThread {
+                            if (error != null || result?.optBoolean("ok") != true) {
+                                statusText.text = label("AI 推理未成功，请检查 AI 配置后重试。")
+                                return@runOnUiThread
+                            }
+                            val metadata = result.optJSONObject("metadata")
+                            if (metadata != null && metadata.length() > 0) {
+                                applyFields(metadata)
+                                statusText.text = label("AI 著录推理完成，已填入表单，核对后点击保存。")
+                            } else {
+                                statusText.text = label("AI 未能推断出更多有效著录字段。")
+                            }
+                        }
+                    }
+                }
+            }
+        actionRow.addView(aiBtn)
+
+        form.addView(actionRow)
+        form.addView(candidateContainer)
+
+        fields.forEach { (key, title) ->
+            val origVal = if (book.isNull(key)) "" else book.optString(key)
+            form.addView(text("${label(title)} (${if (origVal.isEmpty()) label("空白") else label("已有")})", 14f))
+            val editor = input(origVal, title, false)
+            editors[key] = editor
+            form.addView(editor)
+        }
+        dialog("著录元数据补全与精修", ScrollView(activity).apply { addView(form) }) {
             val patch = JSONObject()
             for ((key, editor) in editors) {
                 val value = editor.text.toString().replace("\u0000", "").trim()

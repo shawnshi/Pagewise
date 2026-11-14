@@ -171,6 +171,8 @@ internal class NativeManagementHost(
                         .put(payload.optString("requestId"))
                         .put(payload.optString("candidateId"))
                         .toString()
+                } else if (action in setOf("metadataSearchOpen", "metadataInferAi")) {
+                    action + ":" + payload.optString("title")
                 } else if (action in setOf("bookIntroductionGenerate", "bookIntroductionSave", "bookIntroductionCancel")) {
                     val nonce = payload.optString(if (action == "bookIntroductionSave") "token" else "requestId")
                     JSONArray()
@@ -261,6 +263,8 @@ internal class NativeManagementHost(
         private val ERROR_PATTERN = Regex("[a-zA-Z0-9_-]{1,80}")
         private val REQUIRED_ACTIONS =
             setOf(
+                "metadataSearchOpen",
+                "metadataInferAi",
                 "importBooks",
                 "selectFolder",
                 "recheckFolder",

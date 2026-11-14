@@ -81,7 +81,7 @@ export function getReaderCSS(
 ): string {
   const theme = resolveReaderTheme(prefs.theme, appDark)
   const colors = resolveReaderColors(prefs.theme, appDark, style)
-  if (context?.protectedLayout) return `html { color-scheme: ${theme === 'dark' ? 'dark' : 'light'}; color: ${colors.fg}; } body { background: none !important; } ${modeStyleCSS({ ...style, largeText: false })}`
+  if (context?.protectedLayout) return `html { color-scheme: ${theme === 'dark' ? 'dark' : 'light'}; color: ${colors.fg}; } body { background: none !important; } ${modeStyleCSS({ ...style, largeText: false })} ${selectionCSS(theme, !!style?.eink, colors.fg)}`
   const fontSize = typography?.fontSize ?? prefs.fontSize
   const fontFamily = typography?.fontFamily ?? prefs.fontFamily
   const letterSpacing = typography?.letterSpacing ?? prefs.letterSpacing
@@ -118,10 +118,27 @@ export function getReaderCSS(
     ${modeStyleCSS(style)}
     ${style?.eink ? `
     ::highlight(lr-annotation) { background-color: ${theme === 'dark' ? '#333333' : '#e0e0e0'}; color: ${colors.fg}; }
-    ::selection { background-color: ${theme === 'dark' ? '#333333' : '#e0e0e0'}; color: ${colors.fg}; }
     ` : ''}
+    ${selectionCSS(theme, !!style?.eink, colors.fg)}
     ${companionCSS(companionThemeName(theme, !!style?.eink))}
   `
+}
+
+/** 选区高亮样式: 保证各主题及墨水屏下选中文本始终清晰可见, 杜绝深底黑字或整块黑斑 */
+export function selectionCSS(theme: string, eink: boolean, fg: string): string {
+  if (eink) {
+    return `::selection { background-color: ${theme === 'dark' ? '#333333' : '#e0e0e0'}; color: ${fg}; }`
+  }
+  if (theme === 'dark') {
+    return `::selection { background-color: rgba(106, 155, 255, 0.4); color: #ffffff; }`
+  }
+  if (theme === 'sepia') {
+    return `::selection { background-color: rgba(184, 116, 26, 0.28); color: ${fg}; }`
+  }
+  if (theme === 'green') {
+    return `::selection { background-color: rgba(30, 107, 74, 0.28); color: ${fg}; }`
+  }
+  return `::selection { background-color: rgba(22, 100, 255, 0.25); color: ${fg}; }`
 }
 
 /** 墨水屏 / 大字附加的正文样式 (只在开关切换时随 setStyles 重排一次) */

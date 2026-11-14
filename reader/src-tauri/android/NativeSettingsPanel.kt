@@ -141,6 +141,7 @@ internal class NativeSettingsPanel(
             val fields = schema.getJSONArray("fields")
             for ((group, title) in listOf(
                 "general" to tr("通用", "General"),
+                "eink" to tr("墨水屏与硬件", "E-Ink & Hardware"),
                 "folder" to tr("监控文件夹", "Monitored folder"),
                 "library" to tr("藏书显示", "Library display"),
                 "reading" to tr("阅读与声音", "Reading and speech"),
@@ -156,6 +157,10 @@ internal class NativeSettingsPanel(
                 section.addView(ui.heading(title))
                 extraSections[group]?.let { section.addView(it) }
                 if (extraSections.containsKey(group)) continue
+                if (group == "eink") {
+                    renderEinkHardwareSection(section)
+                    continue
+                }
                 if (group == "reading") {
                     val sandbox =
                         ui.column().apply {
@@ -263,6 +268,69 @@ internal class NativeSettingsPanel(
                             }
                         },
                     )
+                    val kind = rule.optString("kind")
+                    if (kind == "enum") {
+                        val opts = rule.optJSONArray("options")
+                        if (opts != null && opts.length() in 2..5) {
+                            val chipRow =
+                                NativeActionFlow(activity).apply {
+                                    setPadding(ui.dp(12), ui.dp(2), ui.dp(12), ui.dp(8))
+                                }
+                            for (j in 0 until opts.length()) {
+                                val optVal = opts.get(j)
+                                val selectedOpt = optVal.toString() == value.toString()
+                                chipRow.addView(
+                                    button(optionLabel(rule, optVal)) {
+                                        if (!selectedOpt) quickPatchValue(rule, value, optVal)
+                                    }.apply {
+                                        NativeUi.styleTab(this, selectedOpt, ink, this@NativeSettingsPanel.background)
+                                        minHeight = ui.dp(38)
+                                        minimumHeight = ui.dp(38)
+                                        textSize = 12f
+                                        setPadding(ui.dp(10), ui.dp(4), ui.dp(10), ui.dp(4))
+                                    },
+                                )
+                            }
+                            section.addView(chipRow)
+                        }
+                    } else if (kind == "number" && rule.optBoolean("integer") && !rule.optBoolean("secret")) {
+                        val currentInt = (value as? Number)?.toInt() ?: value.toString().toIntOrNull()
+                        val minInt = rule.optInt("min", 0)
+                        val maxInt = rule.optInt("max", 9999)
+                        if (currentInt != null) {
+                            val step = if (key == "dailyGoalMinutes") 5 else 1
+                            val stepRow =
+                                LinearLayout(activity).apply {
+                                    orientation = LinearLayout.HORIZONTAL
+                                    gravity = android.view.Gravity.END or android.view.Gravity.CENTER_VERTICAL
+                                    setPadding(ui.dp(12), 0, ui.dp(12), ui.dp(8))
+                                }
+                            stepRow.addView(
+                                button("−$step") {
+                                    val nextInt = (currentInt - step).coerceIn(minInt, maxInt)
+                                    if (nextInt != currentInt) quickPatchValue(rule, value, nextInt)
+                                }.apply {
+                                    isEnabled = currentInt > minInt
+                                    minHeight = ui.dp(38)
+                                    minimumHeight = ui.dp(38)
+                                    textSize = 13f
+                                },
+                                LinearLayout.LayoutParams(-2, -2).apply { marginEnd = ui.dp(8) },
+                            )
+                            stepRow.addView(
+                                button("+$step") {
+                                    val nextInt = (currentInt + step).coerceIn(minInt, maxInt)
+                                    if (nextInt != currentInt) quickPatchValue(rule, value, nextInt)
+                                }.apply {
+                                    isEnabled = currentInt < maxInt
+                                    minHeight = ui.dp(38)
+                                    minimumHeight = ui.dp(38)
+                                    textSize = 13f
+                                },
+                            )
+                            section.addView(stepRow)
+                        }
+                    }
                 }
                 if (group == "library") section.addView(button(tr("藏书每页显示数量", "Library page size")) { libraryDisplay() })
                 if (group == "reading") {
@@ -295,19 +363,96 @@ internal class NativeSettingsPanel(
                 }
                 if (group == "network") section.addView(button(tr("测试代理连接", "Test proxy connection")) { probe("settingsTestProxy") })
             }
-            root.addView(
-                text(
-                    tr(
-                        "单书/语言排版、阅读模式和伴读授权仍由正文阅读器内的对应控件管理；结构记录不作为任意 JSON 开放编辑。",
-                        "Book/language typography, reading modes and companion consent use their reader controls; structured records are not arbitrary JSON editors.",
-                    ),
-                ),
-            )
             status.text = ""
             root.addView(status)
             repaint()
         }, { code -> status.text = tr("设置定义加载失败：", "Schema load failed: ") + code })
         return root
+    }
+
+    private fun renderEinkHardwareSection(section: LinearLayout) {
+        val mainActivity = activity as? MainActivity
+        val bridge = mainActivity?.onyxBridgeInstance()
+        val epd = runCatching { JSONObject(bridge?.epdStatus() ?: "{}") }.getOrDefault(JSONObject())
+        val fl = runCatching { JSONObject(bridge?.getFrontLightStateJson() ?: "{}") }.getOrDefault(JSONObject())
+        val interval = epd.optInt("gcIntervalPages", 10)
+        section.addView(ui.note(tr("EPD 全屏清残影间隔（页数）", "EPD full-refresh (GC16) interval (pages)")))
+        val gcRow = NativeActionFlow(activity)
+        for (pages in listOf(5, 10, 15, 20, 30)) {
+            gcRow.addView(
+                button("$pages" + tr(" 页", " p")) {
+                    bridge?.configureGcInterval(pages)
+                    section.removeAllViews()
+                    section.addView(ui.heading(tr("墨水屏与硬件", "E-Ink & Hardware")))
+                    renderEinkHardwareSection(section)
+                    repaint()
+                }.apply {
+                    NativeUi.styleTab(this, interval == pages, ink, this@NativeSettingsPanel.background)
+                    minHeight = ui.dp(38)
+                    minimumHeight = ui.dp(38)
+                },
+            )
+        }
+        section.addView(gcRow)
+        section.addView(
+            NativeUi.primaryButton(activity, tr("立即全屏清残影 (GC16)", "Full Screen Refresh Now (GC16)"), ink, background) {
+                mainActivity?.repaintManagementNow("gc")
+            }.apply {
+                layoutParams = LinearLayout.LayoutParams(-2, -2).apply { topMargin = ui.dp(6); bottomMargin = ui.dp(10) }
+            },
+        )
+        if (fl.optBoolean("supported", false)) {
+            val flEnabled = fl.optBoolean("enabled", true)
+            val cold = fl.optInt("cold", 45)
+            val warm = fl.optInt("warm", 35)
+            section.addView(ui.note(tr("前光与双色温控制（冷光 $cold% · 暖光 $warm%）", "Frontlight & CTM (Cold $cold% · Warm $warm%)")))
+            val presetRow = NativeActionFlow(activity)
+            presetRow.addView(
+                button(if (flEnabled) tr("关闭前光", "Light Off") else tr("开启前光", "Light On")) {
+                    bridge?.setFrontLightEnabled(!flEnabled)
+                    section.removeAllViews()
+                    section.addView(ui.heading(tr("墨水屏与硬件", "E-Ink & Hardware")))
+                    renderEinkHardwareSection(section)
+                }.apply { NativeUi.styleTab(this, !flEnabled, ink, this@NativeSettingsPanel.background) },
+            )
+            presetRow.addView(
+                button(tr("日间清透", "Daylight")) {
+                    bridge?.setFrontLightEnabled(true)
+                    bridge?.setColdLightPercent(55)
+                    bridge?.setWarmLightPercent(15)
+                    section.removeAllViews()
+                    section.addView(ui.heading(tr("墨水屏与硬件", "E-Ink & Hardware")))
+                    renderEinkHardwareSection(section)
+                },
+            )
+            presetRow.addView(
+                button(tr("夜间暖光", "Night Warm")) {
+                    bridge?.setFrontLightEnabled(true)
+                    bridge?.setColdLightPercent(15)
+                    bridge?.setWarmLightPercent(75)
+                    section.removeAllViews()
+                    section.addView(ui.heading(tr("墨水屏与硬件", "E-Ink & Hardware")))
+                    renderEinkHardwareSection(section)
+                },
+            )
+            presetRow.addView(
+                button(tr("冷光 +10%", "Cold +10%")) {
+                    bridge?.setColdLightPercent((cold + 10).coerceIn(0, 100))
+                    section.removeAllViews()
+                    section.addView(ui.heading(tr("墨水屏与硬件", "E-Ink & Hardware")))
+                    renderEinkHardwareSection(section)
+                },
+            )
+            presetRow.addView(
+                button(tr("暖光 +10%", "Warm +10%")) {
+                    bridge?.setWarmLightPercent((warm + 10).coerceIn(0, 100))
+                    section.removeAllViews()
+                    section.addView(ui.heading(tr("墨水屏与硬件", "E-Ink & Hardware")))
+                    renderEinkHardwareSection(section)
+                },
+            )
+            section.addView(presetRow)
+        }
     }
 
     fun renderPage(
@@ -319,6 +464,7 @@ internal class NativeSettingsPanel(
         val captions =
             listOf(
                 "general" to tr("通用", "General"),
+                "eink" to tr("墨水屏与硬件", "E-Ink & Hardware"),
                 "folder" to tr("文件夹与扫描", "Folders and scans"),
                 "library" to tr("书库显示", "Library display"),
                 "reading" to tr("阅读与声音", "Reading and speech"),
@@ -577,6 +723,24 @@ internal class NativeSettingsPanel(
         )
         alert.show()
         inspect()
+    }
+
+    private fun quickPatchValue(
+        rule: JSONObject,
+        before: Any,
+        afterValue: Any,
+    ) {
+        val path = rule.getJSONArray("path")
+        val patch =
+            JSONObject()
+                .put("path", path)
+                .put("before", JSONObject().put("present", true).put("value", before))
+                .put("after", JSONObject().put("present", true).put("value", afterValue))
+        perform("settingsPatch", JSONObject().put("patches", JSONArray().put(patch)), {
+            changed()
+        }, {
+            edit(rule, before)
+        })
     }
 
     private fun quickPatchBoolean(

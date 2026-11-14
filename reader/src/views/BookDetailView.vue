@@ -460,6 +460,16 @@ const recommendationCount = ref<number | null>(null)
             >
               {{ fileProblem ? t(fileProblem === 'missing' ? 'library.relink' : 'library.reauthorize') : progress && progress > 0 ? t('catalog.continueReading') : t('settings.navReading') }}
             </button>
+            <button
+              type="button"
+              class="btn btn-sm"
+              :disabled="book.id !== bookId"
+              :title="t('bookMetadata.title')"
+              @click="showMetadata = true"
+            >
+              <AppIcon name="info" :size="16" aria-hidden="true" />
+              <span>{{ t('bookMetadata.triggerButton') }}</span>
+            </button>
             <button type="button" class="btn btn-sm" @click="togglePin">
               <AppIcon name="pin" :size="16" aria-hidden="true" />
               <span>{{ book.pinnedAt ? t('library.unpin') : t('library.pin') }}</span>
@@ -930,8 +940,10 @@ const recommendationCount = ref<number | null>(null)
   padding-top: 10px;
 }
 .btn-read {
-  min-width: 110px;
-  font-weight: 600;
+  min-width: 130px;
+  font-weight: 700;
+  letter-spacing: 0.02em;
+  box-shadow: 0 0 0 1px var(--eink-solid-black);
 }
 .tabs-nav {
   display: flex;

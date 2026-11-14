@@ -150,6 +150,16 @@ test('generated EPUB CSS paints annotations behind glyphs and retains explicit l
   }
   assert.doesNotMatch(getReaderCSS(prefs, false, { eink: false }), /::highlight\(lr-annotation\)/)
 })
+test('generated EPUB CSS includes high-contrast ::selection across all themes and e-ink states', () => {
+  const prefs = { theme: 'light', fontSize: 20, fontFamily: '', lineHeight: 1.6, gap: 5, justify: false, letterSpacing: 0 }
+  for (const theme of ['light', 'dark', 'sepia', 'green']) {
+    const css = getReaderCSS({ ...prefs, theme }, false, { eink: false })
+    assert.match(css, /::selection/)
+    if (theme === 'dark') {
+      assert.match(css, /::selection\s*\{\s*background-color:\s*rgba\(106,\s*155,\s*255,\s*0\.4\);\s*color:\s*#ffffff;\s*\}/)
+    }
+  }
+})
 test('actual dimming callback suspends the overlay in e-ink without deleting saved dim levels', () => {
   const tree = ts.createSourceFile('modes.ts', modes, ts.ScriptTarget.Latest, true)
   let initializer

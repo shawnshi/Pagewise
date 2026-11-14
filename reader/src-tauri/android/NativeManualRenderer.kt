@@ -25,6 +25,7 @@ internal class NativeManualRenderer(
     private val context: Context,
     private val foreground: Int,
     private val background: Int,
+    private val compact: Boolean = false,
     private val link: (String) -> Unit,
 ) {
     private val parser = Parser.builder().build()
@@ -54,21 +55,45 @@ internal class NativeManualRenderer(
                     setTextColor(this@NativeManualRenderer.foreground)
                     setLinkTextColor(this@NativeManualRenderer.foreground)
                     setTextIsSelectable(true)
-                    setPadding(dp(4), dp(8), dp(4), dp(8))
-                    setLineSpacing(dp(4).toFloat(), 1.12f)
-                    textSize = 17f
+                    setPadding(
+                        if (compact) 0 else dp(4),
+                        dp(if (compact) 4 else 8),
+                        if (compact) 0 else dp(4),
+                        dp(if (compact) 4 else 8),
+                    )
+                    if (compact) {
+                        typeface = NativeUi.editorialTypeface(false)
+                        setLineSpacing(dp(2).toFloat(), 1.35f)
+                        textSize = 15f
+                    } else {
+                        setLineSpacing(dp(4).toFloat(), 1.12f)
+                        textSize = 17f
+                    }
                 }
             when (current) {
                 is Heading -> {
                     text.text = plain.render(current).trim()
                     text.textSize =
-                        when (current.level) {
-                            1 -> 27f
-                            2 -> 23f
-                            else -> 20f
+                        if (compact) {
+                            when (current.level) {
+                                1 -> 19f
+                                2 -> 17f
+                                else -> 15.5f
+                            }
+                        } else {
+                            when (current.level) {
+                                1 -> 27f
+                                2 -> 23f
+                                else -> 20f
+                            }
                         }
-                    text.setTypeface(null, Typeface.BOLD)
-                    text.setPadding(dp(4), dp(20), dp(4), dp(8))
+                    text.setTypeface(if (compact) NativeUi.editorialTypeface(true) else null, Typeface.BOLD)
+                    text.setPadding(
+                        if (compact) 0 else dp(4),
+                        dp(if (compact) 10 else 20),
+                        if (compact) 0 else dp(4),
+                        dp(if (compact) 4 else 8),
+                    )
                     text.accessibilityHeadingCompat()
                     val slug =
                         text.text

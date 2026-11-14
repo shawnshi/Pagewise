@@ -16,6 +16,8 @@ import { SUPPORTED_EXTS } from './format.ts'
 import { getBookRecommendationActions } from './bookRecommendationActions.ts'
 import { createBookIntroductionActions } from './bookIntroductionActions.ts'
 import type { BookIntroductionOptions } from './bookIntroduction.ts'
+import { searchOpenBookMetadata } from './openBookSearch.ts'
+import { inferBookMetadataWithAi } from './aiBookMetadata.ts'
 
 export type NativeManagementHandler = (payload: Record<string, unknown>) => Promise<Record<string, unknown>>
 type Folder = Pick<ReturnType<typeof useFolderLibrary>, 'status' | 'rescan' | 'relinkCandidates' | 'relink'>
@@ -196,6 +198,26 @@ export function createNativeManagementActions(injected: Partial<NativeManagement
   const introduction = createBookIntroductionActions({ storage: deps.storage, generate: deps.generateIntroduction, ready, now: deps.now, token: deps.token })
   return {
     ...getBookRecommendationActions(),
+    metadataSearchOpen: wrap('metadataSearchOpen', async p => {
+      const title = text(p, 'title')
+      const author = typeof p.author === 'string' && p.author ? p.author : undefined
+      const result = await searchOpenBookMetadata({ title, author })
+      return {
+        ok: true,
+        candidates: result.candidates,
+        bestMatch: result.bestMatch ?? null,
+      }
+    }, false),
+    metadataInferAi: wrap('metadataInferAi', async p => {
+      const title = text(p, 'title')
+      const fileName = typeof p.fileName === 'string' && p.fileName ? p.fileName : undefined
+      const current = typeof p.current === 'object' && p.current ? p.current as any : undefined
+      const metadata = await inferBookMetadataWithAi({ title, fileName, current })
+      return {
+        ok: true,
+        metadata,
+      }
+    }, true),
     bookIntroductionGenerate: wrap('bookIntroductionGenerate', introduction.bookIntroductionGenerate, false),
     bookIntroductionSave: wrap('bookIntroductionSave', introduction.bookIntroductionSave, false),
     bookIntroductionCancel: wrap('bookIntroductionCancel', introduction.bookIntroductionCancel, false),

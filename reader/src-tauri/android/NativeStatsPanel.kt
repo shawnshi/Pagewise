@@ -403,18 +403,91 @@ internal class NativeStatsPanel(
             )
         }
         weekCard.addView(ui.note(tr("本周（点击日期查看书目）", "This week (tap for books)")))
-        controls(
-            weekCard,
-            (0 until week.length()).map { i ->
-                val d = week.getJSONObject(i)
-                (
-                    d.getString("day").takeLast(5) + "\n" +
-                        duration(d.getDouble("seconds")) +
-                        if (d.getBoolean("met")) " ✓" else ""
-                ) to
-                    { load(d.getString("day")) }
-            },
-        )
+        val weekStrip =
+            LinearLayout(activity).apply {
+                orientation = LinearLayout.HORIZONTAL
+                weightSum = week.length().coerceAtLeast(1).toFloat()
+                layoutParams =
+                    LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT).apply {
+                        topMargin = dp(4)
+                        bottomMargin = dp(4)
+                    }
+            }
+        for (i in 0 until week.length()) {
+            val d = week.getJSONObject(i)
+            val sec = d.getDouble("seconds")
+            val met = d.getBoolean("met")
+            val isToday = d.optBoolean("isToday")
+            val dayStr = d.getString("day")
+            val tile =
+                LinearLayout(activity).apply {
+                    orientation = LinearLayout.VERTICAL
+                    gravity = android.view.Gravity.CENTER
+                    minimumHeight = dp(58)
+                    isClickable = true
+                    isFocusable = true
+                    val paperBg = ui.paper
+                    val bgFill =
+                        if (met) {
+                            ink
+                        } else if (sec >= 60.0) {
+                            ui.sunkenSurface
+                        } else {
+                            paperBg
+                        }
+                    val borderColor = if (isToday || met) ink else ui.hairline
+                    val borderWidth = if (isToday) 2 else 1
+                    this.background = ui.shape(bgFill, borderColor, borderWidth)
+                    setPadding(dp(2), dp(6), dp(2), dp(6))
+                    setOnClickListener { if (!closed && !saving) load(dayStr) }
+                    val fg = if (met) paperBg else ink
+                    val subFg = if (met) background else ui.secondary
+                    addView(
+                        TextView(activity).apply {
+                            text = dayStr.takeLast(5)
+                            textSize = 10.5f
+                            typeface = NativeUi.monoTypeface(isToday)
+                            fontFeatureSettings = "tnum"
+                            gravity = android.view.Gravity.CENTER
+                            setTextColor(subFg)
+                        },
+                    )
+                    addView(
+                        TextView(activity).apply {
+                            text = if (met) "■" else if (sec >= 60.0) "▣" else "□"
+                            textSize = 12f
+                            gravity = android.view.Gravity.CENTER
+                            setTextColor(fg)
+                            setPadding(0, dp(2), 0, dp(2))
+                        },
+                    )
+                    addView(
+                        TextView(activity).apply {
+                            val mins = (sec / 60.0).toInt()
+                            text =
+                                when {
+                                    sec <= 0.0 -> "0s"
+                                    sec < 60.0 -> "${sec.toInt()}s"
+                                    mins >= 60 -> "${mins / 60}h${mins % 60}m"
+                                    else -> "${mins}m"
+                                }
+                            textSize = 11f
+                            typeface = NativeUi.monoTypeface(met || isToday)
+                            fontFeatureSettings = "tnum"
+                            gravity = android.view.Gravity.CENTER
+                            setTextColor(fg)
+                        },
+                    )
+                }
+            weekStrip.addView(
+                tile,
+                LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f).apply {
+                    marginStart = if (i == 0) 0 else dp(2)
+                    marginEnd = if (i == week.length() - 1) 0 else dp(2)
+                },
+            )
+        }
+        weekCard.addView(weekStrip)
         controls(
             trendCard,
             listOf(

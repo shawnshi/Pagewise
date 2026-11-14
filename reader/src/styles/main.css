@@ -241,7 +241,12 @@ svg {
 }
 
 ::selection {
-  background: color-mix(in srgb, var(--brand) 24%, transparent);
+  background: rgba(22, 100, 255, 0.25);
+  color: inherit;
+}
+:root[data-theme='dark'] ::selection {
+  background: rgba(106, 155, 255, 0.4);
+  color: #ffffff;
 }
 
 /* 细滚动条只给有精确指针的设备; 触屏保留系统的悬浮滚动条 (手机上不占宽度、滚完即隐) */
@@ -769,7 +774,13 @@ input[type='range'] {
   --warning: #ffffff; --warning-soft: #1a1a1a; --overlay: #000000;
   --annotation-bg: #333333;
 }
-.pagewise-eink *, .pagewise-eink *::before, .pagewise-eink *::after { animation: none !important; transition: none !important; scroll-behavior: auto !important; }
+.pagewise-eink *, .pagewise-eink *::before, .pagewise-eink *::after,
+.eink-shell *, .eink-shell *::before, .eink-shell *::after,
+.lr-eink *, .lr-eink *::before, .lr-eink *::after {
+  animation: none !important;
+  transition: none !important;
+  scroll-behavior: auto !important;
+}
 .pagewise-eink .btn, .pagewise-eink .input { font-size: 16px; }
 .pagewise-eink .icon-btn { min-width: 48px; min-height: 48px; }
 .pagewise-eink .shell .reader { --bar-h: 56px; --footer-h: 56px; }
@@ -981,6 +992,10 @@ input[type='range'] {
 }
 
 /* 6. 沉浸式阅读器与 AI 伴读层墨水屏专属规整 */
+.lr-eink :is(.icon-btn, .reader-action-btn, .chapter-btn, .reader-more-item, .jump-back):active {
+  background: var(--eink-ink, #000000) !important;
+  color: var(--eink-paper, #ffffff) !important;
+}
 .pagewise-eink .bar, .lr-eink .bar {
   border-color: var(--eink-solid-black) !important;
   border-width: 1px !important;

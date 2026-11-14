@@ -306,9 +306,9 @@ export function useReadingModes(opts: UseReadingModesOptions) {
     }
   } catch { /* 存储不可用: 不迁移 */ }
   const dimLevel = computed(() => clampDim(settings.readingMode.eyeCare.dim))
-  /** 调暗遮罩 (阅读器正文之上, pointer-events:none); 0 时为 null */
+  /** 调暗遮罩 (阅读器正文之上, pointer-events:none); 0 时或物理墨水屏设备上为 null */
   const dimOverlayStyle = computed(() => {
-    if (opts.presentationSuppressed?.() || settings.readingMode.eink.enabled) return null
+    if (opts.presentationSuppressed?.() || settings.readingMode.eink.enabled || (typeof einkDevice !== 'undefined' && Boolean(einkDevice))) return null
     const bg = dimBackground(dimLevel.value)
     return bg ? { background: bg } : null
   })

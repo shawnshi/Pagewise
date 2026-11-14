@@ -4,35 +4,56 @@
 
 # 知页阅读器 · Pagewise
 
-面向文石（Onyx BOOX）Android 墨水屏设备的本地阅读应用。当前版本为 **2.3.0**，Android 版本码为 **2003000**。
+面向文石（Onyx BOOX）Android 墨水屏设备的本地阅读应用。当前版本为 **2.5.0**，Android 版本码为 **2005000**。
 
 项目专为 BOOX Android 设备设计与调优。浏览器仅用于前端组件开发与单元测试，不提供桌面、iOS 或 PWA 发行版。
 
 ## 当前状态
 
-2.3.0 已在 **Note X3 Pro（Android API 32, Carta 1200 墨水屏）** 上完成构建与验证：
+2.5.0 已在 **Note X3 Pro（Android API 32, Carta 1200 墨水屏）** 上完成构建、签名校验、覆盖安装与实机界面核验：
 
 | 变体 | 桌面显示名称 | 包名 | 下载 |
 |---|---|---|---|
-| Release | 知页 | `io.pagewise.reader` | [Pagewise-2.3.0-release.apk](https://github.com/shawnshi/Pagewise/releases/download/v2.3.0/Pagewise-2.3.0-release.apk) |
-| Debug | 知页 2.3.0 测试版 | `io.pagewise.reader.debug` | [Pagewise-2.3.0-debug.apk](https://github.com/shawnshi/Pagewise/releases/download/v2.3.0/Pagewise-2.3.0-debug.apk) |
+| Release | 知页 | `io.pagewise.reader` | [Pagewise-2.5.0-release.apk](https://github.com/shawnshi/Pagewise/releases/download/v2.5.0/Pagewise-2.5.0-release.apk) |
+| Debug | 知页 2.5.0 测试版 | `io.pagewise.reader.debug` | [Pagewise-2.5.0-debug.apk](https://github.com/shawnshi/Pagewise/releases/download/v2.5.0/Pagewise-2.5.0-debug.apk) |
 
 ### 校验信息 (SHA-256)
-- **Release APK (`Pagewise-2.3.0-release.apk`)**:
-  `2d1b807d929c24991316f633d22e03bd68b8887858690799e24a7d90001abb00`
-- **Debug APK (`Pagewise-2.3.0-debug.apk`)**:
-  `9fb019e901077b0b76975afe1ccad82f1b3321f52a6b4a12b8941d129a4db872`
+- **Release APK (`Pagewise-2.5.0-release.apk`)**:
+  `01d5e9db4dcc241b6723bffeeb1826dfb9d5deea355f51dfdde9c40f0397e6ac`
+- **Debug APK (`Pagewise-2.5.0-debug.apk`)**:
+  `dd6c42d8c1eaf50843b241c067380e538beb9a1ea1de459287a542fd3dc410fb`
 
-### 2.3.0 核心演进：AI 原生个人阅读管理器、二级著录元数据补全与供应链精简
+### 2.5.0 核心演进：全页面电纸书体验审计、原生多视图交互与 BOOX 硬件深度联动
 
-本版在 2.2.0 双平面视觉统一的基础上，完成了向 AI 原生个人阅读管理器的全链路演进、原生层交互对齐与底层依赖瘦身：
+本版围绕 Android 原生管理层与 EPUB/PDF 阅读器执行了 P0–P2 全链路体验重构：
 
-1. **二级渐进著录元数据补全与 CAS 快照校验**：在书籍详情页支持对作者、出版社、出版日期、语种发起“第一级：开放书目并发检索（OpenLibrary / Google Books / 豆瓣读书 API，支持 `AbortSignal` 超时取消）”与“第二级：AI 著录推理补全”；提供「仅补全空白字段」与「覆盖已有字段」双模式、墨水屏黑白反色差异徽章预览及 IndexedDB / SQLite 原子快照一致性（CAS）校验。
-2. **AI 原生阅读管理闭环（P0–P2）**：
-   - **单书批注聚类综述与结构化导出（P0）**：将单书零散划线与想法按论点聚类为结构化综述（核心摘要、主题簇、认知启发），支持一键复制或导出带 `CFI` 锚点与原书跳转路由的 Markdown 读书笔记；
-   - **跨周期断点前情提要（P1 Catch-up）**：在读列表展示搁置天数唤醒徽章，详情页提供前情提要卡片，结合进度、TOC 目录与最近标注生成脉络回顾与续读衔接建议；
-   - **跨书观点对比矩阵与主题阅读路径规划（P2）**：支持勾选 2–4 本藏书生成共识、分歧与立场边界对照矩阵；支持按研究课题从本地藏书中规划阶梯式阅读序（Syllabus）并一键存为书架书单。
-3. **墨水屏 4 种划线线型语义与定高步进翻页**：全局笔记视图支持「时间流 / 按书聚合」双模切换，将黑白屏无法区分的彩色高亮映射为 `实线·重点`、`双线·核心`、`虚线·存疑`、`底纹·概念` 四种墨水屏线型；详情页目录、阅读记录、全局笔记及选书网格全面采用定高步进分页，消除滚动拖影。
+1. **P0 阅读心流与视觉硬伤清零**：
+   - **EPUB 宽屏分屏伴读与底栏防裁切**：引入 `.reader-stage` 弹性工作区（宽屏右停靠挤压重排、窄屏底部半屏抽屉，toolbar `z-index: 20` 不再被侧栏遮挡）；墨水屏模式下优先启用整页分页并固化底部安全区 `typographyBottomInset`，彻底消除正文末行半截字问题；
+   - **详情页 Markdown 排版与状态感知主按钮**：书籍详情简介接入紧凑版 `NativeManualRenderer` 渲染引擎；主操作按钮按阅读进度动态切换为 `开始阅读 / 继续阅读 / 再次阅读`；
+   - **统计周条 7 等分与界面降噪**：阅读统计 `WeekStrip` 改造为水平 7 等分卡片条，彻底消除 4+3 折行；顶栏日常隐藏「核对恢复」图标（仅异常未决时显隐，同时保留更多菜单入口）；修复分类编辑器裸像素间距为 `dp`。
+2. **P1 墨水屏原生交互范式升级**：
+   - **藏书页 3 档视图与显式筛选条**：新增 `NativeBookGridLayout` 自适应网格布局，提供 `[列表 | 双列 | 封面网格]` 一键切换（封面网格挂载 E-Ink 防误触轻触过滤器）、中文拼音输入法 Composing 防闪烁防抖、可逐项关闭的已激活筛选胶囊与 `[清空筛选]`；
+   - **笔记分享与设置行内直控**：统一全部笔记单行搜索框并接入 Android 原生 `ACTION_SEND` Markdown 分享；设置页为枚举项与整数步进项提供行内直接切换控件，并新增 **「墨水屏与硬件」** 独立设置专区（GC16 清残影间隔、立即全刷、冷暖前光预设与步进）；
+   - **全管理页物理按键与反白微反馈**：原生管理页接入 `KEYCODE_VOLUME_UP/DOWN`（遵循设置开关）与方向键整屏翻页，全端统一 `< 30ms` 按压纯黑白反白反馈。
+3. **P2 Android 原生与 BOOX 硬件深水区能力**：
+   - **管理层 EPD 波形精准绑定**：`OnyxSdkBridge` 直接绑定 `NativePagesController.overlay` 为目标刷新视图并按 `GU` 波形调度；
+   - **Wacom 手写平滑曲线与擦除实时预览**：`strokeToSvgPath` 升级二次贝塞尔平滑拟合，橡皮擦滑动时实时将被命中笔迹切换为虚线预览；
+   - **系统词典直查、休眠封面生成与 PDF 对比度增强**：划词浮条集成 Android `ACTION_PROCESS_TEXT` 系统离线词典直查；开书后后台生成 `EX LIBRIS · PAGEWISE` 黑白高对比休眠封面图；PDF 版式控制台新增 `[原版对比度 | 扫描加黑 | 漂白去灰]` 3 档增强。
+
+### 2.4.0 核心演进：全链路墨水屏残影消除、就近吸附交互与动态波形调度
+
+本版深入遵循墨水屏双稳态零功耗与电泳粒子物理法则，完成了从视觉体验到硬件调度的三阶演进（P0–P2）：
+
+1. **P0 体验底盘修复与选区高对比**：
+   - 彻底修复各主题（深色、浅色、羊皮纸、护眼绿及墨水屏模式）与 PDF 选区渲染，彻底消除高对比/深色模式下的黑底黑字与纯黑块问题；
+   - 废除物理墨水屏设备上的软件黑色半透明调暗遮罩，直接调控物理 LED 双色温前光；
+   - 全局切断通用组件与外壳的过渡动画，消灭墨水屏高频黑白抖动与残影。
+2. **P1 视觉重构与单手握持就近适配**：
+   - 阅读器划词浮条（Highlight Bar）改造为基于选区几何包围盒动态计算的就近吸附气泡，单手握持触手可及；
+   - 书籍详情页 Ex Libris 馆藏卡主次按钮视觉重构，主阅读动作与著录元数据补全入口层次分明。
+3. **P2 深度硬件调度与文石波形联动**：
+   - EPUB 与 PDF 翻页全面打通文石 `onyxEpd.notifyPageTurn()`，实现满 N 页硬件级自动全局闪黑消除残影；
+   - 阅读进度条拖拽动态升降波形：滑动时切换为 DU/A2 极速无拖尾模式，松手后 180ms 自动恢复 Regal 高清无损呈现。
 4. **统一双平面视觉语法与馆藏著录卡**：原生层新增 `pillBadge` 实体徽章，书籍详情页（`renderBook`）升级为双线 Ex Libris 馆藏档案卡（移除重复冗余的静态标签行），中图法索书号改为高对比度馆藏徽章，并同步补齐原生端前情提要、笔记导出与跨书对比对话框。
 5. **PDF 阅读器顶栏认知减负与零合成闪烁浮层**：在顶栏版式控制台（`zoomMenu`）统一集成 `滚动/翻页` 及 `单页/双页/书籍视图`；彻底清除阅读器外围抽屉与浮层的 `backdrop-filter: blur` 高斯模糊与弥散阴影，杜绝离屏帧缓冲合成闪烁。
 6. **在读页 7 段分段控制器主次解耦与原生设置原位切换**：将高频主工作流与归档流解耦，原生设置行提供 `● 开启 / ○ 关闭` 1 步原位切换；引入墨水屏静态线框骨架屏（Static Wireframe Skeleton），消除异步重排跳动。
@@ -147,8 +168,8 @@ npm run android:build:release
 ### 侧载部署至 BOOX 设备
 
 ```bash
-adb install -r <app-arm64-release.apk>
-adb install -r <app-arm64-debug.apk>
+adb install -r <app-universal-release.apk>
+adb install -r <app-universal-debug.apk>
 
 # 若受 BOOX 系统冻结策略影响，可显式启用：
 adb shell pm enable io.pagewise.reader
