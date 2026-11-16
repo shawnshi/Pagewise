@@ -33,14 +33,14 @@ async function drainOpenFiles(router: Router) {
           }
           const { readFile, remove, BaseDirectory } = await import('@tauri-apps/plugin-fs')
           try {
-            const bytes = await readFile(relTarget, { baseDir: BaseDirectory.AppLocalData })
+            const bytes = await readFile(relTarget, { baseDir: BaseDirectory.AppData })
             const buffer = bytes.buffer.slice(bytes.byteOffset, bytes.byteOffset + bytes.byteLength) as ArrayBuffer
             const result = await importFile(new File([buffer], name), '系统打开')
             if (!result.ok) throw new Error(result.error)
             lastBookId = result.bookId
             lastFormat = detectFormat(name)
           } finally {
-            await remove(relTarget, { baseDir: BaseDirectory.AppLocalData }).catch(() => {})
+            await remove(relTarget, { baseDir: BaseDirectory.AppData }).catch(() => {})
           }
         } catch (error: any) {
           toast(`${name}: ${error?.message ?? error}`, 'error', 6000)

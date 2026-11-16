@@ -321,7 +321,7 @@ function onSpeedInput(e: Event) {
           </div>
         </template>
 
-        <!-- 墨水屏: EpdController 全刷消残影间隔 + 立即全刷 -->
+        <!-- 墨水屏: EpdController 全刷消残影间隔 + 硬件按键/单手分区 + 立即全刷 -->
         <template v-else-if="detail === 'eink'">
           <div class="rm-row">
             <span class="rm-label">{{ t('readingMode.einkGcInterval') }}</span>
@@ -338,6 +338,30 @@ function onSpeedInput(e: Event) {
               </button>
             </div>
           </div>
+          <label class="rm-toggle">
+            <span>{{ t('readingMode.einkVolumeKeys') }}</span>
+            <span class="rm-switch">
+              <input
+                v-model="settings.readingMode.eink.volumeKeysEnabled"
+                type="checkbox"
+                role="switch"
+                :aria-checked="settings.readingMode.eink.volumeKeysEnabled"
+              />
+              <span class="rm-switch-track" aria-hidden="true"></span>
+            </span>
+          </label>
+          <label class="rm-toggle">
+            <span>{{ t('readingMode.einkOneHanded') }}</span>
+            <span class="rm-switch">
+              <input
+                v-model="settings.readingMode.eink.oneHandedTapZones"
+                type="checkbox"
+                role="switch"
+                :aria-checked="settings.readingMode.eink.oneHandedTapZones"
+              />
+              <span class="rm-switch-track" aria-hidden="true"></span>
+            </span>
+          </label>
           <div class="rm-row">
             <button type="button" class="rm-tune" @click="modes.repaintEinkNow('gc')">
               {{ t('readingMode.einkRepaintNow') }}
@@ -1214,6 +1238,9 @@ function onSpeedInput(e: Event) {
   border-radius: 50%;
   background: var(--success);
 }
+.rm-tabs button.active.running::after {
+  background: currentColor;
+}
 @media (pointer: coarse) {
   .rm-card-info {
     width: 30px;
@@ -1228,26 +1255,29 @@ function onSpeedInput(e: Event) {
     inset: -6px -6px 0 0;
   }
   .rm-tune {
-    min-height: 44px;
+    min-block-size: 48px;
   }
   .rm-panel .segmented button {
-    min-height: 40px;
+    min-block-size: 48px;
   }
   .rm-chip {
-    height: 40px;
+    min-block-size: 48px;
   }
   .rm-step,
   .rm-close {
-    width: 44px;
-    height: 44px;
+    width: 48px;
+    height: 48px;
   }
   .rm-speed-input,
   .rm-time {
-    height: 40px;
+    min-block-size: 48px;
   }
   .rm-toggle,
   .rm-main {
-    min-height: 44px;
+    min-block-size: 48px;
+  }
+  .rm-typo-switch {
+    min-block-size: 48px;
   }
 }
 @media (max-width: 600px) {

@@ -95,6 +95,7 @@ internal class NativeLibraryPanel(
     private val onSummary: (String?) -> Unit = {},
     private val onRecommendations: (() -> Unit)? = null,
     private val makeGridCard: ((JSONObject, () -> Unit, () -> Unit) -> View)? = null,
+    private val resetScroll: () -> Unit = {},
 ) {
     private val main = Handler(Looper.getMainLooper())
     private val root = column()
@@ -165,7 +166,7 @@ internal class NativeLibraryPanel(
         this.text = value
         textSize = size
         setTextColor(ink)
-        setPadding(4, 10, 4, 10)
+        setPadding(NativeUi.dp(activity, 4), NativeUi.dp(activity, 8), NativeUi.dp(activity, 4), NativeUi.dp(activity, 8))
         if (bold) setTypeface(null, android.graphics.Typeface.BOLD)
     }
 
@@ -217,38 +218,14 @@ internal class NativeLibraryPanel(
             row.addView(
                 button(title, action).apply {
                     isSelected = index == selected
+                    fontFeatureSettings = "tnum"
+                    NativeUi.styleTab(this, isSelected, ink, bg)
                     if (isArchiveItem && !isSelected) {
-                        background = NativeUi.hairlineShape(activity, bg, sunken = true)
-                        setTextColor(NativeUi.secondary(bg))
                         setPadding(NativeUi.dp(activity, 10), NativeUi.dp(activity, 6), NativeUi.dp(activity, 10), NativeUi.dp(activity, 6))
-                    }
-                    if (isSelected) {
-                        setTypeface(null, android.graphics.Typeface.BOLD)
-                        background =
-                            NativeUi.shape(
-                                activity,
-                                if (ink ==
-                                    android.graphics.Color.BLACK
-                                ) {
-                                    android.graphics.Color.BLACK
-                                } else {
-                                    android.graphics.Color.WHITE
-                                },
-                            )
-                        setTextColor(
-                            if (ink ==
-                                android.graphics.Color.BLACK
-                            ) {
-                                android.graphics.Color.WHITE
-                            } else {
-                                android.graphics.Color.BLACK
-                            },
-                        )
                     }
                 },
                 LinearLayout.LayoutParams(-2, -2).apply {
-                    marginEnd =
-                        NativeUi.dp(activity, 6)
+                    marginEnd = NativeUi.dp(activity, 8)
                 },
             )
         }
@@ -263,7 +240,11 @@ internal class NativeLibraryPanel(
     private fun track(dialog: AlertDialog): AlertDialog {
         if (closed || failed) return dialog
         dialogs.add(dialog)
-        dialog.setOnDismissListener { dialogs.remove(dialog) }
+        if (dialog is NativeEinkDialog) {
+            dialog.addOnDismiss { dialogs.remove(dialog) }
+        } else {
+            dialog.setOnDismissListener { dialogs.remove(dialog) }
+        }
         dialog.show()
         return dialog
     }
@@ -527,7 +508,7 @@ internal class NativeLibraryPanel(
                     repaint()
                 }
                 try {
-                    if (reading && result.optInt("page", 1) > 1) collectReadingPages(result, token, ::present) else present(result)
+                    present(result)
                 } catch (_: org.json.JSONException) {
                     showFailure("invalid_response")
                     resumeSearchWhenIdle()
@@ -550,6 +531,7 @@ internal class NativeLibraryPanel(
         }
     }
 
+    @Suppress("unused")
     private fun collectReadingPages(
         last: JSONObject,
         token: Long,
@@ -624,35 +606,62 @@ internal class NativeLibraryPanel(
         next()
     }
 
+    private fun surfaceBg() = if (ink == android.graphics.Color.BLACK) android.graphics.Color.WHITE else android.graphics.Color.BLACK
+
     private fun filtersChanged() {
         session.put("page", 1).put("orderedBookIds", JSONArray()).put("returnedFromReader", false)
         session.remove("lastViewedBookId")
         state.returnToId =
             ""
         state.selected.clear()
+        resetScroll()
         load(persist = true)
     }
 
     private fun choose(
         title: String,
         values: List<Pair<String, String>>,
+        selectedKey: String? = null,
         action: (String) -> Unit,
     ) {
         if (values.isEmpty() || !canAct()) return
         val owner = epoch
-        track(
-            AlertDialog
-                .Builder(activity)
-                .setTitle(title)
-                .setItems(
-                    values
-                        .map {
-                            it.second
-                        }.toTypedArray(),
-                ) { _, index -> if (owner == epoch && canAct()) action(values[index].first) }
-                .setNegativeButton(tr("取消", "Cancel"), null)
-                .create(),
-        )
+        val bg = surfaceBg()
+        val list = column()
+        lateinit var modal: NativeEinkDialog
+        values.forEachIndexed { idx, (key, caption) ->
+            val isCurrent = selectedKey != null && key == selectedKey
+            val itemBtn =
+                if (isCurrent) {
+                    NativeUi.primaryButton(activity, caption, ink, bg) {
+                        modal.dismiss()
+                        if (owner == epoch && canAct()) action(key)
+                    }
+                } else {
+                    button(caption) {
+                        modal.dismiss()
+                        if (owner == epoch && canAct()) action(key)
+                    }
+                }
+            itemBtn.gravity = android.view.Gravity.START or android.view.Gravity.CENTER_VERTICAL
+            list.addView(
+                itemBtn,
+                LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT).apply {
+                    if (idx < values.lastIndex) bottomMargin = NativeUi.dp(activity, 8)
+                },
+            )
+        }
+        modal =
+            NativeEinkDialog(
+                activity,
+                title,
+                list,
+                ink,
+                bg,
+                listOf(AlertDialog.BUTTON_NEGATIVE to tr("取消", "Cancel")),
+                onDismissed = repaint,
+            )
+        track(modal)
     }
 
     fun menuActions(): List<Pair<String, () -> Unit>> {
@@ -817,7 +826,7 @@ internal class NativeLibraryPanel(
                     },
                 )
             }
-            val bg = if (ink == android.graphics.Color.BLACK) android.graphics.Color.WHITE else android.graphics.Color.BLACK
+            val bg = surfaceBg()
             val facetsObj = result.optJSONObject("facets")
             val viewStrip =
                 NativeActionFlow(activity).apply {
@@ -841,9 +850,7 @@ internal class NativeLibraryPanel(
                         }
                     }.apply {
                         NativeUi.styleTab(this, state.viewMode == modeKey, ink, bg)
-                        minHeight = NativeUi.dp(activity, 36)
-                        minimumHeight = NativeUi.dp(activity, 36)
-                        textSize = 12f
+                        textSize = 13f
                     },
                 )
             }
@@ -860,21 +867,18 @@ internal class NativeLibraryPanel(
                                 "author" to tr("作者", "Author"),
                                 "progress" to tr("进度", "Progress"),
                             ),
+                            selectedKey = session.optString("sortBy", "recent"),
                         ) {
                             session.put("sortBy", it)
                             filtersChanged()
                         }
                     }.apply {
-                        minHeight = NativeUi.dp(activity, 36)
-                        minimumHeight = NativeUi.dp(activity, 36)
-                        textSize = 12f
+                        textSize = 13f
                     },
                 )
                 viewStrip.addView(
                     button(tr("筛选", "Filter")) { advanced(facetsObj) }.apply {
-                        minHeight = NativeUi.dp(activity, 36)
-                        minimumHeight = NativeUi.dp(activity, 36)
-                        textSize = 12f
+                        textSize = 13f
                     },
                 )
             }
@@ -892,10 +896,8 @@ internal class NativeLibraryPanel(
                 for ((chipLabel, clearAction) in activeChips) {
                     chipFlow.addView(
                         button("$chipLabel ×") { clearAction() }.apply {
-                            minHeight = NativeUi.dp(activity, 34)
-                            minimumHeight = NativeUi.dp(activity, 34)
-                            textSize = 12f
-                            setPadding(NativeUi.dp(activity, 10), NativeUi.dp(activity, 2), NativeUi.dp(activity, 10), NativeUi.dp(activity, 2))
+                            textSize = 13f
+                            setPadding(NativeUi.dp(activity, 12), NativeUi.dp(activity, 6), NativeUi.dp(activity, 12), NativeUi.dp(activity, 6))
                         },
                     )
                 }
@@ -903,10 +905,8 @@ internal class NativeLibraryPanel(
                     NativeUi.primaryButton(activity, tr("清空筛选", "Reset filters"), ink, bg) {
                         clearAllFilters()
                     }.apply {
-                        minHeight = NativeUi.dp(activity, 34)
-                        minimumHeight = NativeUi.dp(activity, 34)
-                        textSize = 12f
-                        setPadding(NativeUi.dp(activity, 10), NativeUi.dp(activity, 2), NativeUi.dp(activity, 10), NativeUi.dp(activity, 2))
+                        textSize = 13f
+                        setPadding(NativeUi.dp(activity, 12), NativeUi.dp(activity, 6), NativeUi.dp(activity, 12), NativeUi.dp(activity, 6))
                     },
                 )
                 root.addView(chipFlow)
@@ -916,7 +916,7 @@ internal class NativeLibraryPanel(
         if (state.manage) management(result, items)
         if (items.length() == 0) {
             val emptyLibrary = result.getInt("allCount") == 0
-            val bg = if (ink == android.graphics.Color.BLACK) android.graphics.Color.WHITE else android.graphics.Color.BLACK
+            val bg = surfaceBg()
             val emptyCard =
                 column().apply {
                     background = NativeUi.hairlineShape(activity, bg, true)
@@ -930,7 +930,7 @@ internal class NativeLibraryPanel(
             emptyCard.addView(
                 TextView(activity).apply {
                     text = "INDEX // EMPTY"
-                    textSize = 11f
+                    textSize = 12f
                     typeface = NativeUi.monoTypeface(true)
                     setTextColor(NativeUi.secondary(bg))
                     importantForAccessibility = View.IMPORTANT_FOR_ACCESSIBILITY_NO
@@ -945,8 +945,8 @@ internal class NativeLibraryPanel(
                 text(
                     if (emptyLibrary) {
                         tr(
-                            "从管理菜单导入书籍，或添加监控文件夹。",
-                            "Import books or add a monitored folder from Manage.",
+                            "直接导入本地书籍，或添加文石监控文件夹开始阅读。",
+                            "Import local books or add a monitored folder to start reading.",
                         )
                     } else {
                         tr("试试其他关键词、筛选条件或阅读状态。", "Try another search, filter or reading status.")
@@ -955,7 +955,26 @@ internal class NativeLibraryPanel(
                     setTextColor(NativeUi.secondary(bg))
                 },
             )
-            if (!emptyLibrary && !reading) {
+            if (emptyLibrary && !reading) {
+                val emptyActions =
+                    NativeActionFlow(activity).apply {
+                        layoutParams =
+                            LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT).apply {
+                                topMargin = NativeUi.dp(activity, 10)
+                            }
+                    }
+                emptyActions.addView(
+                    NativeUi.primaryButton(activity, tr("导入书籍", "Import books"), ink, bg) {
+                        userAction("importBooks")
+                    },
+                )
+                emptyActions.addView(
+                    button(tr("选择监控文件夹", "Choose folder")) {
+                        userAction("selectFolder")
+                    },
+                )
+                emptyCard.addView(emptyActions)
+            } else if (!emptyLibrary && !reading) {
                 emptyCard.addView(
                     NativeUi.primaryButton(activity, tr("清除全部筛选", "Clear all filters"), ink, bg) {
                         clearAllFilters()
@@ -1066,28 +1085,7 @@ internal class NativeLibraryPanel(
         main.post { advance() }
         val page = result.getInt("page")
         val pages = result.getInt("totalPages")
-        val panelBg = if (ink == android.graphics.Color.BLACK) android.graphics.Color.WHITE else android.graphics.Color.BLACK
-        if (reading) {
-            root.addView(
-                text("${items.length()} / ${result.getInt("total")} " + tr("项", "items"), 13f).apply {
-                    typeface = NativeUi.monoTypeface(false)
-                    fontFeatureSettings = "tnum"
-                    setTextColor(NativeUi.secondary(panelBg))
-                },
-            )
-            if (page < pages) {
-                root.addView(
-                    button(tr("显示更多", "Load more")) {
-                        session.put("page", page + 1)
-                        load()
-                    },
-                )
-            }
-            if (result.getInt("total") > 0) {
-                root.addView(NativeUi.colophonTailpiece(activity, "READING LEDGER · ${result.getInt("total")}", panelBg))
-            }
-            return
-        }
+        val panelBg = surfaceBg()
         if (result.getInt("total") == 0) return
         val pagingBar =
             LinearLayout(activity).apply {
@@ -1105,37 +1103,43 @@ internal class NativeLibraryPanel(
                 fontFeatureSettings = "tnum"
             }
         pagingBar.addView(pageInfo, LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f))
-        val pagerButtons =
-            LinearLayout(activity).apply {
-                orientation = LinearLayout.HORIZONTAL
-                gravity = android.view.Gravity.END
-            }
-        pagerButtons.addView(
-            button(tr("上页", "Previous")) {
-                session.put("page", page - 1)
-                load(persist = true)
-            }.apply {
-                isEnabled = page > 1
-                minHeight = NativeUi.dp(activity, 38)
-                minimumHeight = NativeUi.dp(activity, 38)
-            },
-            LinearLayout.LayoutParams(ViewGroup.LayoutParams.WRAP_CONTENT, ViewGroup.LayoutParams.WRAP_CONTENT).apply {
-                marginEnd = NativeUi.dp(activity, 8)
-            },
-        )
-        pagerButtons.addView(
-            button(tr("下页", "Next")) {
-                session.put("page", page + 1)
-                load(persist = true)
-            }.apply {
-                isEnabled = page < pages
-                minHeight = NativeUi.dp(activity, 38)
-                minimumHeight = NativeUi.dp(activity, 38)
-            },
-        )
-        pagingBar.addView(pagerButtons)
+        if (pages > 1) {
+            val pagerButtons =
+                LinearLayout(activity).apply {
+                    orientation = LinearLayout.HORIZONTAL
+                    gravity = android.view.Gravity.END
+                }
+            pagerButtons.addView(
+                button(tr("上页", "Previous")) {
+                    session.put("page", page - 1)
+                    resetScroll()
+                    load(persist = !reading)
+                }.apply {
+                    isEnabled = page > 1
+                },
+                LinearLayout.LayoutParams(ViewGroup.LayoutParams.WRAP_CONTENT, ViewGroup.LayoutParams.WRAP_CONTENT).apply {
+                    marginEnd = NativeUi.dp(activity, 8)
+                },
+            )
+            pagerButtons.addView(
+                button(tr("下页", "Next")) {
+                    session.put("page", page + 1)
+                    resetScroll()
+                    load(persist = !reading)
+                }.apply {
+                    isEnabled = page < pages
+                },
+            )
+            pagingBar.addView(pagerButtons)
+        }
         root.addView(pagingBar)
-        root.addView(NativeUi.colophonTailpiece(activity, "EX LIBRIS CATALOG · ${result.getInt("total")}", panelBg))
+        root.addView(
+            NativeUi.colophonTailpiece(
+                activity,
+                if (reading) "READING LEDGER · ${result.getInt("total")}" else "EX LIBRIS CATALOG · ${result.getInt("total")}",
+                panelBg,
+            ),
+        )
     }
 
     private fun clearAllFilters() {
@@ -1253,13 +1257,25 @@ internal class NativeLibraryPanel(
     private fun advanced(facets: JSONObject) {
         if (!canAct()) return
         val owner = epoch
+        val bg = surfaceBg()
 
         fun ownsDraft() = owner == epoch && canAct()
 
         fun filterButton(
             value: String,
-            action: () -> Unit,
-        ) = button(value) { if (ownsDraft()) action() }
+            action: (Button) -> Unit,
+        ): Button {
+            lateinit var btn: Button
+            btn =
+                button(value) { if (ownsDraft()) action(btn) }.apply {
+                    gravity = android.view.Gravity.START or android.view.Gravity.CENTER_VERTICAL
+                    layoutParams =
+                        LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT).apply {
+                            bottomMargin = NativeUi.dp(activity, 8)
+                        }
+                }
+            return btn
+        }
         val session = JSONObject(this.session.toString()) // Cancel never applies a partially edited filter draft.
         val form = column()
         val options =
@@ -1272,17 +1288,19 @@ internal class NativeLibraryPanel(
             )
         for ((key, title) in options) {
             form.addView(
-                filterButton("$title: ${session.optString(key).ifEmpty { tr("全部", "All") }}") {
+                filterButton("$title: ${session.optString(key).ifEmpty { tr("全部", "All") }}") { btn ->
                     val values = facets.getJSONArray(key)
-                    choose(
-                        title,
+                    val choices =
                         listOf("" to tr("全部", "All")) +
                             (0 until values.length()).map {
                                 val v = values.getJSONObject(it)
-                                v.getString("value") to
-                                    "${v.getString("label")} (${v.getInt("count")})"
-                            },
-                    ) { session.put(key, it) }
+                                v.getString("value") to "${v.getString("label")} (${v.getInt("count")})"
+                            }
+                    choose(title, choices, selectedKey = session.optString(key)) { chosenVal ->
+                        session.put(key, chosenVal)
+                        btn.text = "$title: ${chosenVal.ifEmpty { tr("全部", "All") }}"
+                        btn.contentDescription = btn.text
+                    }
                 },
             )
         }
@@ -1294,95 +1312,131 @@ internal class NativeLibraryPanel(
             "ancientTextFilter" to listOf("", "true", "false", "unknown"),
         )) {
             form.addView(
-                filterButton("${filterTitle(key)}: ${filterSummary(session.optString(key))}") {
+                filterButton("${filterTitle(key)}: ${filterSummary(session.optString(key))}") { btn ->
                     choose(
                         filterTitle(key),
                         values.map { it to filterSummary(it) },
-                    ) { session.put(key, it) }
+                        selectedKey = session.optString(key),
+                    ) { chosenVal ->
+                        session.put(key, chosenVal)
+                        btn.text = "${filterTitle(key)}: ${filterSummary(chosenVal)}"
+                        btn.contentDescription = btn.text
+                    }
                 },
             )
         }
+        val currentTagsCount = session.optJSONArray("tagFilter")?.length() ?: 0
         form.addView(
-            filterButton(tr("主题 / 特征 / 旧标签筛选", "Topic / feature / legacy tag filter")) {
+            filterButton(
+                tr("主题 / 特征 / 旧标签筛选", "Topic / feature / legacy tag filter") +
+                    if (currentTagsCount > 0) " ($currentTagsCount)" else "",
+            ) { btn ->
                 val tags = facets.getJSONArray("tagFilter")
-                val selected =
-                    session.optJSONArray("tagFilter") ?: JSONArray()
+                val selected = session.optJSONArray("tagFilter") ?: JSONArray()
                 val chosen = (0 until selected.length()).map { selected.getString(it) }.toMutableSet()
-                val names = Array(tags.length()) { tags.getJSONObject(it).getString("value") }
-                track(
-                    AlertDialog
-                        .Builder(activity)
-                        .setTitle(tr("标签", "Tags"))
-                        .setMultiChoiceItems(
-                            names,
-                            BooleanArray(names.size) {
-                                names[it] in
-                                    chosen
-                            },
-                        ) { _, i, checked ->
-                            if (!ownsDraft()) return@setMultiChoiceItems
-                            if (checked) {
-                                chosen.add(
-                                    names[i],
-                                )
-                            } else {
-                                chosen.remove(
-                                    names[i],
-                                )
+                val tagBox = column()
+                for (i in 0 until tags.length()) {
+                    val tagVal = tags.getJSONObject(i).getString("value")
+                    tagBox.addView(
+                        CheckBox(activity).apply {
+                            text = tagVal
+                            textSize = 15f
+                            minimumHeight = NativeUi.dp(activity, 48)
+                            setTextColor(ink)
+                            buttonTintList = android.content.res.ColorStateList.valueOf(ink)
+                            isChecked = tagVal in chosen
+                            setOnCheckedChangeListener { _, checked ->
+                                if (!ownsDraft()) return@setOnCheckedChangeListener
+                                if (checked) chosen.add(tagVal) else chosen.remove(tagVal)
                             }
-                        }.setPositiveButton(
-                            tr("采用", "Apply"),
-                        ) { _, _ ->
-                            if (!ownsDraft()) return@setPositiveButton
-                            session.put(
-                                "tagFilter",
-                                JSONArray(chosen.toList()),
-                            )
-                        }.setNegativeButton(tr("取消", "Cancel"), null)
-                        .create(),
-                )
+                        },
+                    )
+                }
+                if (tags.length() == 0) {
+                    tagBox.addView(text(tr("暂无可用标签。", "No tags available.")))
+                }
+                val tagModal =
+                    NativeEinkDialog(
+                        activity,
+                        tr("标签", "Tags"),
+                        tagBox,
+                        ink,
+                        bg,
+                        listOf(
+                            AlertDialog.BUTTON_POSITIVE to tr("采用", "Apply"),
+                            AlertDialog.BUTTON_NEGATIVE to tr("取消", "Cancel"),
+                        ),
+                        onDismissed = repaint,
+                    )
+                tagModal.setOnShowListener {
+                    tagModal.getButton(AlertDialog.BUTTON_POSITIVE)?.setOnClickListener {
+                        if (!ownsDraft()) return@setOnClickListener
+                        session.put("tagFilter", JSONArray(chosen.toList()))
+                        btn.text =
+                            tr("主题 / 特征 / 旧标签筛选", "Topic / feature / legacy tag filter") +
+                            if (chosen.isNotEmpty()) " (${chosen.size})" else ""
+                        btn.contentDescription = btn.text
+                        tagModal.dismiss()
+                    }
+                }
+                track(tagModal)
             },
         )
         form.addView(
-            filterButton(tr("标签条件：", "Tag mode: ") + session.optString("tagMode", "and")) {
+            filterButton(tr("标签条件：", "Tag mode: ") + session.optString("tagMode", "and").uppercase()) { btn ->
                 choose(
                     tr("标签条件", "Tag mode"),
                     listOf("and" to "AND", "or" to "OR"),
-                ) { session.put("tagMode", it) }
+                    selectedKey = session.optString("tagMode", "and"),
+                ) { chosenMode ->
+                    session.put("tagMode", chosenMode)
+                    btn.text = tr("标签条件：", "Tag mode: ") + chosenMode.uppercase()
+                    btn.contentDescription = btn.text
+                }
             },
         )
-        track(
-            AlertDialog
-                .Builder(activity)
-                .setTitle(tr("高级筛选", "Advanced filters"))
-                .setView(
-                    ScrollView(activity).apply {
-                        addView(form)
-                    },
-                ).setPositiveButton(
-                    tr("应用筛选", "Apply filters"),
-                ) { _, _ ->
-                    if (!ownsDraft()) return@setPositiveButton
-                    if (reading) state.reading = session else state.library = session
-                    filtersChanged()
-                }.setNeutralButton(tr("清除筛选", "Clear filters")) { _, _ ->
-                    if (!ownsDraft()) return@setNeutralButton
-                    val reset =
-                        JSONObject(
-                            defaults.toString(),
-                        ).put(
-                            "pageSize",
-                            session.optInt("pageSize", 12),
-                        ).put("orderedBookIds", JSONArray())
-                            .put("lastViewedBookId", "")
-                            .put("returnedFromReader", false)
-                    if (reading) state.reading = reset else state.library = reset
-                    keywordInput?.setText(this.session.optString("keyword"))
-                    state.selected.clear()
-                    load(persist = true)
-                }.setNegativeButton(tr("取消", "Cancel"), null)
-                .create(),
-        )
+        val filterDialog =
+            NativeEinkDialog(
+                activity,
+                tr("高级筛选", "Advanced filters"),
+                form,
+                ink,
+                bg,
+                listOf(
+                    AlertDialog.BUTTON_POSITIVE to tr("应用筛选", "Apply filters"),
+                    AlertDialog.BUTTON_NEUTRAL to tr("清除筛选", "Clear filters"),
+                    AlertDialog.BUTTON_NEGATIVE to tr("取消", "Cancel"),
+                ),
+                cancelableOutside = false,
+                onDismissed = repaint,
+            )
+        filterDialog.setOnShowListener {
+            filterDialog.getButton(AlertDialog.BUTTON_POSITIVE)?.setOnClickListener {
+                if (!ownsDraft()) return@setOnClickListener
+                if (reading) state.reading = session else state.library = session
+                filterDialog.dismiss()
+                filtersChanged()
+            }
+            filterDialog.getButton(AlertDialog.BUTTON_NEUTRAL)?.setOnClickListener {
+                if (!ownsDraft()) return@setOnClickListener
+                val reset =
+                    JSONObject(
+                        defaults.toString(),
+                    ).put(
+                        "pageSize",
+                        session.optInt("pageSize", 12),
+                    ).put("orderedBookIds", JSONArray())
+                        .put("lastViewedBookId", "")
+                        .put("returnedFromReader", false)
+                if (reading) state.reading = reset else state.library = reset
+                keywordInput?.setText(this.session.optString("keyword"))
+                state.selected.clear()
+                filterDialog.dismiss()
+                resetScroll()
+                load(persist = true)
+            }
+        }
+        track(filterDialog)
     }
 
     private fun ids(
@@ -1438,6 +1492,7 @@ internal class NativeLibraryPanel(
         result: JSONObject,
         items: JSONArray,
     ) {
+        selectionStatus.fontFeatureSettings = "tnum"
         selectionStatus.text = tr("已选择", "Selected") + " ${state.selected.size}"
         root.addView(selectionStatus)
         controls(
@@ -1479,8 +1534,7 @@ internal class NativeLibraryPanel(
                         choose(
                             tr("设置阅读状态", "Set reading status"),
                             listOf("unmarked", "wanted", "reading", "paused", "finished", "abandoned").map {
-                                it to
-                                    it
+                                it to filterSummary(it)
                             },
                         ) { mutate("status", it) }
                     },
@@ -1495,20 +1549,37 @@ internal class NativeLibraryPanel(
 
     private fun confirmRemove() {
         if (state.selected.isEmpty()) return
-        track(
-            AlertDialog
-                .Builder(activity)
-                .setTitle(tr("确认移除书目", "Confirm removal"))
-                .setMessage(
-                    "${state.selected.size} " +
-                        tr(
-                            "本/篇及关联笔记将逐书提交移除；保留实际文件与阅读统计，关联监控文件夹的条目不移除。关闭应用不等于撤销，可能部分完成。",
-                            "books/papers and notes are removed per book. Actual files/statistics remain; source-linked books are protected. Closing is not rollback; partial completion is possible.",
-                        ),
-                ).setNegativeButton(tr("取消", "Cancel"), null)
-                .setPositiveButton(tr("确认移除", "Remove")) { _, _ -> mutate("remove", "") }
-                .create(),
-        )
+        val bg = surfaceBg()
+        val msg =
+            text(
+                "${state.selected.size} " +
+                    tr(
+                        "本/篇及关联笔记将逐书提交移除；保留实际文件与阅读统计，关联监控文件夹的条目不移除。关闭应用不等于撤销，可能部分完成。",
+                        "books/papers and notes are removed per book. Actual files/statistics remain; source-linked books are protected. Closing is not rollback; partial completion is possible.",
+                    ),
+                15f,
+            ).apply { setLineSpacing(0f, 1.4f) }
+        val modal =
+            NativeEinkDialog(
+                activity,
+                tr("确认移除书目", "Confirm removal"),
+                msg,
+                ink,
+                bg,
+                listOf(
+                    AlertDialog.BUTTON_POSITIVE to tr("确认移除", "Remove"),
+                    AlertDialog.BUTTON_NEGATIVE to tr("取消", "Cancel"),
+                ),
+                cancelableOutside = false,
+                onDismissed = repaint,
+            )
+        modal.setOnShowListener {
+            modal.getButton(AlertDialog.BUTTON_POSITIVE)?.setOnClickListener {
+                modal.dismiss()
+                mutate("remove", "")
+            }
+        }
+        track(modal)
     }
 
     private fun mutate(
@@ -1605,54 +1676,78 @@ internal class NativeLibraryPanel(
         unknown: Boolean,
         errors: String,
     ) {
+        val bg = surfaceBg()
+        val msg =
+            text(
+                "$succeeded / $total " + tr("项已确认成功。", "confirmed successful.") +
+                    if (unknown) {
+                        tr(
+                            " 部分结果未知，未自动重放；请核对。",
+                            " Some outcomes are unknown; no replay was attempted.",
+                        ) + "\n$errors"
+                    } else {
+                        "\n$errors"
+                    },
+                15f,
+            ).apply {
+                fontFeatureSettings = "tnum"
+                setLineSpacing(0f, 1.4f)
+            }
         track(
-            AlertDialog
-                .Builder(activity)
-                .setTitle(tr("批量结果", "Batch result"))
-                .setMessage(
-                    "$succeeded / $total " + tr("项已确认成功。", "confirmed successful.") +
-                        if (unknown) {
-                            tr(
-                                " 部分结果未知，未自动重放；请核对。",
-                                " Some outcomes are unknown; no replay was attempted.",
-                            ) + "\n$errors"
-                        } else {
-                            "\n$errors"
-                        },
-                ).setPositiveButton(tr("返回", "Back"), null)
-                .create(),
+            NativeEinkDialog(
+                activity,
+                tr("批量结果", "Batch result"),
+                msg,
+                ink,
+                bg,
+                listOf(AlertDialog.BUTTON_POSITIVE to tr("返回", "Back")),
+                onDismissed = repaint,
+            ),
         )
     }
 
     private fun tagDialog(clear: Boolean) {
         if (!canAct() || state.selected.isEmpty()) return
+        val bg = surfaceBg()
         val form = column()
         val input =
             EditText(activity).apply {
                 inputType = InputType.TYPE_CLASS_TEXT
-                hint =
-                    tr("逗号或换行分隔", "Comma/newline separated")
+                hint = tr("逗号或换行分隔", "Comma/newline separated")
+                setTextColor(ink)
+                setHintTextColor(NativeUi.disabled(bg))
+                background = NativeUi.shape(activity, bg)
+                minimumHeight = NativeUi.dp(activity, 48)
+                setPadding(NativeUi.dp(activity, 10), NativeUi.dp(activity, 8), NativeUi.dp(activity, 10), NativeUi.dp(activity, 8))
             }
         val locked =
             CheckBox(activity).apply {
                 text =
                     tr("明确允许清除现有分类、主题、特征及锁定项；保留旧标签。", "Explicitly clear categories/topics/features/locks; retain legacy tags.")
+                textSize = 14f
+                minimumHeight = NativeUi.dp(activity, 48)
+                setTextColor(ink)
+                buttonTintList = android.content.res.ColorStateList.valueOf(ink)
             }
         if (clear) form.addView(locked) else form.addView(input)
-        val error = text("")
+        val error = text("", 13f)
         form.addView(error)
         val alert =
-            AlertDialog
-                .Builder(
-                    activity,
-                ).setTitle(
-                    if (clear) tr("清除分类", "Clear classification") else tr("添加旧标签", "Add legacy tags"),
-                ).setView(form)
-                .setNegativeButton(tr("取消", "Cancel"), null)
-                .setPositiveButton(tr("执行", "Apply"), null)
-                .create()
+            NativeEinkDialog(
+                activity,
+                if (clear) tr("清除分类", "Clear classification") else tr("添加旧标签", "Add legacy tags"),
+                form,
+                ink,
+                bg,
+                listOf(
+                    AlertDialog.BUTTON_POSITIVE to tr("执行", "Apply"),
+                    AlertDialog.BUTTON_NEGATIVE to tr("取消", "Cancel"),
+                ),
+                cancelableOutside = false,
+                onDismissed = repaint,
+            )
         alert.setOnShowListener {
-            alert.getButton(AlertDialog.BUTTON_POSITIVE).setOnClickListener {
+            alert.getButton(AlertDialog.BUTTON_POSITIVE)?.setOnClickListener {
                 if (!canAct()) return@setOnClickListener
                 val tags =
                     input.text
@@ -1663,7 +1758,12 @@ internal class NativeLibraryPanel(
                 if ((clear && !locked.isChecked) ||
                     (!clear && tags.isEmpty())
                 ) {
-                    error.text = "confirmation_or_tags_required"
+                    error.text =
+                        if (clear) {
+                            tr("请先勾选上方确认框再执行清除。", "Please check the confirmation box above.")
+                        } else {
+                            tr("请至少输入一个标签。", "Please enter at least one tag.")
+                        }
                     return@setOnClickListener
                 }
                 alert.dismiss()

@@ -2,9 +2,9 @@ import { onBeforeUnmount, onMounted } from 'vue'
 import { useLibrary } from '../stores/library'
 import { t } from '../i18n'
 import { localDay } from '../services/readingLog.ts'
-import { createReadingClock } from '../services/readingClock.ts'
+import { createReadingClock, READING_IDLE_MS } from '../services/readingClock.ts'
 
-export { READING_IDLE_MS } from '../services/readingClock.ts'
+export { READING_IDLE_MS }
 
 const ACTIVITY_EVENTS = ['pointerdown', 'keydown', 'wheel', 'touchstart'] as const
 
@@ -20,9 +20,15 @@ export function useReadingTimer(
   const library = useLibrary()
   const clock = createReadingClock(Date.now())
   let timer: ReturnType<typeof setInterval> | undefined
+  let mounted = false
+  let lastActivityAt = Date.now()
 
-  const ping = () => { if (opts.enabled?.() !== false) clock.input(Date.now()) }
-  const pingAuto = () => { if (opts.enabled?.() !== false) clock.auto(Date.now()) }
+  const stopTimer = () => {
+    if (timer !== undefined) {
+      clearInterval(timer)
+      timer = undefined
+    }
+  }
 
   const flush = () => {
     const at = clock.creditedAt
@@ -33,26 +39,61 @@ export function useReadingTimer(
     }
   }
 
+  const tickOnce = () => {
+    const now = Date.now()
+    // Cross-midnight boundary settles yesterday's accumulated reading time first.
+    if (clock.pendingFlush > 0 && localDay(clock.creditedAt) !== localDay(now)) flush()
+    const visible = !document.hidden && opts.enabled?.() !== false
+    clock.tick(now, 15, visible)
+    if (clock.pendingFlush >= 60) flush()
+    if (!visible || now - lastActivityAt > READING_IDLE_MS) {
+      flush()
+      stopTimer()
+    }
+  }
+
+  const ensureTimer = () => {
+    if (!mounted || document.hidden || opts.enabled?.() === false) return
+    if (timer === undefined) timer = setInterval(tickOnce, 15_000)
+  }
+
+  const ping = () => {
+    if (opts.enabled?.() === false) return
+    const now = Date.now()
+    lastActivityAt = now
+    clock.input(now)
+    ensureTimer()
+  }
+  const pingAuto = () => {
+    if (opts.enabled?.() === false) return
+    const now = Date.now()
+    lastActivityAt = now
+    clock.auto(now)
+    ensureTimer()
+  }
+
   onMounted(() => {
-    clock.input(Date.now())
+    mounted = true
+    lastActivityAt = Date.now()
+    clock.input(lastActivityAt)
     for (const ev of ACTIVITY_EVENTS) window.addEventListener(ev, ping, { capture: true, passive: true })
     document.addEventListener('visibilitychange', onVisibilityCheckpoint)
-    timer = setInterval(() => {
-      const now = Date.now()
-      // 跨零点: 先把昨天的时长按昨天落库
-      if (clock.pendingFlush > 0 && localDay(clock.creditedAt) !== localDay(now)) flush()
-      clock.tick(now, 15, !document.hidden && opts.enabled?.() !== false)
-      if (clock.pendingFlush >= 60) flush()
-    }, 15_000)
+    ensureTimer()
   })
 
-  // 切后台后进程可能被回收: 已确认但未满一分钟的时长先落库。
+  // Flush settled duration on background; pause polling timer until visibility or input resumes.
   function onVisibilityCheckpoint() {
-    if (document.visibilityState === 'hidden') flush()
+    if (document.visibilityState === 'hidden') {
+      flush()
+      stopTimer()
+    } else {
+      ensureTimer()
+    }
   }
 
   onBeforeUnmount(() => {
-    clearInterval(timer)
+    mounted = false
+    stopTimer()
     for (const ev of ACTIVITY_EVENTS) window.removeEventListener(ev, ping, { capture: true })
     document.removeEventListener('visibilitychange', onVisibilityCheckpoint)
     flush()

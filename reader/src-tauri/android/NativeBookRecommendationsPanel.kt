@@ -513,25 +513,23 @@ internal class NativeBookRecommendationsPanel(
             )
         }
         val info = LinearLayout(activity).apply { orientation = LinearLayout.VERTICAL }
-        val titleAndAuthor =
-            LinearLayout(activity).apply {
-                orientation = LinearLayout.HORIZONTAL
-                gravity = android.view.Gravity.CENTER_VERTICAL
-            }
-        titleAndAuthor.addView(
+        info.addView(
             text(book.getString("title"), 16f, true).apply {
                 typeface = NativeUi.editorialTypeface(true)
+                maxLines = 2
+                ellipsize = android.text.TextUtils.TruncateAt.END
                 setTextIsSelectable(true)
             },
         )
         val authorText = book.optString("author").ifBlank { tr("未知作者", "Unknown author") }
-        titleAndAuthor.addView(
-            text(" · $authorText", 13f).apply {
+        info.addView(
+            text(authorText, 13f).apply {
+                maxLines = 1
+                ellipsize = android.text.TextUtils.TruncateAt.END
                 setTextColor(NativeUi.secondary(surface))
                 setTextIsSelectable(true)
             },
         )
-        info.addView(titleAndAuthor)
         val state =
             when (book.optString("readingStatus")) {
                 "wanted" -> tr("想读", "Want to read")
@@ -543,11 +541,20 @@ internal class NativeBookRecommendationsPanel(
                 else -> tr("状态未知", "Status unknown")
             }
         val progress = book.optDouble("progress", Double.NaN)
-        info.addView(text(state + (if (progress.isFinite() && progress in 0.0..1.0) " · ${(progress * 100).toInt()}%" else "")))
+        info.addView(
+            text(state + (if (progress.isFinite() && progress in 0.0..1.0) " · ${(progress * 100).toInt()}%" else "")).apply {
+                typeface = NativeUi.monoTypeface(false)
+                fontFeatureSettings = "tnum"
+            },
+        )
         if (card.optInt("recordCount") >
             1
         ) {
-            info.addView(text(tr("同题名／明确分卷记录", "Same-title / explicitly numbered records") + ": " + card.optInt("recordCount")))
+            info.addView(
+                text(tr("同题名／明确分卷记录", "Same-title / explicitly numbered records") + ": " + card.optInt("recordCount")).apply {
+                    fontFeatureSettings = "tnum"
+                },
+            )
         }
         identity.addView(info, LinearLayout.LayoutParams(0, -2, 1f))
         panel.addView(identity)

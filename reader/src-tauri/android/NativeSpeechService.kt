@@ -220,6 +220,14 @@ private class SpeechQueue(
 class SystemTtsService :
     Service(),
     TextToSpeech.OnInitListener {
+    companion object {
+        @Volatile
+        private var activeSpeakingFlag = false
+
+        @JvmStatic
+        fun isActivelySpeaking(): Boolean = activeSpeakingFlag
+    }
+
     inner class LocalBinder : Binder() {
         val service: SystemTtsService get() = this@SystemTtsService
     }
@@ -257,6 +265,10 @@ class SystemTtsService :
     }
 
     private var state = "idle"
+        set(value) {
+            field = value
+            activeSpeakingFlag = value == "playing" && !destroyed
+        }
     private var reason = ""
     private var errorCode = ""
     private var rate = 1f
@@ -1232,7 +1244,8 @@ class SystemTtsService :
             PlaybackState
                 .Builder()
                 .setActions(
-                    PlaybackState.ACTION_PLAY or PlaybackState.ACTION_PAUSE or PlaybackState.ACTION_STOP or
+                    PlaybackState.ACTION_PLAY or PlaybackState.ACTION_PAUSE or PlaybackState.ACTION_PLAY_PAUSE or
+                        PlaybackState.ACTION_STOP or
                         PlaybackState.ACTION_SKIP_TO_NEXT or
                         PlaybackState.ACTION_SKIP_TO_PREVIOUS,
                 ).setState(playback, 0, if (state == "playing") 1f else 0f)
@@ -1413,6 +1426,7 @@ class SystemTtsService :
             } catch (error: Exception) {
                 android.util.Log.e("PagewiseSpeech", "Final checkpoint failed", error)
             } finally {
+                activeSpeakingFlag = false
                 readyCallbacks.toList().forEach { it(false) }
                 readyCallbacks.clear()
                 legacyDone?.invoke("tts_stopped", index)

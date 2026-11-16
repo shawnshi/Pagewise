@@ -305,17 +305,40 @@ class MainActivity : TauriActivity() {
         @JavascriptInterface
         fun getOnyxHardwareProfile(): String = onyxHardwareProfileJson
 
+        private fun callOnUiThread(
+            fallback: () -> String,
+            block: () -> String,
+        ): String {
+            if (android.os.Looper.myLooper() == android.os.Looper.getMainLooper()) {
+                return block()
+            }
+            val latch = java.util.concurrent.CountDownLatch(1)
+            val ref = java.util.concurrent.atomic.AtomicReference<String?>(null)
+            runOnUiThread {
+                try {
+                    ref.set(block())
+                } finally {
+                    latch.countDown()
+                }
+            }
+            latch.await(250L, java.util.concurrent.TimeUnit.MILLISECONDS)
+            return ref.get() ?: fallback()
+        }
+
         @JavascriptInterface
-        fun configureEpdGcInterval(pages: Int): String = onyxBridge?.configureGcInterval(pages) ?: "{}"
+        fun configureEpdGcInterval(pages: Int): String {
+            val bridge = onyxBridge ?: return "{}"
+            return callOnUiThread({ bridge.epdStatus() }) {
+                bridge.configureGcInterval(pages)
+            }
+        }
 
         @JavascriptInterface
         fun notifyEpdPageTurn(): String {
             val bridge = onyxBridge ?: return "{}"
-            var result = "{}"
-            runOnUiThread {
-                result = bridge.notifyPageTurn(nativeBackView)
+            return callOnUiThread({ bridge.epdStatus() }) {
+                bridge.notifyPageTurn(nativeBackView)
             }
-            return result
         }
 
         @JavascriptInterface
@@ -325,19 +348,17 @@ class MainActivity : TauriActivity() {
             mode: String,
         ): String {
             val bridge = onyxBridge ?: return "{}"
-            runOnUiThread {
+            return callOnUiThread({ bridge.epdStatus() }) {
                 bridge.setFastMode(nativeBackView, enabled, scene, mode)
             }
-            return bridge.configureGcInterval(readerWindow.epdState.gcIntervalPages)
         }
 
         @JavascriptInterface
         fun repaintEpd(mode: String): String {
             val bridge = onyxBridge ?: return "{}"
-            runOnUiThread {
+            return callOnUiThread({ bridge.epdStatus() }) {
                 bridge.repaintScreen(nativeBackView, mode)
             }
-            return bridge.configureGcInterval(readerWindow.epdState.gcIntervalPages)
         }
 
         @JavascriptInterface
@@ -377,19 +398,17 @@ class MainActivity : TauriActivity() {
             excludeRectsJson: String,
         ): String {
             val bridge = onyxBridge ?: return "{}"
-            runOnUiThread {
+            return callOnUiThread({ bridge.scribbleStatus() }) {
                 bridge.configureScribble(nativeBackView, enabled, style, strokeWidth, limitRectJson, excludeRectsJson)
             }
-            return bridge.setScribbleModalSuspended(null, readerWindow.scribbleState.suspendedByModal)
         }
 
         @JavascriptInterface
         fun setScribbleModalSuspended(suspended: Boolean): String {
             val bridge = onyxBridge ?: return "{}"
-            runOnUiThread {
+            return callOnUiThread({ bridge.scribbleStatus() }) {
                 bridge.setScribbleModalSuspended(nativeBackView, suspended)
             }
-            return bridge.setScribbleModalSuspended(null, suspended)
         }
 
         @JavascriptInterface

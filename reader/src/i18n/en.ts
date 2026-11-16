@@ -1599,6 +1599,8 @@ export default {
   'readingMode.einkGcSystem': 'System',
   'readingMode.einkGcPages': '{n}p',
   'readingMode.einkRepaintNow': 'Repaint Now',
+  'readingMode.einkVolumeKeys': 'Volume key page turns',
+  'readingMode.einkOneHanded': 'One-handed tap zones (top 1/3 prev · bottom 2/3 next)',
   'readingMode.largeTextDesc': "Larger text and roomier lines for comfortable reading",
   'readingMode.sizeLarge': 'Large',
   'readingMode.sizeXLarge': 'Extra large',

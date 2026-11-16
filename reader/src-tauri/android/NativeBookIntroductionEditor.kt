@@ -354,8 +354,8 @@ internal class NativeBookIntroductionEditor(
         activity: Activity,
         title: String,
         body: View,
-        ink: Int,
-        surface: Int,
+        private val ink: Int,
+        private val surface: Int,
         captions: List<Pair<Int, String>>,
     ) : AlertDialog(activity) {
         private val actions = captions.associate { (which, caption) ->
@@ -379,6 +379,21 @@ internal class NativeBookIntroductionEditor(
         }
 
         override fun getButton(whichButton: Int): Button? = actions[whichButton] ?: super.getButton(whichButton)
+
+        override fun onStart() {
+            super.onStart()
+            window?.apply {
+                setWindowAnimations(0)
+                setDimAmount(0f)
+                setBackgroundDrawable(
+                    android.graphics.drawable.GradientDrawable().apply {
+                        setColor(NativeUi.surface(surface))
+                        setStroke(NativeUi.dp(context, 2), ink)
+                        cornerRadius = 0f
+                    },
+                )
+            }
+        }
     }
 
     /** Measure the entire responsive footer first. Only the remaining bounded

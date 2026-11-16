@@ -763,7 +763,9 @@ input[type='range'] {
   --control-h: 48px; --control-h-sm: 48px;
   --shadow-sm: none; --shadow: none; --shadow-md: none; --shadow-lg: none;
 }
-.lr-eink[data-reader-theme="dark"], :root.pagewise-eink:has(.lr-eink[data-reader-theme="dark"]) {
+.lr-eink[data-reader-theme="dark"],
+:root.pagewise-eink[data-theme="dark"],
+:root.pagewise-eink:has(.lr-eink[data-reader-theme="dark"]) {
   color-scheme: dark;
   --bg: #000000; --card: #000000; --surface-2: #1a1a1a; --surface-3: #333333;
   --text: #ffffff; --text-2: #cccccc; --text-3: #bbbbbb;
@@ -781,8 +783,10 @@ input[type='range'] {
   transition: none !important;
   scroll-behavior: auto !important;
 }
-.pagewise-eink .btn, .pagewise-eink .input { font-size: 16px; }
-.pagewise-eink .icon-btn { min-width: 48px; min-height: 48px; }
+.pagewise-eink .btn, .pagewise-eink .input { font-size: 16px; min-height: 48px; }
+.pagewise-eink .icon-btn, .lr-eink .icon-btn { min-width: 48px; min-height: 48px; }
+.pagewise-eink :is([role="dialog"], .panel, .sheet, .drawer, .modal),
+.lr-eink :is([role="dialog"], .panel, .sheet, .drawer, .modal) { overscroll-behavior: contain; }
 .pagewise-eink .shell .reader { --bar-h: 56px; --footer-h: 56px; }
 .pagewise-eink blockquote { border-color: var(--text) !important; }
 .pagewise-eink *, .lr-eink * { box-shadow: none !important; backdrop-filter: none !important; }

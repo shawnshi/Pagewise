@@ -364,7 +364,7 @@ export interface ReadingModePrefs {
   /** 大字: 预设开关; custom 为在大字模式里手动调过的值 (下次开启沿用) */
   largeText: { enabled: boolean; size: 'large' | 'xlarge'; custom: Record<string, unknown> }
   /** 墨水屏: 纯黑白高对比、字重 +100、无动画、GC 全刷消残影页数间隔 (0 为仅系统控制); suggestDismissed 为「识别到墨水屏设备」提示已处理 */
-  eink: { enabled: boolean; suggestDismissed: boolean; gcIntervalPages: number }
+  eink: { enabled: boolean; suggestDismissed: boolean; gcIntervalPages: number; volumeKeysEnabled?: boolean; oneHandedTapZones?: boolean }
   /** 沉浸: 隐藏页眉页脚文字 / 工具栏只在轻点时出现; hideFooter 连页码也隐藏 */
   immersive: { enabled: boolean; hideFooter: boolean }
   /** 护眼: 暖色主题 + 应用内调暗 (0–60%) + 休息提醒 (分钟) */
@@ -529,7 +529,7 @@ const defaults: SettingsState = {
     },
     wordGuide: { enabled: false, style: 'auto', strength: 'normal', intensity: 0.7, color: 'rose', mark: BASIC_MARK_DEFAULT },
     largeText: { enabled: false, size: 'large', custom: {} },
-    eink: { enabled: false, suggestDismissed: false, gcIntervalPages: 10 },
+    eink: { enabled: false, suggestDismissed: false, gcIntervalPages: 10, volumeKeysEnabled: true, oneHandedTapZones: false },
     immersive: { enabled: false, hideFooter: false },
     eyeCare: { theme: 'sepia', dim: 0, reminder: true, intervalMin: 20 },
     night: { schedule: false, from: '22:00', to: '07:00' },
@@ -574,9 +574,45 @@ export function systemLanguage(language = globalThis.navigator?.language ?? '', 
   return /^zh\b/i.test(language) ? 'zh' : 'en'
 }
 
+const EINK_HARDWARE_UA = [
+  /\bBOOX\b/i, /\bONYX\b/i, /\bNote\s?X3(?:\s?Pro)?\b/i, /\bNoteAir/i, /\bTabUltra/i, /\bTabX\b/i,
+  /\bNova(?:\d?Air|Pro|\dColor|\dPlus|\d)\b/, /\bPoke[2-6]/i, /\bPalma\b/i,
+  /\bHisense\s?A[5-9]\b/i, /\bHLTE\d{3}E\b/i, /\biReader\b/i, /\bZhangyue\b/i, /\bBigme\b/i,
+  /\bMeebook\b/i, /\bBoyue\b/i, /\bLikebook\b/i, /\bKindle\b/i, /\bKobo\b/i, /\bPocketBook\b/i,
+  /\bTolino\b/i, /\breMarkable\b/i, /\bHanvon\b/i, /\bDasung\b/i,
+]
+
+export function isEinkHardwareEnvironment(): boolean {
+  if (typeof window === 'undefined') return false
+  const bridge = (window as {
+    LightReadInsets?: {
+      getReaderEnvironment?: () => string
+      getOnyxHardwareProfile?: () => string
+    }
+  }).LightReadInsets
+  for (const getter of [bridge?.getReaderEnvironment, bridge?.getOnyxHardwareProfile]) {
+    if (typeof getter === 'function') {
+      try {
+        const parsed = JSON.parse(getter.call(bridge)) as { version?: unknown; boox?: unknown } | null
+        if (parsed && typeof parsed === 'object' && parsed.version === 1 && typeof parsed.boox === 'boolean') {
+          return parsed.boox
+        }
+      } catch {
+        // Try next capability source if bridge output is malformed.
+      }
+    }
+  }
+  const ua = typeof navigator !== 'undefined' ? navigator.userAgent : ''
+  return EINK_HARDWARE_UA.some(re => re.test(ua || ''))
+}
+
 function firstRunDefaults(): SettingsState {
   const fresh = structuredClone(defaults)
   if (isTauri()) fresh.language = systemLanguage() ?? fresh.language
+  if (isEinkHardwareEnvironment()) {
+    fresh.readingMode.eink.enabled = true
+    fresh.readingMode.eink.suggestDismissed = true
+  }
   return fresh
 }
 

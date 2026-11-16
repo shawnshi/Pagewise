@@ -30,6 +30,7 @@ internal class NativeSettingsPanel(
     private var closed = false
     private var busy = false
     private var dialog: AlertDialog? = null
+    private var subDialog: AlertDialog? = null
     private var recoveryParent: AlertDialog? = null
     private var providers = JSONArray()
     private val ui = NativeStatsSettingsUi(activity, ink, background)
@@ -112,10 +113,8 @@ internal class NativeSettingsPanel(
             }
         recRow.addView(
             button(tr("核对未保存设置 / 恢复", "Inspect unsaved settings / recovery")) { recovery() }.apply {
-                minHeight = ui.dp(36)
-                minimumHeight = ui.dp(36)
-                textSize = 12f
-                setPadding(ui.dp(12), ui.dp(4), ui.dp(12), ui.dp(4))
+                textSize = 13f
+                setPadding(ui.dp(12), ui.dp(6), ui.dp(12), ui.dp(6))
             },
         )
         root.addView(recRow)
@@ -130,10 +129,8 @@ internal class NativeSettingsPanel(
                 }
             recRowSettled.addView(
                 button(tr("核对未保存设置 / 恢复", "Inspect unsaved settings / recovery")) { recovery() }.apply {
-                    minHeight = ui.dp(36)
-                    minimumHeight = ui.dp(36)
-                    textSize = 12f
-                    setPadding(ui.dp(12), ui.dp(4), ui.dp(12), ui.dp(4))
+                    textSize = 13f
+                    setPadding(ui.dp(12), ui.dp(6), ui.dp(12), ui.dp(6))
                 },
             )
             root.addView(recRowSettled)
@@ -158,10 +155,24 @@ internal class NativeSettingsPanel(
                 extraSections[group]?.let { section.addView(it) }
                 if (extraSections.containsKey(group)) continue
                 if (group == "eink") {
-                    renderEinkHardwareSection(section)
+                    renderEinkSchemaFields(section, fields)
+                    renderEinkHardwareSection(section, fields)
                     continue
                 }
                 if (group == "reading") {
+                    val readerCfg = preferences.optJSONObject("reader") ?: JSONObject()
+                    val previewSize = readerCfg.optDouble("fontSize", 18.0).toFloat().coerceIn(12f, 28f)
+                    val previewLh = readerCfg.optDouble("lineHeight", 1.6).toFloat().coerceIn(1.1f, 2.6f)
+                    val previewLs = readerCfg.optDouble("letterSpacing", 0.0).toFloat().coerceIn(0f, 0.3f)
+                    val previewJustify = readerCfg.optBoolean("justify", false)
+                    val previewFont = readerCfg.optString("fontFamily", "serif")
+                    val alignLabel = if (previewJustify) tr("两端对齐", "Justify") else tr("左对齐", "Left")
+                    val previewTypeface =
+                        when {
+                            previewFont.contains("sans", ignoreCase = true) -> android.graphics.Typeface.SANS_SERIF
+                            previewFont.contains("mono", ignoreCase = true) -> NativeUi.monoTypeface(false)
+                            else -> NativeUi.editorialTypeface(false)
+                        }
                     val sandbox =
                         ui.column().apply {
                             background = ui.shape(ui.paper, ui.hairline, 1)
@@ -172,8 +183,8 @@ internal class NativeSettingsPanel(
                                     orientation = LinearLayout.HORIZONTAL
                                     addView(
                                         TextView(activity).apply {
-                                            text = "👁 " + tr("中英文混排实时校准沙盒", "Typography Calibration Sandbox")
-                                            textSize = 11f
+                                            text = tr("中英文混排实时校准沙盒", "Typography Calibration Sandbox")
+                                            textSize = 12f
                                             typeface = NativeUi.monoTypeface(true)
                                             setTextColor(ui.primary)
                                         },
@@ -181,9 +192,10 @@ internal class NativeSettingsPanel(
                                     )
                                     addView(
                                         TextView(activity).apply {
-                                            text = "16sp · 1.6x · CJK-Latin"
-                                            textSize = 11f
+                                            text = String.format(java.util.Locale.ROOT, "%.0fsp · %.1fx · %s", previewSize, previewLh, alignLabel)
+                                            textSize = 12f
                                             typeface = NativeUi.monoTypeface(false)
+                                            fontFeatureSettings = "tnum"
                                             setTextColor(ui.secondary)
                                         },
                                     )
@@ -191,10 +203,14 @@ internal class NativeSettingsPanel(
                             )
                             addView(
                                 TextView(activity).apply {
-                                    text = "在现代数字阅读（Digital Typography）中，中文方块字与拉丁字母（如 Pagewise 渲染引擎）混排时，基线对齐、中西文自动盘古间距（CJK-Latin Spacing）与标点挤压决定了长时间阅读的视觉舒适度。"
-                                    textSize = 15f
-                                    typeface = NativeUi.editorialTypeface(false)
-                                    setLineSpacing(0f, 1.45f)
+                                    text = "在现代数字阅读（Digital Typography）中，中文方块字与拉丁字母（如 Pagewise 渲染引擎）混排时，基线对齐、中西文自动间距与行高设定决定了长时间阅读的视觉舒适度。"
+                                    textSize = previewSize
+                                    typeface = previewTypeface
+                                    letterSpacing = previewLs
+                                    setLineSpacing(0f, previewLh)
+                                    if (android.os.Build.VERSION.SDK_INT >= 26 && previewJustify) {
+                                        justificationMode = android.text.Layout.JUSTIFICATION_MODE_INTER_WORD
+                                    }
                                     setTextColor(ui.body)
                                     setPadding(0, ui.dp(8), 0, 0)
                                 },
@@ -230,11 +246,14 @@ internal class NativeSettingsPanel(
                     val path = rule.getJSONArray("path")
                     val parent = parentOf(path) ?: continue
                     val key = path.getString(path.length() - 1)
+                    if (key == "localVoiceId") continue
                     if (!parent.has(key)) continue
                     val value = parent.get(key)
                     val label = rule.getString(if (english) "labelEn" else "label")
                     val summary =
-                        if (rule.optBoolean("secret")) {
+                        if (key == "httpProxy") {
+                            maskProxySummary(value.toString())
+                        } else if (rule.optBoolean("secret")) {
                             if (value.toString().isEmpty()) tr("未设置", "Not set") else "••••••••"
                         } else {
                             value.toString().take(100)
@@ -284,21 +303,44 @@ internal class NativeSettingsPanel(
                                         if (!selectedOpt) quickPatchValue(rule, value, optVal)
                                     }.apply {
                                         NativeUi.styleTab(this, selectedOpt, ink, this@NativeSettingsPanel.background)
-                                        minHeight = ui.dp(38)
-                                        minimumHeight = ui.dp(38)
-                                        textSize = 12f
-                                        setPadding(ui.dp(10), ui.dp(4), ui.dp(10), ui.dp(4))
+                                        textSize = 13f
+                                        setPadding(ui.dp(10), ui.dp(6), ui.dp(10), ui.dp(6))
                                     },
                                 )
                             }
                             section.addView(chipRow)
                         }
-                    } else if (kind == "number" && rule.optBoolean("integer") && !rule.optBoolean("secret")) {
-                        val currentInt = (value as? Number)?.toInt() ?: value.toString().toIntOrNull()
-                        val minInt = rule.optInt("min", 0)
-                        val maxInt = rule.optInt("max", 9999)
-                        if (currentInt != null) {
-                            val step = if (key == "dailyGoalMinutes") 5 else 1
+                    } else if (kind == "number" && !rule.optBoolean("secret")) {
+                        val currentNum = (value as? Number)?.toDouble() ?: value.toString().toDoubleOrNull()
+                        val minNum = rule.optDouble("min", 0.0)
+                        val maxNum = rule.optDouble("max", 9999.0)
+                        if (currentNum != null) {
+                            val isInt = rule.optBoolean("integer")
+                            val step =
+                                when (key) {
+                                    "dailyGoalMinutes", "autoReadSeconds" -> 5.0
+                                    "lineHeight", "ttsRate" -> 0.1
+                                    "letterSpacing" -> 0.02
+                                    else -> 1.0
+                                }
+                            val decLabel =
+                                when {
+                                    step == 0.02 -> "−0.02"
+                                    step == 0.1 -> "−0.1"
+                                    else -> "−${step.toInt()}"
+                                }
+                            val incLabel =
+                                when {
+                                    step == 0.02 -> "+0.02"
+                                    step == 0.1 -> "+0.1"
+                                    else -> "+${step.toInt()}"
+                                }
+                            val valLabel =
+                                when {
+                                    isInt -> currentNum.toInt().toString()
+                                    step == 0.02 -> String.format(java.util.Locale.ROOT, "%.2f", currentNum)
+                                    else -> String.format(java.util.Locale.ROOT, "%.1f", currentNum)
+                                }
                             val stepRow =
                                 LinearLayout(activity).apply {
                                     orientation = LinearLayout.HORIZONTAL
@@ -306,25 +348,37 @@ internal class NativeSettingsPanel(
                                     setPadding(ui.dp(12), 0, ui.dp(12), ui.dp(8))
                                 }
                             stepRow.addView(
-                                button("−$step") {
-                                    val nextInt = (currentInt - step).coerceIn(minInt, maxInt)
-                                    if (nextInt != currentInt) quickPatchValue(rule, value, nextInt)
+                                button(decLabel) {
+                                    val candidate = (currentNum - step).coerceIn(minNum, maxNum)
+                                    val nextVal: Any =
+                                        if (isInt) candidate.toInt() else kotlin.math.round(candidate * 100.0) / 100.0
+                                    if (nextVal.toString() != value.toString()) quickPatchValue(rule, value, nextVal)
                                 }.apply {
-                                    isEnabled = currentInt > minInt
-                                    minHeight = ui.dp(38)
-                                    minimumHeight = ui.dp(38)
+                                    isEnabled = currentNum > minNum + 0.0001
+                                    fontFeatureSettings = "tnum"
                                     textSize = 13f
                                 },
                                 LinearLayout.LayoutParams(-2, -2).apply { marginEnd = ui.dp(8) },
                             )
                             stepRow.addView(
-                                button("+$step") {
-                                    val nextInt = (currentInt + step).coerceIn(minInt, maxInt)
-                                    if (nextInt != currentInt) quickPatchValue(rule, value, nextInt)
+                                TextView(activity).apply {
+                                    text = valLabel
+                                    textSize = 13f
+                                    typeface = NativeUi.monoTypeface(true)
+                                    fontFeatureSettings = "tnum"
+                                    setTextColor(ui.primary)
+                                    setPadding(ui.dp(4), 0, ui.dp(12), 0)
+                                },
+                            )
+                            stepRow.addView(
+                                button(incLabel) {
+                                    val candidate = (currentNum + step).coerceIn(minNum, maxNum)
+                                    val nextVal: Any =
+                                        if (isInt) candidate.toInt() else kotlin.math.round(candidate * 100.0) / 100.0
+                                    if (nextVal.toString() != value.toString()) quickPatchValue(rule, value, nextVal)
                                 }.apply {
-                                    isEnabled = currentInt < maxInt
-                                    minHeight = ui.dp(38)
-                                    minimumHeight = ui.dp(38)
+                                    isEnabled = currentNum < maxNum - 0.0001
+                                    fontFeatureSettings = "tnum"
                                     textSize = 13f
                                 },
                             )
@@ -370,26 +424,110 @@ internal class NativeSettingsPanel(
         return root
     }
 
-    private fun renderEinkHardwareSection(section: LinearLayout) {
+    private fun maskProxySummary(raw: String): String {
+        if (raw.isBlank()) return tr("未设置", "Not set")
+        val schemeIdx = raw.indexOf("://")
+        val prefix = if (schemeIdx >= 0) raw.substring(0, schemeIdx + 3) else ""
+        val rest = if (schemeIdx >= 0) raw.substring(schemeIdx + 3) else raw
+        val atIdx = rest.lastIndexOf('@')
+        val hostPart = if (atIdx >= 0) "•••@" + rest.substring(atIdx + 1) else rest
+        return (prefix + hostPart).take(80)
+    }
+
+    private fun findRule(
+        fields: JSONArray,
+        pathDot: String,
+    ): JSONObject? {
+        for (i in 0 until fields.length()) {
+            val r = fields.getJSONObject(i)
+            val p = r.getJSONArray("path")
+            val joined = (0 until p.length()).joinToString(".") { p.getString(it) }
+            if (joined == pathDot) return r
+        }
+        return null
+    }
+
+    private fun renderEinkSchemaFields(
+        section: LinearLayout,
+        fields: JSONArray,
+    ) {
+        for (pathDot in listOf("readingMode.eink.enabled", "readingMode.eink.volumeKeysEnabled")) {
+            val rule = findRule(fields, pathDot) ?: continue
+            val path = rule.getJSONArray("path")
+            val parent = parentOf(path)
+            val key = path.getString(path.length() - 1)
+            val hasKey = parent?.has(key) == true
+            val defaultVal = pathDot == "readingMode.eink.volumeKeysEnabled"
+            val currentVal = if (hasKey) parent!!.optBoolean(key, defaultVal) else defaultVal
+            val label = rule.getString(if (english) "labelEn" else "label")
+            val badgeState = if (currentVal) "on" else "off"
+            val display = optionLabel(rule, currentVal)
+            val toggleAction = {
+                if (!busy && !closed) {
+                    val patch =
+                        JSONObject()
+                            .put("path", path)
+                            .put(
+                                "before",
+                                JSONObject().put("present", hasKey).apply { if (hasKey) put("value", currentVal) },
+                            ).put("after", JSONObject().put("present", true).put("value", !currentVal))
+                    perform("settingsPatch", JSONObject().put("patches", JSONArray().put(patch)), {
+                        changed()
+                    }, {})
+                }
+            }
+            section.addView(ui.settingRow(label, display, badgeState, toggleAction, toggleAction))
+        }
+    }
+
+    private fun renderEinkHardwareSection(
+        section: LinearLayout,
+        fields: JSONArray,
+    ) {
         val mainActivity = activity as? MainActivity
         val bridge = mainActivity?.onyxBridgeInstance()
         val epd = runCatching { JSONObject(bridge?.epdStatus() ?: "{}") }.getOrDefault(JSONObject())
         val fl = runCatching { JSONObject(bridge?.getFrontLightStateJson() ?: "{}") }.getOrDefault(JSONObject())
-        val interval = epd.optInt("gcIntervalPages", 10)
+        val gcRule = findRule(fields, "readingMode.eink.gcIntervalPages")
+        val einkObj = preferences.optJSONObject("readingMode")?.optJSONObject("eink")
+        val interval = einkObj?.optInt("gcIntervalPages", epd.optInt("gcIntervalPages", 10)) ?: epd.optInt("gcIntervalPages", 10)
         section.addView(ui.note(tr("EPD 全屏清残影间隔（页数）", "EPD full-refresh (GC16) interval (pages)")))
         val gcRow = NativeActionFlow(activity)
-        for (pages in listOf(5, 10, 15, 20, 30)) {
+        for (pages in listOf(0, 5, 10, 15, 20, 30)) {
+            val caption = if (pages == 0) tr("跟随系统", "System") else "$pages" + tr(" 页", " p")
             gcRow.addView(
-                button("$pages" + tr(" 页", " p")) {
+                button(caption) {
                     bridge?.configureGcInterval(pages)
-                    section.removeAllViews()
-                    section.addView(ui.heading(tr("墨水屏与硬件", "E-Ink & Hardware")))
-                    renderEinkHardwareSection(section)
-                    repaint()
+                    if (gcRule != null) {
+                        val hasGc = einkObj?.has("gcIntervalPages") == true
+                        val patch =
+                            JSONObject()
+                                .put("path", gcRule.getJSONArray("path"))
+                                .put(
+                                    "before",
+                                    JSONObject().put("present", hasGc).apply {
+                                        if (hasGc) put("value", einkObj!!.getInt("gcIntervalPages"))
+                                    },
+                                ).put("after", JSONObject().put("present", true).put("value", pages))
+                        perform("settingsPatch", JSONObject().put("patches", JSONArray().put(patch)), {
+                            changed()
+                        }, {
+                            section.removeAllViews()
+                            section.addView(ui.heading(tr("墨水屏与硬件", "E-Ink & Hardware")))
+                            renderEinkSchemaFields(section, fields)
+                            renderEinkHardwareSection(section, fields)
+                            repaint()
+                        })
+                    } else {
+                        section.removeAllViews()
+                        section.addView(ui.heading(tr("墨水屏与硬件", "E-Ink & Hardware")))
+                        renderEinkSchemaFields(section, fields)
+                        renderEinkHardwareSection(section, fields)
+                        repaint()
+                    }
                 }.apply {
+                    fontFeatureSettings = "tnum"
                     NativeUi.styleTab(this, interval == pages, ink, this@NativeSettingsPanel.background)
-                    minHeight = ui.dp(38)
-                    minimumHeight = ui.dp(38)
                 },
             )
         }
@@ -405,24 +543,31 @@ internal class NativeSettingsPanel(
             val flEnabled = fl.optBoolean("enabled", true)
             val cold = fl.optInt("cold", 45)
             val warm = fl.optInt("warm", 35)
-            section.addView(ui.note(tr("前光与双色温控制（冷光 $cold% · 暖光 $warm%）", "Frontlight & CTM (Cold $cold% · Warm $warm%)")))
+            section.addView(
+                ui.note(tr("前光与双色温控制（冷光 $cold% · 暖光 $warm%）", "Frontlight & CTM (Cold $cold% · Warm $warm%)")).apply {
+                    fontFeatureSettings = "tnum"
+                },
+            )
+            val refreshEinkSection = {
+                section.removeAllViews()
+                section.addView(ui.heading(tr("墨水屏与硬件", "E-Ink & Hardware")))
+                renderEinkSchemaFields(section, fields)
+                renderEinkHardwareSection(section, fields)
+                repaint()
+            }
             val presetRow = NativeActionFlow(activity)
             presetRow.addView(
-                button(if (flEnabled) tr("关闭前光", "Light Off") else tr("开启前光", "Light On")) {
+                button(if (flEnabled) tr("前光已开 · 点击关闭", "Light On · Tap Off") else tr("前光已关 · 点击开启", "Light Off · Tap On")) {
                     bridge?.setFrontLightEnabled(!flEnabled)
-                    section.removeAllViews()
-                    section.addView(ui.heading(tr("墨水屏与硬件", "E-Ink & Hardware")))
-                    renderEinkHardwareSection(section)
-                }.apply { NativeUi.styleTab(this, !flEnabled, ink, this@NativeSettingsPanel.background) },
+                    refreshEinkSection()
+                }.apply { NativeUi.styleTab(this, flEnabled, ink, this@NativeSettingsPanel.background) },
             )
             presetRow.addView(
                 button(tr("日间清透", "Daylight")) {
                     bridge?.setFrontLightEnabled(true)
                     bridge?.setColdLightPercent(55)
                     bridge?.setWarmLightPercent(15)
-                    section.removeAllViews()
-                    section.addView(ui.heading(tr("墨水屏与硬件", "E-Ink & Hardware")))
-                    renderEinkHardwareSection(section)
+                    refreshEinkSection()
                 },
             )
             presetRow.addView(
@@ -430,28 +575,64 @@ internal class NativeSettingsPanel(
                     bridge?.setFrontLightEnabled(true)
                     bridge?.setColdLightPercent(15)
                     bridge?.setWarmLightPercent(75)
-                    section.removeAllViews()
-                    section.addView(ui.heading(tr("墨水屏与硬件", "E-Ink & Hardware")))
-                    renderEinkHardwareSection(section)
-                },
-            )
-            presetRow.addView(
-                button(tr("冷光 +10%", "Cold +10%")) {
-                    bridge?.setColdLightPercent((cold + 10).coerceIn(0, 100))
-                    section.removeAllViews()
-                    section.addView(ui.heading(tr("墨水屏与硬件", "E-Ink & Hardware")))
-                    renderEinkHardwareSection(section)
-                },
-            )
-            presetRow.addView(
-                button(tr("暖光 +10%", "Warm +10%")) {
-                    bridge?.setWarmLightPercent((warm + 10).coerceIn(0, 100))
-                    section.removeAllViews()
-                    section.addView(ui.heading(tr("墨水屏与硬件", "E-Ink & Hardware")))
-                    renderEinkHardwareSection(section)
+                    refreshEinkSection()
                 },
             )
             section.addView(presetRow)
+            val coldRow = NativeActionFlow(activity).apply { setPadding(0, ui.dp(6), 0, ui.dp(4)) }
+            coldRow.addView(
+                button(tr("冷光 −10%", "Cold −10%")) {
+                    bridge?.setFrontLightEnabled(true)
+                    bridge?.setColdLightPercent((cold - 10).coerceIn(0, 100))
+                    refreshEinkSection()
+                }.apply { isEnabled = cold > 0 },
+            )
+            coldRow.addView(
+                TextView(activity).apply {
+                    text = tr("冷光 $cold%", "Cold $cold%")
+                    textSize = 13f
+                    typeface = NativeUi.monoTypeface(true)
+                    fontFeatureSettings = "tnum"
+                    setTextColor(ui.primary)
+                    gravity = android.view.Gravity.CENTER_VERTICAL
+                    setPadding(ui.dp(6), ui.dp(10), ui.dp(6), ui.dp(10))
+                },
+            )
+            coldRow.addView(
+                button(tr("冷光 +10%", "Cold +10%")) {
+                    bridge?.setFrontLightEnabled(true)
+                    bridge?.setColdLightPercent((cold + 10).coerceIn(0, 100))
+                    refreshEinkSection()
+                }.apply { isEnabled = cold < 100 },
+            )
+            section.addView(coldRow)
+            val warmRow = NativeActionFlow(activity).apply { setPadding(0, ui.dp(2), 0, ui.dp(4)) }
+            warmRow.addView(
+                button(tr("暖光 −10%", "Warm −10%")) {
+                    bridge?.setFrontLightEnabled(true)
+                    bridge?.setWarmLightPercent((warm - 10).coerceIn(0, 100))
+                    refreshEinkSection()
+                }.apply { isEnabled = warm > 0 },
+            )
+            warmRow.addView(
+                TextView(activity).apply {
+                    text = tr("暖光 $warm%", "Warm $warm%")
+                    textSize = 13f
+                    typeface = NativeUi.monoTypeface(true)
+                    fontFeatureSettings = "tnum"
+                    setTextColor(ui.primary)
+                    gravity = android.view.Gravity.CENTER_VERTICAL
+                    setPadding(ui.dp(6), ui.dp(10), ui.dp(6), ui.dp(10))
+                },
+            )
+            warmRow.addView(
+                button(tr("暖光 +10%", "Warm +10%")) {
+                    bridge?.setFrontLightEnabled(true)
+                    bridge?.setWarmLightPercent((warm + 10).coerceIn(0, 100))
+                    refreshEinkSection()
+                }.apply { isEnabled = warm < 100 },
+            )
+            section.addView(warmRow)
         }
     }
 
@@ -770,6 +951,7 @@ internal class NativeSettingsPanel(
         val label = rule.getString(if (english) "labelEn" else "label")
         val form = column()
         val error = text("")
+        var secretVisible = false
         val input =
             ui.field().apply {
                 setText(before.toString())
@@ -791,21 +973,61 @@ internal class NativeSettingsPanel(
                     }
             }
         form.addView(input)
+        if (rule.optBoolean("secret")) {
+            lateinit var revealBtn: Button
+            revealBtn =
+                button(tr("显示明文", "Show value")) {
+                    secretVisible = !secretVisible
+                    val selStart = input.selectionStart.coerceAtLeast(0)
+                    val selEnd = input.selectionEnd.coerceAtLeast(0)
+                    input.inputType =
+                        if (secretVisible) {
+                            InputType.TYPE_CLASS_TEXT or InputType.TYPE_TEXT_VARIATION_VISIBLE_PASSWORD
+                        } else {
+                            InputType.TYPE_CLASS_TEXT or InputType.TYPE_TEXT_VARIATION_PASSWORD
+                        }
+                    input.setSelection(selStart.coerceAtMost(input.text.length), selEnd.coerceAtMost(input.text.length))
+                    revealBtn.text = if (secretVisible) tr("隐藏明文", "Hide value") else tr("显示明文", "Show value")
+                }.apply {
+                    layoutParams = LinearLayout.LayoutParams(-2, -2).apply { topMargin = ui.dp(6) }
+                }
+            form.addView(revealBtn)
+        }
         form.addView(error)
         if (path.length() == 1 && path.getString(0) == "aiModel") {
             val models = provider()?.optJSONArray("models") ?: JSONArray()
             if (models.length() > 0) {
                 form.addView(
                     button(tr("选择预设模型", "Choose preset model")) {
-                        AlertDialog
-                            .Builder(activity)
-                            .setTitle(tr("预设模型", "Preset model"))
-                            .setItems(
-                                Array(models.length()) {
-                                    models.getJSONObject(it).getString("label")
+                        val pickerForm = column()
+                        lateinit var pickerDialog: NativeStatsSettingsDialog
+                        for (mIndex in 0 until models.length()) {
+                            val item = models.getJSONObject(mIndex)
+                            val modelId = item.getString("id")
+                            pickerForm.addView(
+                                button(item.getString("label")) {
+                                    input.setText(modelId)
+                                    pickerDialog.dismiss()
+                                }.apply {
+                                    gravity = android.view.Gravity.START or android.view.Gravity.CENTER_VERTICAL
+                                    layoutParams = LinearLayout.LayoutParams(-1, -2).apply {
+                                        if (mIndex < models.length() - 1) bottomMargin = ui.dp(6)
+                                    }
                                 },
-                            ) { _, index -> input.setText(models.getJSONObject(index).getString("id")) }
-                            .show()
+                            )
+                        }
+                        pickerDialog =
+                            NativeStatsSettingsDialog(
+                                activity,
+                                tr("预设模型", "Preset model"),
+                                pickerForm,
+                                ui,
+                                listOf(AlertDialog.BUTTON_NEGATIVE to tr("取消", "Cancel")),
+                            ).also { dlg ->
+                                subDialog = dlg
+                                dlg.setOnDismissListener { if (subDialog === dlg) subDialog = null }
+                                dlg.show()
+                            }
                     },
                 )
             }
@@ -899,7 +1121,11 @@ internal class NativeSettingsPanel(
                     android.widget.RadioButton(activity).apply {
                         id = size
                         text = size.toString()
+                        textSize = 16f
+                        minimumHeight = ui.dp(48)
+                        minimumWidth = ui.dp(48)
                         setTextColor(ink)
+                        buttonTintList = android.content.res.ColorStateList.valueOf(ui.primary)
                     },
                 )
             }
@@ -947,7 +1173,11 @@ internal class NativeSettingsPanel(
                     id = i + 1
                     text =
                         providers.getJSONObject(i).getString("label")
+                    textSize = 16f
+                    minimumHeight = ui.dp(48)
+                    minimumWidth = ui.dp(48)
                     setTextColor(ink)
+                    buttonTintList = android.content.res.ColorStateList.valueOf(ui.primary)
                 },
             )
         }
@@ -1119,10 +1349,15 @@ internal class NativeSettingsPanel(
 
     fun canLeave() = !busy
 
-    fun isEditing() = busy || dialog?.isShowing == true
+    fun isEditing() = busy || dialog?.isShowing == true || subDialog?.isShowing == true
 
     fun handleBack(): Boolean {
         if (busy) return true
+        subDialog?.let {
+            it.dismiss()
+            subDialog = null
+            return true
+        }
         dialog?.let {
             it.dismiss()
             return true
@@ -1138,13 +1373,15 @@ internal class NativeSettingsPanel(
     }
 
     fun pageScroll(direction: Int): Boolean {
-        if (busy || dialog?.isShowing == true) return false
+        if (busy || dialog?.isShowing == true || subDialog?.isShowing == true) return false
         return pageLayout?.scrollActive(direction) == true
     }
 
     fun close() {
         closed = true
         val parent = recoveryParent
+        subDialog?.dismiss()
+        subDialog = null
         dialog?.dismiss()
         parent?.dismiss()
         recoveryParent = null

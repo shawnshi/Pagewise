@@ -145,15 +145,16 @@ function onInput(e: Event) {
 }
 @media (hover: none) {
   .ls-range {
-    height: 32px;
-  }
-  .ls-stops {
-    height: 36px;
+    min-block-size: 48px;
   }
   .ls-stop {
-    min-width: 44px;
-    min-height: 36px;
-    font-size: 13px;
+    min-inline-size: 48px;
+    min-block-size: 48px;
+    justify-content: center;
+    padding: 4px 6px;
+  }
+  .ls-stops {
+    min-block-size: 48px;
   }
 }
 </style>

@@ -27,6 +27,7 @@ internal class NativeStatsUiState {
     var kind = "all"
     var calendarMonth = ""
     var heatmapYear = "recent"
+    var heatmapSlice = "auto"
     var from = ""
     var to = ""
     var offset = 0
@@ -203,9 +204,7 @@ internal class NativeStatsPanel(
             }
         row.addView(
             button(tr("核对设置提交 / 恢复", "Inspect settings / recovery")) { recoverSettings() }.apply {
-                textSize = 12f
-                minHeight = NativeUi.dp(activity, 36)
-                minimumHeight = NativeUi.dp(activity, 36)
+                textSize = 13f
             },
         )
         recoveryRow = row
@@ -260,23 +259,24 @@ internal class NativeStatsPanel(
         val how =
             NativeUi.iconTextButton(activity, tr("如何计时", "How timing works"), "info", ink, background) {
                 if (!closed && !saving && dialog?.isShowing != true) {
+                    val infoMsg =
+                        ui.text(
+                            tr(
+                                "阅读时长来自现有阅读计时记录，不由本页重新计算。每天累计至少 60 秒计为活跃日；较早的累计差额不伪装成逐日记录。阅读目标、重置和导入仍由原有所有者处理。",
+                                "This page reads existing timing records. An active day requires at least 60 seconds; older cumulative differences are not fabricated as daily records. Goals, reset and imports retain their existing owners.",
+                            ),
+                            15f,
+                        ).apply { setLineSpacing(0f, 1.4f) }
                     dialog =
-                        AlertDialog
-                            .Builder(activity)
-                            .setTitle(tr("如何计时", "How timing works"))
-                            .setMessage(
-                                tr(
-                                    "阅读时长来自现有阅读计时记录，不由本页重新计算。每天累计至少 60 秒计为活跃日；较早的累计差额不伪装成逐日记录。阅读目标、重置和导入仍由原有所有者处理。",
-                                    "This page reads existing timing records. An active day requires at least 60 seconds; older cumulative differences are not fabricated as daily records. Goals, reset and imports retain their existing owners.",
-                                ),
-                            ).setPositiveButton(tr("返回", "Back"), null)
-                            .create()
-                            .also { it.show() }
+                        NativeStatsSettingsDialog(
+                            activity,
+                            tr("如何计时", "How timing works"),
+                            infoMsg,
+                            ui,
+                            listOf(AlertDialog.BUTTON_POSITIVE to tr("返回", "Back")),
+                        ).also { it.show() }
                 }
-            }.apply {
-                visibility = View.GONE
             }
-        recoveryRow?.addView(how)
         if (overview.getJSONObject("milestones").optDouble("totalSeconds", 0.0) <= 0 && result.optDouble("legacySeconds", 0.0) <= 0) {
             root.removeView(dashboard)
             root.removeView(trendCard)
@@ -308,20 +308,14 @@ internal class NativeStatsPanel(
                     setPadding(0, 0, 0, dp(14))
                 },
             )
-            val actions =
-                LinearLayout(activity).apply {
-                    orientation = LinearLayout.HORIZONTAL
-                }
+            val actions = NativeActionFlow(activity)
             actions.addView(
                 NativeUi.primaryButton(activity, tr("前往藏书", "Go to Library"), ink, background) { navigate("/library") },
-                LinearLayout.LayoutParams(-2, -2).apply { marginEnd = dp(8) },
             )
             actions.addView(
-                button(tr("设置阅读目标", "Set reading goal")) { editGoal() }.apply {
-                    minHeight = dp(44)
-                    minimumHeight = dp(44)
-                }.also { goalButtons.add(it) },
+                button(tr("设置阅读目标", "Set reading goal")) { editGoal() }.also { goalButtons.add(it) },
             )
+            actions.addView(how)
             empty.addView(actions)
             root.addView(empty)
             root.addView(NativeUi.colophonTailpiece(activity, "READING REGISTER · NO DATA", background))
@@ -333,20 +327,18 @@ internal class NativeStatsPanel(
                 tr("昨天", "Yesterday") + ": " + duration(overview.getDouble("yesterdaySeconds")) + " · " + tr("连续阅读", "Current streak") +
                     " ${overview.getJSONObject("streak").getInt("current")} " +
                     tr("天", "days"),
-            ),
+            ).apply { fontFeatureSettings = "tnum" },
         )
-        todayCard.addView(
+        val goalActionsRow = NativeActionFlow(activity).apply { setPadding(0, dp(4), 0, dp(8)) }
+        goalActionsRow.addView(
             button(tr("每日目标", "Daily goal") + ": ${result.getInt("goalMinutes")} min") { editGoal() }
                 .apply {
                     typeface = NativeUi.monoTypeface(false)
                     fontFeatureSettings = "tnum"
-                    layoutParams =
-                        LinearLayout.LayoutParams(ViewGroup.LayoutParams.WRAP_CONTENT, ViewGroup.LayoutParams.WRAP_CONTENT).apply {
-                            topMargin = dp(4)
-                            bottomMargin = dp(8)
-                        }
                 }.also { goalButtons.add(it) },
         )
+        goalActionsRow.addView(how)
+        todayCard.addView(goalActionsRow)
         val week = overview.getJSONArray("week")
         val todayWeek =
             (0 until week.length()).map { week.getJSONObject(it) }.firstOrNull { it.getBoolean("isToday") }
@@ -423,7 +415,7 @@ internal class NativeStatsPanel(
                 LinearLayout(activity).apply {
                     orientation = LinearLayout.VERTICAL
                     gravity = android.view.Gravity.CENTER
-                    minimumHeight = dp(58)
+                    minimumHeight = dp(60)
                     isClickable = true
                     isFocusable = true
                     val paperBg = ui.paper
@@ -437,27 +429,44 @@ internal class NativeStatsPanel(
                         }
                     val borderColor = if (isToday || met) ink else ui.hairline
                     val borderWidth = if (isToday) 2 else 1
-                    this.background = ui.shape(bgFill, borderColor, borderWidth)
+                    this.background =
+                        android.graphics.drawable.StateListDrawable().apply {
+                            addState(intArrayOf(android.R.attr.state_pressed), ui.shape(ink, ink, 2))
+                            addState(intArrayOf(android.R.attr.state_focused), ui.shape(bgFill, ink, 2))
+                            addState(intArrayOf(), ui.shape(bgFill, borderColor, borderWidth))
+                        }
                     setPadding(dp(2), dp(6), dp(2), dp(6))
                     setOnClickListener { if (!closed && !saving) load(dayStr) }
                     val fg = if (met) paperBg else ink
                     val subFg = if (met) background else ui.secondary
+                    val fgStates =
+                        android.content.res.ColorStateList(
+                            arrayOf(intArrayOf(android.R.attr.state_pressed), intArrayOf()),
+                            intArrayOf(paperBg, fg),
+                        )
+                    val subFgStates =
+                        android.content.res.ColorStateList(
+                            arrayOf(intArrayOf(android.R.attr.state_pressed), intArrayOf()),
+                            intArrayOf(paperBg, subFg),
+                        )
                     addView(
                         TextView(activity).apply {
                             text = dayStr.takeLast(5)
-                            textSize = 10.5f
+                            textSize = 12f
                             typeface = NativeUi.monoTypeface(isToday)
                             fontFeatureSettings = "tnum"
                             gravity = android.view.Gravity.CENTER
-                            setTextColor(subFg)
+                            isDuplicateParentStateEnabled = true
+                            setTextColor(subFgStates)
                         },
                     )
                     addView(
                         TextView(activity).apply {
                             text = if (met) "■" else if (sec >= 60.0) "▣" else "□"
-                            textSize = 12f
+                            textSize = 13f
                             gravity = android.view.Gravity.CENTER
-                            setTextColor(fg)
+                            isDuplicateParentStateEnabled = true
+                            setTextColor(fgStates)
                             setPadding(0, dp(2), 0, dp(2))
                         },
                     )
@@ -471,19 +480,20 @@ internal class NativeStatsPanel(
                                     mins >= 60 -> "${mins / 60}h${mins % 60}m"
                                     else -> "${mins}m"
                                 }
-                            textSize = 11f
+                            textSize = 12f
                             typeface = NativeUi.monoTypeface(met || isToday)
                             fontFeatureSettings = "tnum"
                             gravity = android.view.Gravity.CENTER
-                            setTextColor(fg)
+                            isDuplicateParentStateEnabled = true
+                            setTextColor(fgStates)
                         },
                     )
                 }
             weekStrip.addView(
                 tile,
                 LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f).apply {
-                    marginStart = if (i == 0) 0 else dp(2)
-                    marginEnd = if (i == week.length() - 1) 0 else dp(2)
+                    marginStart = if (i == 0) 0 else dp(3)
+                    marginEnd = if (i == week.length() - 1) 0 else dp(3)
                 },
             )
         }
@@ -633,20 +643,76 @@ internal class NativeStatsPanel(
         calendarCard.addView(
             ui.note(
                 tr(
-                    "深浅表示已有记录；活跃日至少 60 秒，目标着色按当前目标。具体日期通过月历或选日查看。",
-                    "Shades summarize recorded time. Active days require 60s; goal shading uses your current goal. Use calendar/day selection for details.",
+                    "深浅表示已有记录；活跃日至少 60 秒，目标着色按当前目标。点击热力图格子、月历或选日可查看当天书目。",
+                    "Shades summarize recorded time (active >= 60s; darkest = goal met). Tap a cell, calendar day, or day picker for details.",
                 ),
             ),
         )
+        val heatmapView = YearHeatmap(heat)
+        val sliceRow = NativeActionFlow(activity)
+        val sliceChoices =
+            listOf(
+                "auto" to tr("自适应", "Auto"),
+                "h1" to tr("上半年", "H1"),
+                "h2" to tr("下半年", "H2"),
+                "all" to tr("全年", "Full year"),
+            )
+        val sliceButtons = mutableListOf<Button>()
+        sliceChoices.forEach { (id, caption) ->
+            val btn =
+                button(caption) {
+                    state.heatmapSlice = id
+                    sliceButtons.forEachIndexed { idx, b ->
+                        NativeUi.styleTab(b, sliceChoices[idx].first == state.heatmapSlice, ink, background)
+                    }
+                    heatmapView.invalidate()
+                }.apply {
+                    NativeUi.styleTab(this, state.heatmapSlice == id, ink, background)
+                }
+            sliceButtons.add(btn)
+            sliceRow.addView(btn)
+        }
+        calendarCard.addView(sliceRow)
         calendarCard.addView(
-            NativeStatsResponsive(
-                activity,
-                YearHeatmap(heat),
-                ui.note(tr("此宽度下请使用月历或选日查看记录。", "Use calendar or day selection at this width.")),
-                heat.length() * 12 + 36,
-            ),
+            heatmapView,
+            LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, dp(126)).apply {
+                topMargin = dp(4)
+                bottomMargin = dp(6)
+            },
         )
-        calendar(cal, calendarCard)
+        val legendRow =
+            LinearLayout(activity).apply {
+                orientation = LinearLayout.HORIZONTAL
+                gravity = android.view.Gravity.END or android.view.Gravity.CENTER_VERTICAL
+                setPadding(0, 0, 0, dp(8))
+            }
+        legendRow.addView(
+            ui.note(tr("少 ", "Less ")).apply {
+                textSize = 12f
+                setPadding(0, 0, dp(6), 0)
+            },
+        )
+        for ((fill, stroke) in listOf(
+            ui.paper to ui.secondary,
+            ui.selectedSurface to ui.hairline,
+            ui.secondary to ui.secondary,
+            ui.primary to ui.primary,
+        )) {
+            legendRow.addView(
+                View(activity).apply {
+                    setBackground(ui.shape(fill, stroke, 1))
+                },
+                LinearLayout.LayoutParams(dp(12), dp(12)).apply { marginEnd = dp(4) },
+            )
+        }
+        legendRow.addView(
+            ui.note(tr(" 达标", " Goal")).apply {
+                textSize = 12f
+                setPadding(dp(4), 0, 0, 0)
+            },
+        )
+        calendarCard.addView(legendRow)
+        calendar(cal, today, calendarCard)
         val marks = overview.getJSONObject("milestones")
         val grid =
             ui.column().apply {
@@ -717,7 +783,15 @@ internal class NativeStatsPanel(
     ) {
         val total = dto.getInt("total")
         val limit = dto.getInt("limit")
-        parent.addView(text("${if (total == 0) 0 else offset + 1}–${(offset + limit).coerceAtMost(total)} / $total", 13f))
+        if (total == 0) return
+        parent.addView(
+            text("${offset + 1}–${(offset + limit).coerceAtMost(total)} / $total", 13f).apply {
+                typeface = NativeUi.monoTypeface(false)
+                fontFeatureSettings = "tnum"
+                setTextColor(ui.secondary)
+            },
+        )
+        if (total <= limit && offset == 0) return
         val row = NativeActionFlow(activity)
         row.addView(button(tr("上页", "Previous page")) { move((offset - limit).coerceAtLeast(0)) }.apply { isEnabled = offset > 0 })
         row.addView(button(tr("下页", "Next page")) { move(offset + limit) }.apply { isEnabled = offset + limit < total })
@@ -750,10 +824,21 @@ internal class NativeStatsPanel(
 
     private fun calendar(
         data: JSONObject,
+        today: String,
         parent: LinearLayout = root,
     ) {
         parent.addView(ui.heading(tr("月历", "Calendar") + " · " + data.getString("month")))
-        controls(parent, listOf(tr("上月", "Previous month") to { shiftMonth(-1) }, tr("下月", "Next month") to { shiftMonth(1) }))
+        controls(
+            parent,
+            listOf(
+                tr("上月", "Previous month") to { shiftMonth(-1) },
+                tr("本月", "Current month") to {
+                    state.calendarMonth = today.take(7)
+                    load()
+                },
+                tr("下月", "Next month") to { shiftMonth(1) },
+            ),
+        )
         val grid = ui.column()
         val list = ui.column()
         val header = LinearLayout(activity)
@@ -763,7 +848,10 @@ internal class NativeStatsPanel(
         grid.addView(header)
         val rows = data.getJSONArray("rows")
         for (r in 0 until rows.length()) {
-            val row = LinearLayout(activity)
+            val row =
+                LinearLayout(activity).apply {
+                    layoutParams = LinearLayout.LayoutParams(-1, -2).apply { topMargin = dp(6) }
+                }
             val cells = rows.getJSONArray(r)
             for (c in 0 until cells.length()) {
                 val cell =
@@ -772,18 +860,59 @@ internal class NativeStatsPanel(
                     } else {
                         val d = cells.getJSONObject(c)
                         val day = d.getString("day")
-                        list.addView(ui.settingRow(day, duration(d.getDouble("seconds"))) { if (!closed && !saving) load(day) })
+                        val sec = d.getDouble("seconds")
+                        val met = d.optBoolean("met", false)
+                        val active = sec >= 60.0
+                        val isToday = day == today
+                        val statusTag =
+                            when {
+                                met -> tr("达标", "Goal met")
+                                active -> tr("活跃", "Active")
+                                else -> tr("未满60秒", "<60s")
+                            }
+                        list.addView(
+                            ui.settingRow(
+                                "$day · $statusTag" + if (isToday) " · ${tr("今天", "Today")}" else "",
+                                duration(sec),
+                            ) { if (!closed && !saving) load(day) },
+                        )
+                        val fill =
+                            when {
+                                met -> ui.primary
+                                active -> ui.sunkenSurface
+                                else -> ui.paper
+                            }
+                        val fgColor = if (met) ui.paper else if (active) ui.primary else ui.secondary
+                        val borderCol = if (isToday || met) ui.primary else ui.hairline
+                        val strokeW = if (isToday) 2 else 1
                         button(day.takeLast(2)) { load(day) }.apply {
                             minimumWidth = dp(48)
                             minWidth = dp(48)
-                            contentDescription = day + ": " + duration(d.getDouble("seconds"))
+                            minimumHeight = dp(48)
+                            minHeight = dp(48)
+                            setPadding(dp(2), dp(6), dp(2), dp(6))
+                            typeface = NativeUi.monoTypeface(met || active || isToday)
+                            fontFeatureSettings = "tnum"
+                            setTextColor(
+                                android.content.res.ColorStateList(
+                                    arrayOf(intArrayOf(android.R.attr.state_pressed), intArrayOf()),
+                                    intArrayOf(ui.paper, fgColor),
+                                ),
+                            )
+                            this.background =
+                                android.graphics.drawable.StateListDrawable().apply {
+                                    addState(intArrayOf(android.R.attr.state_pressed), ui.shape(ui.primary, ui.primary, 2))
+                                    addState(intArrayOf(android.R.attr.state_focused), ui.shape(fill, ui.primary, 2))
+                                    addState(intArrayOf(), ui.shape(fill, borderCol, strokeW))
+                                }
+                            contentDescription = "$day ($statusTag): ${duration(sec)}"
                         }
                     }
-                row.addView(cell, LinearLayout.LayoutParams(0, -2, 1f).apply { if (c < cells.length() - 1) marginEnd = dp(4) })
+                row.addView(cell, LinearLayout.LayoutParams(0, -2, 1f).apply { if (c < cells.length() - 1) marginEnd = dp(6) })
             }
             grid.addView(row)
         }
-        parent.addView(NativeStatsResponsive(activity, grid, list, 392))
+        parent.addView(NativeStatsResponsive(activity, grid, list, 440))
     }
 
     private fun shift(delta: Int) {
@@ -832,13 +961,32 @@ internal class NativeStatsPanel(
         dialog?.dismiss()
         dayBody = null
         dayDialog = null
-        dialog =
-            AlertDialog
-                .Builder(activity)
-                .setItems(labels.toTypedArray()) { _, index -> action(options[index]) }
-                .setNegativeButton(tr("取消", "Cancel"), null)
-                .show()
-                .also { it.window?.setWindowAnimations(0) }
+        val list = ui.column()
+        lateinit var pickerDialog: NativeStatsSettingsDialog
+        options.forEachIndexed { index, value ->
+            list.addView(
+                button(labels.getOrElse(index) { value }) {
+                    pickerDialog.dismiss()
+                    action(value)
+                }.apply {
+                    gravity = android.view.Gravity.START or android.view.Gravity.CENTER_VERTICAL
+                    layoutParams = LinearLayout.LayoutParams(-1, -2).apply {
+                        if (index < options.lastIndex) bottomMargin = dp(8)
+                    }
+                },
+            )
+        }
+        pickerDialog =
+            NativeStatsSettingsDialog(
+                activity,
+                tr("选择范围或年份", "Select option"),
+                list,
+                ui,
+                listOf(AlertDialog.BUTTON_NEGATIVE to tr("取消", "Cancel")),
+            ).also {
+                dialog = it
+                it.show()
+            }
     }
 
     private fun range() {
@@ -879,28 +1027,103 @@ internal class NativeStatsPanel(
         private val columns: JSONArray,
     ) : View(activity) {
         private val paint = Paint(Paint.ANTI_ALIAS_FLAG)
+        private var downX = 0f
+        private var downY = 0f
 
         init {
             contentDescription =
-                tr("年度阅读日历，具体日期可通过月历或选择日期查看。", "Year reading calendar; use month/day controls for accessible day details.")
+                tr("年度阅读热力图，点击方块、月历或选日可查看当天详情。", "Year reading calendar heatmap; tap a cell or use month/day controls for day details.")
+            val touchSlop = android.view.ViewConfiguration.get(activity).scaledTouchSlop.toFloat()
+            setOnTouchListener { _, ev ->
+                when (ev.actionMasked) {
+                    android.view.MotionEvent.ACTION_DOWN -> {
+                        downX = ev.x
+                        downY = ev.y
+                        true
+                    }
+                    android.view.MotionEvent.ACTION_UP -> {
+                        if (kotlin.math.abs(ev.x - downX) <= touchSlop && kotlin.math.abs(ev.y - downY) <= touchSlop) {
+                            val tappedDay = dayAt(ev.x, ev.y)
+                            if (!tappedDay.isNullOrEmpty() && !closed && !saving) {
+                                load(tappedDay)
+                            }
+                        }
+                        true
+                    }
+                    else -> false
+                }
+            }
+        }
+
+        private fun sliceRange(viewWidth: Int): IntRange {
+            val count = columns.length()
+            if (count <= 1) return 0 until count
+            val half = count / 2
+            val mode =
+                if (state.heatmapSlice == "auto") {
+                    if (viewWidth > 0 && viewWidth < dp(520)) "h2" else "all"
+                } else {
+                    state.heatmapSlice
+                }
+            return when (mode) {
+                "h1" -> 0 until half.coerceAtLeast(1)
+                "h2" -> half until count
+                else -> 0 until count
+            }
+        }
+
+        private fun dayAt(
+            x: Float,
+            y: Float,
+        ): String? {
+            if (columns.length() == 0 || width <= 0) return null
+            val range = sliceRange(width)
+            val span = (range.last - range.first + 1).coerceAtLeast(1)
+            val topBand = dp(18).toFloat()
+            val cell = minOf(dp(14).toFloat(), width.toFloat() / span)
+            if (y < topBand) return null
+            val colOffset = (x / cell).toInt()
+            val rowOffset = ((y - topBand) / cell).toInt()
+            val colIdx = range.first + colOffset
+            if (colIdx !in range || rowOffset !in 0..6) return null
+            val col = columns.optJSONArray(colIdx) ?: return null
+            if (rowOffset >= col.length() || col.isNull(rowOffset)) return null
+            return col.optJSONObject(rowOffset)?.optString("day")
         }
 
         override fun onMeasure(
             widthMeasureSpec: Int,
             heightMeasureSpec: Int,
         ) {
-            setMeasuredDimension(MeasureSpec.getSize(widthMeasureSpec), resolveSize(dp(100), heightMeasureSpec))
+            setMeasuredDimension(MeasureSpec.getSize(widthMeasureSpec), resolveSize(dp(124), heightMeasureSpec))
         }
 
         override fun onDraw(canvas: Canvas) {
             super.onDraw(canvas)
-            if (columns.length() == 0) return
-            val size = minOf(dp(12).toFloat(), width.toFloat() / columns.length())
-            for (x in 0 until columns.length()) {
-                val column = columns.getJSONArray(x)
+            if (columns.length() == 0 || width <= 0) return
+            val range = sliceRange(width)
+            val span = (range.last - range.first + 1).coerceAtLeast(1)
+            val topBand = dp(18).toFloat()
+            val cell = minOf(dp(14).toFloat(), width.toFloat() / span)
+            val inset = dp(1).toFloat().coerceAtLeast(1f)
+            paint.typeface = NativeUi.monoTypeface(false)
+            paint.textSize = 11f * resources.displayMetrics.scaledDensity
+            paint.textAlign = Paint.Align.LEFT
+            var lastMonth = ""
+            var lastLabelX = -1000f
+            val minLabelGap = dp(28).toFloat()
+            for (rawX in range) {
+                val drawX = rawX - range.first
+                val column = columns.getJSONArray(rawX)
+                var monthSample = ""
                 for (y in 0 until column.length()) {
                     if (!column.isNull(y)) {
-                        val seconds = column.getJSONObject(y).getDouble("seconds")
+                        val obj = column.getJSONObject(y)
+                        val dayVal = obj.optString("day")
+                        if (monthSample.isEmpty() && dayVal.length >= 7) {
+                            monthSample = dayVal.substring(5, 7)
+                        }
+                        val seconds = obj.getDouble("seconds")
                         paint.color =
                             when {
                                 seconds <= 0 -> ui.paper
@@ -909,14 +1132,34 @@ internal class NativeStatsPanel(
                                 else -> ui.primary
                             }
                         paint.style = Paint.Style.FILL
-                        canvas.drawRect(x * size + 1, y * size + 1, (x + 1) * size - 1, (y + 1) * size - 1, paint)
+                        canvas.drawRect(
+                            drawX * cell + inset,
+                            topBand + y * cell + inset,
+                            (drawX + 1) * cell - inset,
+                            topBand + (y + 1) * cell - inset,
+                            paint,
+                        )
                         if (seconds <= 0) {
                             paint.color = ui.secondary
                             paint.style = Paint.Style.STROKE
-                            paint.strokeWidth = 1f
-                            canvas.drawRect(x * size + 1, y * size + 1, (x + 1) * size - 1, (y + 1) * size - 1, paint)
+                            paint.strokeWidth = inset
+                            canvas.drawRect(
+                                drawX * cell + inset,
+                                topBand + y * cell + inset,
+                                (drawX + 1) * cell - inset,
+                                topBand + (y + 1) * cell - inset,
+                                paint,
+                            )
                         }
                     }
+                }
+                val labelX = drawX * cell + inset
+                if (monthSample.isNotEmpty() && monthSample != lastMonth && labelX - lastLabelX >= minLabelGap) {
+                    paint.style = Paint.Style.FILL
+                    paint.color = ui.secondary
+                    canvas.drawText("${monthSample}月", labelX, dp(12).toFloat(), paint)
+                    lastMonth = monthSample
+                    lastLabelX = labelX
                 }
             }
         }

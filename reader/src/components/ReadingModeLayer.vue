@@ -6,7 +6,7 @@
  * - (可选) 墨水屏设备提示: suggestEink 为 true 时显示一次;
  * - 全局样式: .reader.lr-eink (去掉一切过渡动画) / .lr-large-ui (工具栏按钮放大) / .lr-immersive (边缘悬停不呼出工具栏)。
  */
-import { computed, onBeforeUnmount, ref, watch } from 'vue'
+import { computed } from 'vue'
 import { t } from '../i18n'
 import { useSettings } from '../stores/settings'
 import type { ReadingModes } from '../composables/useReadingModes'
@@ -19,20 +19,7 @@ const props = defineProps<{
 
 const settings = useSettings()
 
-// ---- 休息提醒: 20 秒倒计时 ----
-const REST_SECONDS = 20
-const left = ref(REST_SECONDS)
-let tick: ReturnType<typeof setInterval> | undefined
-watch(() => props.modes.reminderDue.value, due => {
-  clearInterval(tick)
-  left.value = REST_SECONDS
-  if (due) tick = setInterval(() => {
-    if (left.value > 0) left.value--
-    else clearInterval(tick)
-  }, 1000)
-}, { immediate: true })
-onBeforeUnmount(() => clearInterval(tick))
-
+// Static rest notice without 1Hz E-Ink flicker; dismiss/snooze buttons immediately reset the interval.
 const interval = computed(() => settings.readingMode.eyeCare.intervalMin)
 
 function acceptEink() {
@@ -48,7 +35,7 @@ function acceptEink() {
     <svg class="rm-banner-icon" viewBox="0 0 24 24" width="22" height="22" aria-hidden="true"><path fill="currentColor" d="M12 5c4.6 0 8.3 3 9.9 6.6a1 1 0 0 1 0 .8C20.3 16 16.6 19 12 19s-8.3-3-9.9-6.6a1 1 0 0 1 0-.8C3.7 8 7.4 5 12 5zm0 2c-3.5 0-6.5 2.2-7.9 5 1.4 2.8 4.4 5 7.9 5s6.5-2.2 7.9-5c-1.4-2.8-4.4-5-7.9-5zm0 2a3 3 0 1 1 0 6 3 3 0 0 1 0-6z"/></svg>
     <div class="rm-banner-text">
       <strong>{{ t('readingMode.reminderTitle') }}</strong>
-      <span>{{ t('readingMode.reminderBody', { n: interval }) }}<template v-if="left > 0"> · {{ t('readingMode.reminderCountdown', { n: left }) }}</template></span>
+      <span>{{ t('readingMode.reminderBody', { n: interval }) }}</span>
     </div>
     <div class="rm-banner-actions">
       <button type="button" class="btn btn-primary" @click="modes.dismissReminder('done')">{{ t('readingMode.reminderDone') }}</button>

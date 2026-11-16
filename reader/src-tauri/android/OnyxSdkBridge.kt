@@ -1,17 +1,21 @@
 package io.pagewise.reader
 
+import android.content.ContentValues
 import android.content.Context
 import android.content.Intent
 import android.graphics.Bitmap
+import android.graphics.BitmapFactory
 import android.graphics.Canvas
 import android.graphics.Color
 import android.graphics.Rect
 import android.graphics.pdf.PdfRenderer
+import android.media.AudioManager
 import android.net.Uri
 import android.os.Build
 import android.os.Handler
 import android.os.Looper
 import android.os.ParcelFileDescriptor
+import android.provider.MediaStore
 import android.provider.OpenableColumns
 import android.util.Base64
 import android.view.KeyEvent
@@ -66,13 +70,13 @@ class OnyxSdkBridge(
 
     fun isBooxHardware(): Boolean {
         val brands =
-            listOf(Build.MANUFACTURER, Build.BRAND, Build.DEVICE, Build.PRODUCT)
+            listOf(Build.MANUFACTURER, Build.BRAND)
                 .mapNotNull { it?.lowercase(Locale.ROOT) }
         if (brands.any { it.contains("onyx") || it.contains("boox") }) return true
         val sysBrand = readSystemProperty("ro.product.manufacturer").lowercase(Locale.ROOT)
         if (sysBrand.contains("onyx") || sysBrand.contains("boox")) return true
         if (readSystemProperty("ro.onyx.model").isNotEmpty()) return true
-        return epdClass != null || deviceClass != null
+        return epdClass != null
     }
 
     fun buildHardwareProfileJson(
@@ -84,9 +88,9 @@ class OnyxSdkBridge(
         val heightPx = metrics.heightPixels.coerceAtLeast(1)
         val densityDpi = metrics.densityDpi.coerceAtLeast(72)
         val boox = isBooxHardware()
-        val hasFrontLight = queryHasFrontLight() || boox
-        val hasCtm = queryHasCtmBrightness() || boox
-        val sdkReady = epdClass != null || frontLightClass != null || deviceClass != null
+        val hasFrontLight = queryHasFrontLight()
+        val hasCtm = queryHasCtmBrightness()
+        val sdkReady = epdClass != null || frontLightClass != null
         val modelName = resolveDeviceModel()
         val colorEink =
             modelName.lowercase(Locale.ROOT).let {
@@ -103,10 +107,10 @@ class OnyxSdkBridge(
             .put("physicalWidthPx", widthPx)
             .put("physicalHeightPx", heightPx)
             .put("densityDpi", densityDpi)
-            .put("epdController", epdClass != null || boox)
+            .put("epdController", epdClass != null)
             .put("frontLight", hasFrontLight)
             .put("ctmLight", hasCtm)
-            .put("stylus", touchHelperClass != null || boox)
+            .put("stylus", touchHelperClass != null)
             .put("colorEink", colorEink)
             .toString()
     }
@@ -116,12 +120,21 @@ class OnyxSdkBridge(
     // =========================================================================
 
     fun attachWebView(webView: WebView) {
-        invokeStatic(
-            epdClass,
-            "setWebViewContrastOptimize",
-            arrayOf(View::class.java, Boolean::class.javaPrimitiveType!!),
-            arrayOf(webView, true),
-        )
+        val appliedWebView =
+            invokeStatic(
+                epdClass,
+                "setWebViewContrastOptimize",
+                arrayOf(WebView::class.java, Boolean::class.javaPrimitiveType!!),
+                arrayOf(webView, true),
+            )
+        if (!appliedWebView) {
+            invokeStatic(
+                epdClass,
+                "setWebViewContrastOptimize",
+                arrayOf(View::class.java, Boolean::class.javaPrimitiveType!!),
+                arrayOf(webView, true),
+            )
+        }
         applyViewDefaultUpdateMode(webView, windowState.epdState.defaultMode)
     }
 
@@ -292,7 +305,7 @@ class OnyxSdkBridge(
                 }
             }
         }
-        return constants.firstOrNull()
+        return null
     }
 
     private fun buildEpdStatusJson(): String =
@@ -349,6 +362,12 @@ class OnyxSdkBridge(
                 arrayOf(Context::class.java, Int::class.javaPrimitiveType!!),
                 arrayOf(context, raw),
             )
+        invokeStatic(
+            frontLightClass,
+            "setColdLightConfigValue",
+            arrayOf(Context::class.java, Int::class.javaPrimitiveType!!),
+            arrayOf(context, raw),
+        )
         if (!ok) {
             invokeStatic(
                 frontLightClass,
@@ -374,6 +393,12 @@ class OnyxSdkBridge(
             arrayOf(Context::class.java, Int::class.javaPrimitiveType!!),
             arrayOf(context, raw),
         )
+        invokeStatic(
+            frontLightClass,
+            "setWarmLightConfigValue",
+            arrayOf(Context::class.java, Int::class.javaPrimitiveType!!),
+            arrayOf(context, raw),
+        )
         if (clamped > 0 && !cachedLightEnabled) {
             setFrontLightEnabled(true)
         }
@@ -381,8 +406,8 @@ class OnyxSdkBridge(
     }
 
     private fun readFrontLightSnapshot(): OnyxFrontLightSnapshot {
-        val supported = queryHasFrontLight() || isBooxHardware()
-        val ctm = queryHasCtmBrightness() || isBooxHardware()
+        val supported = queryHasFrontLight()
+        val ctm = supported && queryHasCtmBrightness()
         val enabled =
             invokeStaticReturn(frontLightClass, "isFrontLightOn", arrayOf(Context::class.java), arrayOf(context)) as? Boolean
                 ?: cachedLightEnabled
@@ -495,11 +520,13 @@ class OnyxSdkBridge(
         suspended: Boolean,
     ): String {
         val changed = windowState.scribbleState.setModalSuspended(suspended)
-        if (changed) {
+        if (changed || webView != null) {
             syncRawDrawingState(webView)
         }
         return buildScribbleStatusJson()
     }
+
+    fun scribbleStatus(): String = buildScribbleStatusJson()
 
     fun onLifecycleResume(webView: WebView?) {
         syncRawDrawingState(webView)
@@ -831,7 +858,10 @@ class OnyxSdkBridge(
         webView: WebView?,
         event: KeyEvent,
     ): Boolean {
-        val decision = windowState.evaluateHardwareKey(event.keyCode, event.action, event.repeatCount)
+        val audioActive =
+            SystemTtsService.isActivelySpeaking() ||
+                ((context.getSystemService(Context.AUDIO_SERVICE) as? AudioManager)?.isMusicActive == true)
+        val decision = windowState.evaluateHardwareKey(event.keyCode, event.action, event.repeatCount, audioActive)
         if (!decision.intercept) return false
         val direction = decision.direction
         if (direction != null && webView != null) {
@@ -972,15 +1002,15 @@ class OnyxSdkBridge(
     ): Boolean {
         return runCatching {
             val cacheRoot = context.cacheDir.canonicalFile
-            val filesRoot = context.filesDir.canonicalFile
+            val dataRoot = context.dataDir.canonicalFile
             val source = File(stagedPath).canonicalFile
             if (!source.path.startsWith(cacheRoot.path + File.separator) || !source.isFile) {
                 return false
             }
             val cleanRel = targetRelPath.replace('\\', '/').trimStart('/')
             if (cleanRel.isEmpty() || cleanRel.contains("..")) return false
-            val target = File(filesRoot, cleanRel).canonicalFile
-            if (!target.path.startsWith(filesRoot.path + File.separator)) return false
+            val target = File(dataRoot, cleanRel).canonicalFile
+            if (!target.path.startsWith(dataRoot.path + File.separator)) return false
             target.parentFile?.mkdirs()
             if (source.renameTo(target)) {
                 return true
@@ -1193,9 +1223,13 @@ class OnyxSdkBridge(
         val cleanRel = bookRelPath.replace('\\', '/').trimStart('/')
         if (cleanRel.isEmpty() || cleanRel.contains("..")) return null
         return runCatching {
-            val root = context.filesDir.canonicalFile
-            val target = File(root, cleanRel).canonicalFile
-            if (target.path.startsWith(root.path + File.separator) && target.isFile) target else null
+            for (root in listOf(context.dataDir.canonicalFile, context.filesDir.canonicalFile)) {
+                val target = File(root, cleanRel).canonicalFile
+                if (target.path.startsWith(root.path + File.separator) && target.isFile) {
+                    return@runCatching target
+                }
+            }
+            null
         }.getOrNull()
     }
 
@@ -1232,6 +1266,60 @@ class OnyxSdkBridge(
         }.getOrDefault(false)
     }
 
+    private fun decodeScaledCoverBitmap(
+        file: File,
+        maxW: Int,
+        maxH: Int,
+    ): Bitmap? {
+        val bounds = BitmapFactory.Options().apply { inJustDecodeBounds = true }
+        BitmapFactory.decodeFile(file.absolutePath, bounds)
+        if (bounds.outWidth <= 0 || bounds.outHeight <= 0) return null
+        var sample = 1
+        while (bounds.outWidth / sample > maxW * 2 && bounds.outHeight / sample > maxH * 2) {
+            sample *= 2
+        }
+        val opts = BitmapFactory.Options().apply { inSampleSize = sample.coerceAtLeast(1) }
+        return BitmapFactory.decodeFile(file.absolutePath, opts)
+    }
+
+    private fun exportSleepCoverToMediaStore(bmp: Bitmap) {
+        if (Build.VERSION.SDK_INT < Build.VERSION_CODES.Q) return
+        runCatching {
+            val resolver = context.contentResolver
+            val collection = MediaStore.Images.Media.EXTERNAL_CONTENT_URI
+            val relPath = "Pictures/Screensaver"
+            runCatching {
+                resolver.delete(
+                    collection,
+                    "${MediaStore.MediaColumns.DISPLAY_NAME} = ? AND ${MediaStore.MediaColumns.RELATIVE_PATH} LIKE ?",
+                    arrayOf("pagewise_sleep_cover.png", "$relPath%"),
+                )
+            }
+            val values =
+                ContentValues().apply {
+                    put(MediaStore.MediaColumns.DISPLAY_NAME, "pagewise_sleep_cover.png")
+                    put(MediaStore.MediaColumns.MIME_TYPE, "image/png")
+                    put(MediaStore.MediaColumns.RELATIVE_PATH, relPath)
+                    put(MediaStore.MediaColumns.IS_PENDING, 1)
+                }
+            val uri = resolver.insert(collection, values) ?: return
+            var committed = false
+            try {
+                resolver.openOutputStream(uri)?.use { out ->
+                    if (!bmp.compress(Bitmap.CompressFormat.PNG, 100, out)) {
+                        throw IllegalStateException("PNG compression failed")
+                    }
+                } ?: throw IllegalStateException("Unable to open MediaStore stream")
+                values.clear()
+                values.put(MediaStore.MediaColumns.IS_PENDING, 0)
+                resolver.update(uri, values, null, null)
+                committed = true
+            } finally {
+                if (!committed) runCatching { resolver.delete(uri, null, null) }
+            }
+        }
+    }
+
     fun generateSleepCover(
         title: String,
         author: String,
@@ -1242,8 +1330,12 @@ class OnyxSdkBridge(
         val cleanAuthor = author.trim()
         val pct = progressPercent.coerceIn(0, 100)
         return runCatching {
-            val w = 1404
-            val h = 1872
+            val metrics = context.resources.displayMetrics
+            val w = metrics.widthPixels.takeIf { it >= 320 } ?: 1404
+            val h = metrics.heightPixels.takeIf { it >= 320 } ?: 1872
+            val sx = w / 1404f
+            val sy = h / 1872f
+            val sMin = minOf(sx, sy)
             val bmp = Bitmap.createBitmap(w, h, Bitmap.Config.ARGB_8888)
             try {
                 val canvas = Canvas(bmp)
@@ -1258,65 +1350,71 @@ class OnyxSdkBridge(
                     android.graphics.Paint().apply {
                         color = Color.BLACK
                         style = android.graphics.Paint.Style.STROKE
-                        strokeWidth = 6f
+                        strokeWidth = 6f * sMin
                     }
-                canvas.drawRect(72f, 72f, w - 72f, h - 72f, rulePaint)
-                rulePaint.strokeWidth = 2f
+                canvas.drawRect(72f * sx, 72f * sy, w - 72f * sx, h - 72f * sy, rulePaint)
+                rulePaint.strokeWidth = 2f * sMin
                 rulePaint.color = Color.parseColor("#BBBBBB")
-                canvas.drawRect(88f, 88f, w - 88f, h - 88f, rulePaint)
+                canvas.drawRect(88f * sx, 88f * sy, w - 88f * sx, h - 88f * sy, rulePaint)
 
-                subPaint.textSize = 28f
+                subPaint.textSize = 28f * sMin
                 subPaint.typeface = android.graphics.Typeface.MONOSPACE
-                canvas.drawText("EX LIBRIS · PAGEWISE", w / 2f, 180f, subPaint)
+                canvas.drawText("EX LIBRIS · PAGEWISE", w / 2f, 180f * sy, subPaint)
 
+                val boxW = 640f * sMin
+                val boxH = 880f * sMin
                 val coverFile = if (coverRelPath.isNotBlank()) resolveSafeBookFile(coverRelPath) else null
-                val coverBmp = coverFile?.let { android.graphics.BitmapFactory.decodeFile(it.absolutePath) }
+                val coverBmp = coverFile?.let { decodeScaledCoverBitmap(it, boxW.toInt().coerceAtLeast(120), boxH.toInt().coerceAtLeast(160)) }
                 if (coverBmp != null) {
-                    val boxW = 640
-                    val boxH = 880
-                    val left = (w - boxW) / 2f
-                    val top = 260f
-                    val dest = android.graphics.RectF(left, top, left + boxW, top + boxH)
+                    val cw = coverBmp.width.coerceAtLeast(1).toFloat()
+                    val ch = coverBmp.height.coerceAtLeast(1).toFloat()
+                    val fitScale = minOf(boxW / cw, boxH / ch)
+                    val dw = cw * fitScale
+                    val dh = ch * fitScale
+                    val left = (w - dw) / 2f
+                    val top = 260f * sy + (boxH - dh) / 2f
+                    val dest = android.graphics.RectF(left, top, left + dw, top + dh)
                     canvas.drawBitmap(coverBmp, null, dest, null)
                     rulePaint.color = Color.BLACK
-                    rulePaint.strokeWidth = 4f
+                    rulePaint.strokeWidth = 4f * sMin
                     canvas.drawRect(dest, rulePaint)
                     coverBmp.recycle()
                 }
 
                 inkPaint.textAlign = android.graphics.Paint.Align.CENTER
-                inkPaint.textSize = 54f
+                inkPaint.textSize = 54f * sMin
                 inkPaint.typeface = android.graphics.Typeface.create(android.graphics.Typeface.SERIF, android.graphics.Typeface.BOLD)
-                canvas.drawText(cleanTitle.take(28), w / 2f, 1280f, inkPaint)
+                canvas.drawText(cleanTitle.take(28), w / 2f, 1280f * sy, inkPaint)
 
                 if (cleanAuthor.isNotEmpty()) {
-                    subPaint.textSize = 36f
+                    subPaint.textSize = 36f * sMin
                     subPaint.typeface = android.graphics.Typeface.SERIF
-                    canvas.drawText(cleanAuthor.take(40), w / 2f, 1355f, subPaint)
+                    canvas.drawText(cleanAuthor.take(40), w / 2f, 1355f * sy, subPaint)
                 }
 
                 // Fore-edge progress gauge
-                val barLeft = 280f
-                val barRight = w - 280f
-                val barTop = 1460f
-                val barBottom = 1484f
+                val barLeft = 280f * sx
+                val barRight = w - 280f * sx
+                val barTop = 1460f * sy
+                val barBottom = 1484f * sy
                 rulePaint.color = Color.BLACK
-                rulePaint.strokeWidth = 3f
+                rulePaint.strokeWidth = 3f * sMin
                 canvas.drawRect(barLeft, barTop, barRight, barBottom, rulePaint)
                 if (pct > 0) {
                     inkPaint.style = android.graphics.Paint.Style.FILL
                     canvas.drawRect(barLeft, barTop, barLeft + (barRight - barLeft) * (pct / 100f), barBottom, inkPaint)
                 }
-                subPaint.textSize = 28f
+                subPaint.textSize = 28f * sMin
                 subPaint.typeface = android.graphics.Typeface.MONOSPACE
-                canvas.drawText("READING PROGRESS · $pct%", w / 2f, 1545f, subPaint)
+                canvas.drawText("READING PROGRESS · $pct%", w / 2f, 1545f * sy, subPaint)
 
-                val outDir = File(context.filesDir, "exports").apply { mkdirs() }
+                val outDir = File(context.dataDir, "exports").apply { mkdirs() }
                 val outFile = File(outDir, "pagewise_sleep_cover.png")
                 FileOutputStream(outFile).use { out ->
                     bmp.compress(Bitmap.CompressFormat.PNG, 100, out)
                     out.fd.sync()
                 }
+                exportSleepCoverToMediaStore(bmp)
                 outFile.absolutePath
             } finally {
                 bmp.recycle()

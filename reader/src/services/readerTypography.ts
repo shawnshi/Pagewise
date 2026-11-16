@@ -205,6 +205,9 @@ export function getDisplayModeCSS(
     }
     [data-pw-semantic="caption"] { margin-block: ${px(0.45)} ${px(0.8)} !important; }
     [data-pw-semantic-text] { font-size: max(var(--pw-semantic-floor, 0.9rem), var(--pw-semantic-size, 0.9rem)) !important; line-height: inherit !important; }
+    table, pre, figure, img, svg, video { max-width: 100% !important; box-sizing: border-box !important; }
+    table { display: block !important; overflow-x: auto !important; border-collapse: collapse; }
+    pre { overflow-x: auto !important; white-space: pre-wrap !important; overflow-wrap: anywhere !important; }
   `
 }
 

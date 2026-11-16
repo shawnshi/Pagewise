@@ -3,16 +3,35 @@ import { computed, onBeforeUnmount, onMounted, ref } from 'vue'
 import { useSettings } from '../stores/settings'
 import { t } from '../i18n'
 import { calibrationStatus, measureTypographyCalibration } from '../services/readerTypographyProfiles'
+import { getOnyxHardwareProfile } from '../services/nativeReaderEnvironment'
 import { measureTextScale } from '../services/fonts'
 const settings = useSettings()
 const rulerFrame = ref<HTMLIFrameElement>()
 const dpr = ref(globalThis.devicePixelRatio ?? 1)
 const textScale = ref<number | null>(null)
+const reportedDpi = computed(() => {
+  const hw = getOnyxHardwareProfile()
+  return hw.status === 'available' ? hw.value.densityDpi : null
+})
+function syncMmPerCssPx() {
+  if (typeof document === 'undefined') return
+  const cal = settings.typographyCalibration
+  if (cal && Number.isFinite(cal.cssPxPerMm) && cal.cssPxPerMm > 0) {
+    document.documentElement.style.setProperty('--mm-per-css-px', String(1 / cal.cssPxPerMm))
+    return
+  }
+  const dpi = reportedDpi.value
+  if (dpi && dpi >= 72) {
+    const cssDpi = dpi / Math.max(0.5, dpr.value || 1)
+    document.documentElement.style.setProperty('--mm-per-css-px', (25.4 / cssDpi).toFixed(5))
+  }
+}
 const rulerDocument = '<!doctype html><html data-pw-calibration style="font-size:18px"><body style="margin:0;background:#fff;color:#000;overflow:hidden"><div id="ruler" style="box-sizing:border-box;width:160px;max-width:100%;height:12px;border-top:2px solid #000;border-inline:2px solid #000;margin-top:8px"></div><p style="margin:12px 0 0;font-family:serif;line-height:1.5">中文阅读 · Reading Ag</p></body></html>'
 function refreshFrameMetrics() {
   dpr.value = globalThis.devicePixelRatio ?? 1
   const doc = rulerFrame.value?.contentDocument
   textScale.value = doc?.documentElement?.hasAttribute('data-pw-calibration') ? measureTextScale(doc, 18) : null
+  syncMmPerCssPx()
 }
 onMounted(() => { window.addEventListener('resize', refreshFrameMetrics); refreshFrameMetrics() })
 onBeforeUnmount(() => window.removeEventListener('resize', refreshFrameMetrics))
@@ -72,7 +91,7 @@ summary { cursor: pointer; font-weight: 600; line-height: 1.5; }
 .calibration-note { color: var(--text-2); font-size: 13px; line-height: 1.6; margin: 10px 0; }
 .calibration-frame { box-sizing: border-box; display: block; width: 100%; height: 90px; border: 0; background: #fff; margin: 12px 0; }
 .calibration-value { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; font-size: 13px; }
-.calibration-value input { width: 110px; min-height: 44px; }
+.calibration-value input { width: 110px; min-block-size: 48px; }
 .calibration-actions { display: flex; flex-wrap: wrap; gap: 8px; margin-top: 12px; }
-.calibration-actions button { min-height: 44px; }
+.calibration-actions button { min-block-size: 48px; }
 </style>

@@ -49,6 +49,7 @@ import ReadingModeLayer from '../components/ReadingModeLayer.vue'
 import OnyxInkLayer from '../components/OnyxInkLayer.vue'
 import { onyxEpd } from '../services/onyxEpd'
 import { onyxNativeAccelerator } from '../services/onyxNativeAccelerator'
+import { EinkStreamAggregator } from '../services/einkStreamAggregator'
 import PagewiseCompanionToggle from '../components/PagewiseCompanionToggle.vue'
 import PagewiseCompanionConsent from '../components/PagewiseCompanionConsent.vue'
 import PagewiseCompanionCard from '../components/PagewiseCompanionCard.vue'
@@ -88,6 +89,7 @@ const bookTypographyContext = shallowRef<BookTypographyContext>({ ...UNKNOWN_TYP
 const typographyDpr = ref(globalThis.devicePixelRatio || 1)
 const typographyTextScale = ref(measureTextScale(document) ?? 1)
 const typographyViewport = ref({ width: window.innerWidth, height: window.innerHeight })
+const wideReaderViewport = computed(() => typographyViewport.value.width > 820)
 const effectiveTypography = computed(() => {
   const context = bookTypographyContext.value
   const pending = pendingTypography.value
@@ -160,8 +162,12 @@ const readerMoreOpen = primaryToggle('more')
 const barsVisible = ref(true)
 let barsTimer: ReturnType<typeof setTimeout> | undefined
 
+// 脚注内联浮卡与大图/大表缩放预览模态框 (E-Ink 零遮罩零动画)
+const epubFootnote = ref<{ text: string; href: string } | null>(null)
+const epubMediaModal = ref<{ kind: 'image' | 'table'; src?: string; alt?: string; html?: string; zoom: number } | null>(null)
+
 const anyOverlayOpen = () =>
-  panel.value !== 'none' || settingsOpen.value || ttsPanel.value || modes.panelOpen.value || !!activeAnnotation.value || jumpOpen.value || dj.overlayOpen.value || readerMoreOpen.value || endRecommendationsOpen.value
+  panel.value !== 'none' || settingsOpen.value || ttsPanel.value || modes.panelOpen.value || !!activeAnnotation.value || jumpOpen.value || dj.overlayOpen.value || readerMoreOpen.value || endRecommendationsOpen.value || !!epubFootnote.value || !!epubMediaModal.value
 
 /** 显示工具栏; autoHide 时若几秒内无交互且无面板打开则自动隐去 */
 function showBars(autoHide = false) {
@@ -193,6 +199,8 @@ function closeOverlays() {
   dj.closeOverlays()
   if (!activeAnnotation.value || noteDraft.value === (activeAnnotation.value.note ?? '')) activeAnnotation.value = null
   jumpOpen.value = false
+  epubFootnote.value = null
+  epubMediaModal.value = null
 }
 
 function togglePanel(name: PanelName) {
@@ -338,6 +346,16 @@ function aiScrollToEnd() {
   })
 }
 
+function guardImeEnter(e: KeyboardEvent) {
+  if (e.isComposing || e.keyCode === 229) e.preventDefault()
+}
+
+function onAiInputEnter(e: KeyboardEvent) {
+  if (e.isComposing || e.keyCode === 229) return
+  e.preventDefault()
+  void sendAi()
+}
+
 async function sendAi(text?: string, suppliedContext?: ReaderAssistantContext) {
   const content = (text ?? aiInput.value).trim()
   if (!content || aiStreaming.value) return
@@ -351,6 +369,15 @@ async function sendAi(text?: string, suppliedContext?: ReaderAssistantContext) {
   const reply = aiMessages.value[aiMessages.value.length - 1]
   aiStreaming.value = true
   aiScrollToEnd()
+  const streamAgg = new EinkStreamAggregator({
+    einkEnabled: modes.einkActive.value,
+    signal: aiAbort.signal,
+    onFlush: chunk => {
+      if (session !== aiSession || !readerContext.current(context)) return
+      reply.content += chunk
+      aiScrollToEnd()
+    },
+  })
   try {
     const shown = displayedContent()
     const visible = view?.lastLocation?.range as Range | undefined
@@ -360,16 +387,22 @@ async function sendAi(text?: string, suppliedContext?: ReaderAssistantContext) {
       lang: settings.language, question: content, context: user.context, history: aiMessages.value.slice(0, -2),
     })
     for await (const delta of chatStream(messages, aiAbort.signal)) {
-      if (session !== aiSession || !readerContext.current(context)) return
-      reply.content += delta
-      aiScrollToEnd()
+      if (session !== aiSession || !readerContext.current(context)) {
+        streamAgg.abort()
+        return
+      }
+      streamAgg.push(delta)
     }
     if (session === aiSession && readerContext.current(context)) {
+      streamAgg.complete()
       reply.complete = !!reply.content.trim()
       if (!reply.complete) reply.content = t('ai.emptyReply')
       else if (text === undefined && aiInput.value.trim() === content) aiInput.value = ''
+    } else {
+      streamAgg.abort()
     }
   } catch (e: any) {
+    streamAgg.abort()
     if (session === aiSession && readerContext.current(context)) {
       if (!reply.content) reply.content = `${t('ai.requestFailed')}: ${e?.message ?? e}`
       reply.complete = false
@@ -739,7 +772,7 @@ watch([() => effectiveReader.value, appDark, readerLayout, portraitView], () => 
   prefsTimer = setTimeout(applyPrefs, 120)
 }, { deep: true })
 // 侧栏开关时重算分屏宽度并重排正文, 避免分屏面板遮挡或双栏挤压
-watch(panel, () => {
+watch([panel, () => dj.outlineOpen.value && wideReaderViewport.value], () => {
   void nextTick(() => {
     if (view && !typographyApplying.value) applyPrefs()
   })
@@ -830,6 +863,7 @@ function updateMarginals() {
 // 重排书的页数随排版变化: 读到的章记实测页数, 其余按密度推算 (见 services/readerPages)。
 // 同一排版下的实测按书存本地, 下次打开总页数直接稳定。
 const pageInfo = ref<PagePosition | null>(null)
+const currentSectionPos = ref<{ index: number; screen: number }>({ index: 0, screen: 1 })
 /** 固定版式 (漫画 / 版式 EPUB): 页数固定, 不需要「随排版变化」的提示 */
 const fixedLayout = ref(false)
 /** EPUB 自带纸书页码 (page-list) 时的当前页标签 */
@@ -991,6 +1025,7 @@ function updatePages(detail: any) {
   fixedLayout.value = !!view.isFixedLayout
   if (view.isFixedLayout) {
     const total = view.book?.sections?.length || 1
+    currentSectionPos.value = { index, screen: 1 }
     pageInfo.value = { current: index + 1, last: index + 1, total, sectionLeft: total - index - 1 }
     chapterLeft.value = null
     return
@@ -1025,6 +1060,7 @@ function updatePages(detail: any) {
   })
   secCounts = sectionPageCounts(secSizes, pageMeasure.pages, fallback)
   pagesPerScreen = per
+  currentSectionPos.value = { index, screen }
   const pos = pagePosition(secCounts, index, (screen - 1) * per + 1, per)
   pageInfo.value = pos
   calibrateCharsPerPage(index)
@@ -1166,7 +1202,7 @@ let unbindHardwareKeys: (() => void) | null = null
 onMounted(() => {
   nativeBackHost.__pagewiseReaderBack = handleNativeReaderBack
   unbindHardwareKeys = onyxNativeAccelerator.bindHardwarePageTurn(dir => {
-    if (anyOverlayOpen() || scribbleEnabled.value) return
+    if (anyOverlayOpen() || selection.value) return
     turnPage(dir === 'next' ? 'right' : 'left')
   })
 })
@@ -2486,6 +2522,7 @@ function onSectionLoad(e: CustomEvent) {
     }
   }, true)
   doc.addEventListener('click', (e: MouseEvent) => {
+    if (typeof handleEpubFootnoteEvent === 'function' && handleEpubFootnoteEvent(e, doc)) return
     // 触屏轻点已在 touchend 处理过, 吞掉其后的合成 click
     if (Date.now() < suppressClickUntil) return
     onContentClick(e.clientX, doc, e.target as Element, e.clientY)
@@ -2665,6 +2702,101 @@ function onMarginTouchMove(e: TouchEvent) {
 // 点正文左/右侧翻页
 let overlayDismissed = false
 
+function sanitizeTableHtml(table: HTMLTableElement): string {
+  const clone = table.cloneNode(true) as HTMLTableElement
+  const allowedTags = new Set(['TABLE', 'THEAD', 'TBODY', 'TFOOT', 'TR', 'TH', 'TD', 'CAPTION', 'COLGROUP', 'COL'])
+  const allowedAttrs = new Set(['colspan', 'rowspan', 'scope'])
+  const walk = (node: Element) => {
+    for (const child of Array.from(node.children)) {
+      if (!allowedTags.has(child.tagName.toUpperCase())) {
+        child.replaceWith(document.createTextNode(child.textContent ?? ''))
+        continue
+      }
+      for (const attr of Array.from(child.attributes)) {
+        if (!allowedAttrs.has(attr.name.toLowerCase())) child.removeAttribute(attr.name)
+      }
+      walk(child)
+    }
+  }
+  for (const attr of Array.from(clone.attributes)) clone.removeAttribute(attr.name)
+  walk(clone)
+  return clone.outerHTML
+}
+
+function handleEpubFootnoteEvent(e: MouseEvent, doc: Document): boolean {
+  const target = e.target as Element | null
+  const link = target?.closest?.('a[href]') as HTMLAnchorElement | null
+  if (!link) return false
+  const sel = doc.getSelection?.()
+  if (sel && !sel.isCollapsed && sel.toString().trim()) return false
+  const rawHref = (link.getAttribute('href') || '').trim()
+  const hashIdx = rawHref.indexOf('#')
+  if (hashIdx < 0) return false
+  const frag = rawHref.slice(hashIdx + 1)
+  const isNoteref = link.matches('[epub\\:type~="noteref"], [role="doc-noteref"], .footnote-ref, .noteref, sup a, a.footnote')
+    || /^(?:fn|note|footnote|endnote|ftn|ref)/i.test(frag)
+  if (!isNoteref) return false
+  const base = rawHref.slice(0, hashIdx)
+  if (base && (!doc.location?.href || !doc.location.href.endsWith(base))) {
+    recordJumpOrigin()
+    return false
+  }
+  let decoded = frag
+  try { decoded = decodeURIComponent(frag) } catch { /* keep raw */ }
+  const noteEl = decoded ? doc.getElementById(decoded) : null
+  if (!noteEl) {
+    recordJumpOrigin()
+    return false
+  }
+  const text = (noteEl.textContent ?? '').replace(/\s+/g, ' ').trim()
+  if (!text || text.length > 1500) {
+    recordJumpOrigin()
+    return false
+  }
+  e.preventDefault()
+  e.stopImmediatePropagation()
+  epubFootnote.value = { text, href: rawHref }
+  return true
+}
+
+function jumpToFootnoteSource() {
+  const fn = epubFootnote.value
+  epubFootnote.value = null
+  if (!fn?.href) return
+  recordJumpOrigin()
+  interruptTTSForReposition()
+  view?.goTo(fn.href).catch(() => toast(t('reader.cantGoto'), 'error'))
+}
+
+function handleEpubRichMediaTap(target: Element | null | undefined): boolean {
+  if (!target || target.closest?.('a[href]')) return false
+  const img = target.closest?.('img') as HTMLImageElement | null
+  if (img && (img.naturalWidth >= 100 || img.getBoundingClientRect().width >= 80)) {
+    const src = img.currentSrc || img.src
+    if (src) {
+      epubMediaModal.value = { kind: 'image', src, alt: img.alt || '', zoom: 1 }
+      return true
+    }
+  }
+  const table = target.closest?.('table') as HTMLTableElement | null
+  if (table && (table.rows.length >= 2 || (table.textContent?.trim().length ?? 0) > 20)) {
+    epubMediaModal.value = { kind: 'table', html: sanitizeTableHtml(table), zoom: 1 }
+    return true
+  }
+  return false
+}
+
+function resolveTapAction(x: number, y: number, width: number, height: number): 'prev' | 'next' | 'bars' {
+  if (settings.readingMode.eink.oneHandedTapZones) {
+    const inCenter = x >= width * 0.35 && x <= width * 0.65 && y >= height * 0.35 && y <= height * 0.65
+    if (inCenter) return 'bars'
+    return y < height / 3 ? 'prev' : 'next'
+  }
+  if (x < width * 0.30) return 'prev'
+  if (x > width * 0.70) return 'next'
+  return 'bars'
+}
+
 function onContentClick(clientX: number, doc: Document, target?: Element | null, clientY = 0) {
   if (overlayDismissed) {
     overlayDismissed = false
@@ -2677,6 +2809,7 @@ function onContentClick(clientX: number, doc: Document, target?: Element | null,
   const sel = doc.getSelection()
   if (sel && !sel.isCollapsed) return
   if (blocksReaderTurn({ panel: anyOverlayOpen(), selection: !!selection.value, navigating: readerSession.navigating, interactive: isReaderInteractive(target) })) return
+  if (handleEpubRichMediaTap(target)) return
   // 伴读: 点到概念 / 注释时弹出解释卡, 不翻页
   if (dj.onContentTap(doc, clientX, clientY)) return
   // 打字机运行时轻点切换暂停或菜单, 不翻页
@@ -2691,8 +2824,10 @@ function onContentClick(clientX: number, doc: Document, target?: Element | null,
   const contentRect = container.value?.getBoundingClientRect()
   if (!frameRect || !contentRect) return
   const x = frameRect.left + clientX - contentRect.left
+  const y = frameRect.top + clientY - contentRect.top
+  const action = resolveTapAction(x, y, contentRect.width, contentRect.height)
   // 自动翻页 / 滚动中: 轻点暂停并呼出工具栏, 再点继续 (滚动时整屏都可点; 翻页时左右两侧仍可手动翻)
-  const middle = x >= contentRect.width / 3 && x <= contentRect.width * 2 / 3
+  const middle = action === 'bars'
   if (autoReading.value && (middle || effectiveFlow.value === 'scrolled')) {
     if (autoPaused.value) {
       resumeAutoRead()
@@ -2703,16 +2838,16 @@ function onContentClick(clientX: number, doc: Document, target?: Element | null,
     }
     return
   }
-  if (x < contentRect.width / 3) turnPage('left')
-  else if (x > contentRect.width * 2 / 3) turnPage('right')
-  // 中间 1/3: 呼出 / 隐藏工具栏 (沉浸式)
+  if (action === 'prev') turnPage('left')
+  else if (action === 'next') turnPage('right')
+  // 中间区域: 呼出 / 隐藏工具栏 (沉浸式)
   else if (barsVisible.value) hideBars()
   else showBars()
 }
 
 /**
  * 页眉页脚 (章节名 / 进度那条带) 在正文 iframe 之外, 点这里的事件落在 foliate-view 上,
- * 原本什么也不发生; 手机上拇指常点到页面最下沿, 按同样的左/中/右分区处理
+ * 原本什么也不发生; 手机上拇指常点到页面最下沿, 按同样的点按分区处理
  */
 function onMarginClick(e: MouseEvent) {
   if (e.target !== view || loading.value) return
@@ -2720,9 +2855,9 @@ function onMarginClick(e: MouseEvent) {
   if (selection.value || readerSession.navigating || Date.now() < suppressClickUntil) return
   const rect = container.value?.getBoundingClientRect()
   if (!rect) return
-  const x = e.clientX - rect.left
-  if (x < rect.width / 3) turnPage('left')
-  else if (x > rect.width * 2 / 3) turnPage('right')
+  const action = resolveTapAction(e.clientX - rect.left, e.clientY - rect.top, rect.width, rect.height)
+  if (action === 'prev') turnPage('left')
+  else if (action === 'next') turnPage('right')
   else if (barsVisible.value) hideBars()
   else showBars()
 }
@@ -3089,10 +3224,22 @@ async function removeAnnotation(a: EditableAnnotation) {
   activeAnnotation.value = null
 }
 
+function recordJumpOrigin() {
+  const from = currentCfi.value
+  if (!from) return
+  const label = pageInfo.value && effectiveReader.value.progressDisplay !== 'percent'
+    ? t('reader.jumpBack', { page: pageInfo.value.current })
+    : `${t('common.back')} ${percentText.value}`
+  jumpBack.value = { cfi: from, label }
+  clearTimeout(jumpBackTimer)
+  jumpBackTimer = setTimeout(() => { jumpBack.value = null }, 20000)
+}
+
 async function gotoAnnotation(a: AnnotationRec) {
   panel.value = 'none'
   interruptTTSForReposition()
   await untilLoaded()
+  recordJumpOrigin()
   // 划线 / 想法: 落在焦点线; 书签记的是当时的屏幕顶, 照旧顶端对齐还原那一屏
   const go = a.kind === 'bookmark' ? view?.goTo(a.cfi) : goToText(a.cfi)
   go?.catch(() => toast(t('reader.cantGotoAnnotation'), 'error'))
@@ -3132,6 +3279,7 @@ function toggleSearchOpt(key: 'caseSensitive' | 'wholeWord' | 'regex') {
 function gotoSearchHit(hit: SearchHit) {
   panel.value = 'none'
   interruptTTSForReposition()
+  recordJumpOrigin()
   goToText(hit.cfi).then(() => flashText(hit.cfi), () => toast(t('reader.cantGoto'), 'error'))
 }
 
@@ -3150,7 +3298,7 @@ function flashText(cfi: string) {
     const overlayer = (view.renderer.getContents?.() ?? []).find((c: any) => c.doc === shown.doc)?.overlayer
     if (!overlayer) return
     clearTimeout(flashTimer)
-    const still = prefersReducedMotion()
+    const still = prefersReducedMotion() || modes.einkActive.value
     overlayer.add(FLASH_MARK, range, (rects: any[], opts: any) => {
       const g = drawListenMark(rects, opts)
       // 停留 0.8 秒后 1.2 秒渐隐 (redraw 时重新开始, 不影响撤下的时间)
@@ -3179,12 +3327,14 @@ async function navigateToc(href: string) {
   panel.value = 'none'
   interruptTTSForReposition()
   await untilLoaded()
+  recordJumpOrigin()
   view?.goTo(href).catch(() => toast(t('reader.cantGoto'), 'error'))
 }
 
 /** 上一章 / 下一章: 按目录条目跳转; 书无目录时退回按分节跳 */
 function gotoChapter(dir: -1 | 1) {
   interruptTTSForReposition()
+  recordJumpOrigin()
   const flat = flattenToc(toc.value).filter(item => item.href)
   const i = flat.findIndex(item => item.href === currentTocHref.value)
   if (flat.length && i >= 0) {
@@ -3379,16 +3529,28 @@ const dj = usePagewiseCompanion({
   adoptHighlight: async ({ index, range, text, withNote }) => {
     let cfi = ''
     try { cfi = view.getCFI(index, range) } catch { return }
-    const storage = await getStorage()
     const rec: Omit<AnnotationRec, 'id'> = { bookId, kind: 'highlight', cfi, text: text.slice(0, 300), color: 'yellow', createdAt: Date.now() }
+    if (withNote) {
+      let draftContextId: string
+      try {
+        const previous = listDrafts(bookId).filter(draft => draft.contextId.startsWith('sel:') && draft.sourceLoc === rec.cfi && draft.quote === rec.text)
+          .sort((a, b) => b.updatedAt - a.updatedAt)[0]
+        draftContextId = previous?.contextId ?? `sel:${crypto.randomUUID()}`
+      } catch {
+        localDraftError.value = t('reader.ideaDraftUnavailable')
+        toast(localDraftError.value, 'error')
+        return
+      }
+      noteDraft.value = ''
+      activeAnnotation.value = { ...rec, draftContextId }
+      return
+    }
+    const storage = await getStorage()
     const id = await storage.addAnnotation(rec)
     const saved = { ...rec, id }
     annotations.value.push(saved)
     try { view.addAnnotation({ value: cfi, color: 'yellow' }) } catch { /* 绘制失败不影响保存 */ }
-    if (withNote) {
-      noteDraft.value = ''
-      activeAnnotation.value = saved
-    } else toast(t('reader.highlighted'), 'success')
+    toast(t('reader.highlighted'), 'success')
   },
   openAi: (prompt, context) => {
     closeOverlays()
@@ -3407,6 +3569,16 @@ const dj = usePagewiseCompanion({
   onKeyWords: () => modes.refreshKeyWords(),
 })
 lateCompanion.value = dj
+watch(
+  () => [settings.readingMode.eink.volumeKeysEnabled, anyOverlayOpen(), Boolean(selection.value)] as const,
+  ([volEnabled, overlayOpen, hasSel]) => {
+    onyxNativeAccelerator.setHardwareKeyCapture(!overlayOpen && !hasSel, volEnabled !== false)
+  },
+  { immediate: true },
+)
+onBeforeUnmount(() => {
+  onyxNativeAccelerator.setHardwareKeyCapture(false, settings.readingMode.eink.volumeKeysEnabled !== false)
+})
 
 // 「重点词」(伴读): 书的分节 (后台全书统计)、体裁 (小说不剧透)、智能版的 AI 词
 modes.setKeyWordSource({
@@ -3577,7 +3749,7 @@ onMounted(async () => {
     if (!readerContext.current(context)) { openedView.close?.(); return }
     try {
       const bridge = (window as Window & { LightReadInsets?: { updateSleepCover?: (t: string, a: string, p: number, c: string) => string } }).LightReadInsets
-      bridge?.updateSleepCover?.(meta.value.title ?? '', meta.value.author ?? '', Math.round((meta.value.progress ?? 0) * 100), '')
+      bridge?.updateSleepCover?.(meta.value.title ?? '', meta.value.author ?? '', Math.round((meta.value.progress ?? 0) * 100), `covers/${bookId}.jpg`)
     } catch { /* 休眠封面生成失败不阻塞阅读 */ }
     // 跨章连续滚动的渲染器事件 (view 不转发): 主章切换、远处分节卸载。旧版渲染器不会派发
     view.renderer?.addEventListener?.('section-change', onRendererSectionChange)
@@ -3641,6 +3813,9 @@ onMounted(async () => {
         ttsPanel.value = true
       } else listenDetached.value = false
     } catch (nativeError) { toast(t(systemTtsErrorKey(nativeError)), 'error') }
+    if (typeof route.query.loc === 'string' && route.query.loc.trim()) {
+      try { await navigateReader(route.query.loc.trim(), true) } catch { /* ignore invalid deep-link loc */ }
+    }
     if (typeof route.query.draft === 'string') await restoreSelectionDraft(route.query.draft)
   } catch (e: any) {
     if (!bookOpened) typographyBookOwner.release()
@@ -3650,6 +3825,12 @@ onMounted(async () => {
     }
   } finally {
     if (readerContext.current(context)) loading.value = false
+  }
+})
+
+watch(() => route.query.loc, async loc => {
+  if (typeof loc === 'string' && loc.trim() && view && !loading.value) {
+    try { await navigateReader(loc.trim(), true) } catch { /* ignore invalid deep-link loc */ }
   }
 })
 
@@ -3859,7 +4040,7 @@ onBeforeRouteLeave(async () => {
     </header>
 
     <!-- 正文与宽屏分屏工作区 -->
-    <div class="reader-stage" :class="{ 'has-panel': panel !== 'none' }">
+    <div class="reader-stage" :class="{ 'has-panel': panel !== 'none' || (dj.outlineOpen.value && wideReaderViewport) }">
       <div ref="container" class="content" :style="{ '--pw-extra-bottom': `${typographyBottomInset}px` }" :class="{ 'typography-loading': loading }" :aria-busy="loading" />
       <p v-if="typographyFontWarning" class="typography-font-warning" role="status">{{ t('reader.typographyFontFallback') }}</p>
 
@@ -3960,7 +4141,7 @@ onBeforeRouteLeave(async () => {
                 :aria-label="t('ai.placeholder')"
                 :maxlength="READER_QUESTION_LIMIT"
                 :disabled="aiStreaming"
-                @keyup.enter="sendAi()"
+                @keydown.enter="onAiInputEnter"
               />
               <button v-if="aiStreaming" class="btn btn-sm" @click="stopAi">{{ t('common.stop') }}</button>
               <button v-else class="btn btn-sm btn-primary" :disabled="!aiInput.trim()" @click="sendAi()">{{ t('ai.send') }}</button>
@@ -3972,7 +4153,7 @@ onBeforeRouteLeave(async () => {
         <template v-else>
           <h3>{{ t('reader.searchInBook') }}</h3>
           <form class="search-form" @submit.prevent="runSearch">
-            <input v-model="searchQuery" class="input" type="search" :placeholder="t('reader.searchPlaceholder')" />
+            <input v-model="searchQuery" class="input" type="search" :placeholder="t('reader.searchPlaceholder')" @keydown.enter="guardImeEnter" />
           </form>
           <div class="search-opts">
             <button type="button" class="search-opt" :class="{ active: searchOpts.caseSensitive }" :title="t('reader.matchCase')" :aria-label="t('reader.matchCase')" :aria-pressed="searchOpts.caseSensitive" @click="toggleSearchOpt('caseSensitive')">Aa</button>
@@ -3995,6 +4176,13 @@ onBeforeRouteLeave(async () => {
           </div>
           <button class="btn btn-sm" style="margin-top: 8px" @click="closeSearch">{{ t('reader.clearAndClose') }}</button>
         </template>
+      </aside>
+      <aside v-if="panel === 'none' && dj.outlineOpen.value && wideReaderViewport" class="panel card dj-docked-panel">
+        <div class="dj-docked-bar">
+          <strong>{{ t('companion.outlineTitle') }}</strong>
+          <button type="button" class="btn btn-sm" :aria-label="t('common.close')" @click="dj.outlineOpen.value = false">{{ t('common.close') }}</button>
+        </div>
+        <PagewiseCompanionOutline :dj="dj" embedded />
       </aside>
     </div>
 
@@ -4073,6 +4261,7 @@ onBeforeRouteLeave(async () => {
           :aria-label="t('reader.jumpPlaceholder')"
           :aria-invalid="!!jumpError"
           @input="jumpError = ''"
+          @keydown.enter="guardImeEnter"
           @keydown.esc.prevent="jumpOpen = false"
         />
         <span v-if="pageInfo" class="jump-total">/ {{ pageInfo.total }}</span>
@@ -4086,7 +4275,7 @@ onBeforeRouteLeave(async () => {
     </div>
 
     <!-- 跳转后一键回到原处 -->
-    <button v-if="jumpBack && barsVisible && !slidePreview" class="jump-back" @click="goJumpBack">
+    <button v-if="jumpBack && !slidePreview" class="jump-back" @click="goJumpBack">
       <svg viewBox="0 0 24 24" width="16" height="16" aria-hidden="true"><path fill="currentColor" d="M9.7 5.3a1 1 0 0 1 0 1.4L7.42 9H14a6 6 0 1 1 0 12h-3a1 1 0 1 1 0-2h3a4 4 0 0 0 0-8H7.41l2.3 2.3a1 1 0 0 1-1.42 1.4l-4-4a1 1 0 0 1 0-1.4l4-4a1 1 0 0 1 1.42 0z"/></svg>
       {{ jumpBack.label }}
     </button>
@@ -4125,9 +4314,10 @@ onBeforeRouteLeave(async () => {
     <ReadingModeLayer :modes="modes" :bars-visible="barsVisible" :suggest-eink="modes.einkSuggested.value" />
     <OnyxInkLayer
       :book-id="bookId"
-      :page-key="`epub-${pageInfo?.current ?? 1}`"
+      :page-key="`epub-s${currentSectionPos.index}-p${currentSectionPos.screen}`"
+      :legacy-page-key="`epub-${pageInfo?.current ?? 1}`"
       v-model:enabled="scribbleEnabled"
-      :modal-open="sheetOpen || jumpOpen || readerMoreOpen || modes.panelOpen.value"
+      :modal-open="anyOverlayOpen() || !!selection"
     />
 
     <!-- 伴读: 首次同意 / 解释卡 / 章首要义 / 脉络 / 速读 / 状态 -->
@@ -4135,9 +4325,45 @@ onBeforeRouteLeave(async () => {
     <PagewiseCompanionConsent v-if="dj.consentOpen.value" :dj="dj" />
     <PagewiseCompanionCard v-if="dj.card.value" :dj="dj" @inspect="inspectPagewiseCompanionCard" />
     <PagewiseCompanionChapterCard v-if="dj.chapterCard.value" :dj="dj" />
-    <PagewiseCompanionOutline v-if="dj.outlineOpen.value" :dj="dj" />
+    <PagewiseCompanionOutline v-if="dj.outlineOpen.value && (!wideReaderViewport || panel !== 'none')" :dj="dj" />
     <PagewiseCompanionSkim v-if="dj.skimOpen.value" :dj="dj" />
     <PagewiseCompanionStatus :dj="dj" @open-settings="router.push('/settings')" />
+
+    <!-- E-Ink 脚注内联浮卡 (零动画、2dp 实线框) -->
+    <div v-if="epubFootnote" class="epub-footnote-pop card" role="dialog" :aria-label="settings.language === 'en' ? 'Footnote' : '脚注'">
+      <p class="epub-footnote-text">{{ epubFootnote.text }}</p>
+      <div class="pop-actions">
+        <button type="button" class="btn btn-sm" @click="jumpToFootnoteSource">{{ settings.language === 'en' ? 'Go to note' : '跳转原文' }}</button>
+        <button type="button" class="btn btn-sm btn-primary" @click="epubFootnote = null">{{ t('common.close') }}</button>
+      </div>
+    </div>
+
+    <!-- E-Ink 插图 / 表格缩放模态框 -->
+    <div v-if="epubMediaModal" class="epub-media-mask" role="dialog" aria-modal="true" :aria-label="settings.language === 'en' ? 'Media preview' : '图表缩放预览'" @click.self="epubMediaModal = null">
+      <div class="epub-media-dialog card">
+        <header class="epub-media-head">
+          <div class="segmented" role="group" :aria-label="settings.language === 'en' ? 'Zoom level' : '缩放比例'">
+            <button v-for="z in [1, 1.5, 2]" :key="z" type="button" :class="{ active: epubMediaModal.zoom === z }" :aria-pressed="epubMediaModal.zoom === z" @click="epubMediaModal.zoom = z">{{ Math.round(z * 100) }}%</button>
+          </div>
+          <button type="button" class="btn btn-sm btn-primary" :aria-label="t('common.close')" @click="epubMediaModal = null">{{ t('common.close') }}</button>
+        </header>
+        <div class="epub-media-scroll">
+          <img
+            v-if="epubMediaModal.kind === 'image' && epubMediaModal.src"
+            :src="epubMediaModal.src"
+            :alt="epubMediaModal.alt || ''"
+            class="epub-media-img"
+            :style="{ width: `${epubMediaModal.zoom * 100}%` }"
+          />
+          <div
+            v-else-if="epubMediaModal.kind === 'table' && epubMediaModal.html"
+            class="epub-media-table"
+            :style="{ fontSize: `${Math.round(14 * epubMediaModal.zoom)}px` }"
+            v-html="epubMediaModal.html"
+          />
+        </div>
+      </div>
+    </div>
 
     <div v-if="inspecting || sourceError" class="inspection-bar" role="status" @click.stop @pointerdown.stop>
       <span>{{ sourceError || t('reader.inspectionTemporary') }}</span>
@@ -4823,15 +5049,18 @@ onBeforeRouteLeave(async () => {
   display: inline-flex;
   align-items: center;
   gap: 6px;
-  height: 32px;
-  padding: 0 14px 0 10px;
-  border: 1px solid var(--border);
+  min-height: 48px;
+  padding: 0 16px 0 12px;
+  border: 1.5px solid var(--border-strong);
   border-radius: var(--radius-pill);
   background: var(--card);
   box-shadow: var(--shadow-md);
   color: var(--brand);
   font-size: 13px;
   font-variant-numeric: tabular-nums;
+}
+.reader:not(.bars-on) .jump-back {
+  bottom: calc(16px + var(--safe-bottom));
 }
 .jump-back:hover {
   background: var(--brand-light);
@@ -5024,10 +5253,109 @@ onBeforeRouteLeave(async () => {
   padding: 6px 8px;
 }
 .anno-del {
-  width: 24px;
-  height: 24px;
+  min-width: 48px;
+  min-height: 48px;
   font-size: 12px;
   flex-shrink: 0;
+  opacity: 1;
+}
+.dj-docked-panel {
+  padding: 0;
+}
+.dj-docked-bar {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  padding: 10px 14px;
+  border-bottom: 1.5px solid var(--border-strong);
+}
+.dj-docked-bar .btn {
+  min-height: 48px;
+}
+.epub-footnote-pop {
+  position: absolute;
+  left: 50%;
+  bottom: calc(var(--footer-h) + 16px + var(--safe-bottom));
+  transform: translateX(-50%);
+  z-index: 28;
+  width: min(520px, calc(100% - 24px));
+  max-height: 55vh;
+  overflow-y: auto;
+  overscroll-behavior: contain;
+  padding: 16px;
+  border: 2px solid var(--border-strong);
+  background: var(--card);
+  color: var(--text);
+}
+.epub-footnote-text {
+  margin: 0 0 12px;
+  font-size: 14px;
+  line-height: 1.7;
+  color: var(--text);
+  overflow-wrap: anywhere;
+}
+.epub-footnote-pop .btn {
+  min-width: 48px;
+  min-height: 48px;
+}
+.epub-media-mask {
+  position: fixed;
+  inset: 0;
+  z-index: 60;
+  display: grid;
+  place-items: center;
+  padding: 16px;
+  background: var(--bg);
+}
+.epub-media-dialog {
+  width: min(92vw, 960px);
+  max-height: 86vh;
+  display: flex;
+  flex-direction: column;
+  border: 2px solid var(--border-strong);
+  background: var(--card);
+  color: var(--text);
+  overflow: hidden;
+}
+.epub-media-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 10px 14px;
+  border-bottom: 1.5px solid var(--border-strong);
+}
+.epub-media-head .segmented button,
+.epub-media-head .btn {
+  min-width: 48px;
+  min-height: 48px;
+}
+.epub-media-scroll {
+  flex: 1;
+  min-height: 0;
+  overflow: auto;
+  overscroll-behavior: contain;
+  padding: 16px;
+}
+.epub-media-img {
+  display: block;
+  height: auto;
+  max-width: none;
+  margin: 0 auto;
+}
+.epub-media-table :deep(table) {
+  border-collapse: collapse;
+  width: max-content;
+  min-width: 100%;
+}
+.epub-media-table :deep(th),
+.epub-media-table :deep(td) {
+  border: 1px solid var(--border-strong);
+  padding: 6px 10px;
+  text-align: left;
+  color: var(--text);
+  background: var(--card);
 }
 .anno-tabs {
   display: flex;

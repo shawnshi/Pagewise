@@ -152,9 +152,10 @@ function modeStyleCSS(style?: ReaderModeStyle): string {
   }
   if (style?.publication) css += 'a:any-link { text-decoration: underline; }'
   if (style?.eink) {
-    // Contrast and refresh policy only: do not silently change the user's text metrics or synthesize bold.
+    // Contrast and refresh policy only: do not silently change the user's text metrics or synthesize heavy ink bleed.
     css += `
     a:any-link { text-decoration: underline; text-decoration-thickness: 2px; text-underline-offset: 2px; }
+    strong, b, h1, h2, h3, h4, h5, h6 { font-weight: 600 !important; }
     img, svg, video { filter: grayscale(1) contrast(1.1); }
     *, *::before, *::after { transition: none !important; animation: none !important; scroll-behavior: auto !important; }
     `
@@ -181,7 +182,7 @@ function readingModeCSS(colors: ReaderThemeColors, theme: string, style?: Reader
     ::highlight(lr-tw-hidden) { color: transparent; -webkit-text-fill-color: transparent; text-shadow: none; text-decoration-color: transparent; }
     ::highlight(lr-tw-ghost) { color: ${ghost}; -webkit-text-fill-color: ${ghost}; text-shadow: none; text-decoration-color: ${ghost}; }
     ::highlight(lr-tw-fresh) { color: ${colors.link}; -webkit-text-fill-color: ${colors.link}; }
-    ${wordGuideCSS(colors, theme, style?.wordGuideIntensity, style?.wordGuideColor)}
+    ${wordGuideCSS(colors, theme, style?.wordGuideIntensity, style?.wordGuideColor, !!style?.eink)}
     [data-lr-pending] { visibility: hidden !important; }
   `
 }
@@ -263,7 +264,19 @@ function mixHex(a: string, b: string, t: number): string {
 }
 
 /** 按词着色只修改 Highlight 颜色，避免调节强度时重排正文。 */
-function wordGuideCSS(colors: ReaderThemeColors, theme: string, intensity = WORD_GUIDE_DEFAULT, color?: string): string {
+function wordGuideCSS(colors: ReaderThemeColors, theme: string, intensity = WORD_GUIDE_DEFAULT, color?: string, eink = false): string {
+  if (eink) {
+    const isDark = theme === 'dark'
+    const tailInk = mixHex(colors.fg, colors.bg, 0.38)
+    const kwBg = isDark ? '#333333' : '#e0e0e0'
+    return `
+    ::highlight(lr-wg-alt-l) { color: ${colors.fg}; -webkit-text-fill-color: ${colors.fg}; }
+    ::highlight(lr-wg-alt-n) { color: ${colors.fg}; -webkit-text-fill-color: ${colors.fg}; }
+    ::highlight(lr-wg-tail) { color: ${tailInk}; -webkit-text-fill-color: ${tailInk}; }
+    ::highlight(lr-wg-kw-s) { color: ${colors.fg}; -webkit-text-fill-color: ${colors.fg}; background-color: ${kwBg}; text-decoration: underline; text-decoration-thickness: 2px; text-underline-offset: 2px; }
+    ::highlight(lr-wg-kw-w) { color: ${colors.fg}; -webkit-text-fill-color: ${colors.fg}; text-decoration: underline; }
+    `
+  }
   // 两个高亮名 (旧版轻 / 标准) 用同一颜色, 强度只由 intensity 决定
   const alt = mixHex(colors.fg, guideAccent(color, theme), Math.min(1, Math.max(0, intensity)))
   const altLight = alt

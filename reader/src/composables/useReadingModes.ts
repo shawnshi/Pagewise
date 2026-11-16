@@ -344,7 +344,11 @@ export function useReadingModes(opts: UseReadingModesOptions) {
   function dismissEinkSuggestion() { settings.readingMode.eink.suggestDismissed = true }
 
   // ---- 文石 EPD 刷新与双色温硬件前光 ----
-  const einkGcInterval = computed(() => clampGcIntervalPages(settings.readingMode.eink.gcIntervalPages ?? 10, 10))
+  const isReaderDark = computed(() => settings.reader.theme === 'dark' || (settings.reader.theme === 'auto' && Boolean(opts.appDark?.())))
+  const einkGcInterval = computed(() => {
+    const base = clampGcIntervalPages(settings.readingMode.eink.gcIntervalPages ?? 10, 10)
+    return einkActive.value && isReaderDark.value ? (base > 0 ? Math.min(base, 8) : 8) : base
+  })
   function setEinkGcInterval(pages: number) {
     const clamped = clampGcIntervalPages(pages, 10)
     settings.readingMode.eink.gcIntervalPages = clamped
@@ -906,10 +910,21 @@ export function useReadingModes(opts: UseReadingModesOptions) {
     prevInWindow = null
     checkNight()
   })
-  const minuteTimer = setInterval(() => {
-    checkReminder()
-    checkNight()
-  }, REMINDER_CHECK_MS)
+  let minuteTimer: ReturnType<typeof setInterval> | undefined
+  watch(
+    () => (settings.readingMode.night.schedule && !settings.readingMode.eink.enabled) || (eyeCareOn.value && settings.readingMode.eyeCare.reminder),
+    needed => {
+      clearInterval(minuteTimer)
+    minuteTimer = undefined
+      minuteTimer = needed
+        ? setInterval(() => {
+            checkReminder()
+            checkNight()
+          }, REMINDER_CHECK_MS)
+        : undefined
+    },
+    { immediate: true },
+  )
   checkNight()
 
 
@@ -1142,6 +1157,7 @@ export function useReadingModes(opts: UseReadingModesOptions) {
     sound?.dispose()
     sound = null
     clearInterval(minuteTimer)
+    minuteTimer = undefined
     document.removeEventListener('visibilitychange', onVisibility)
     window.removeEventListener('pagehide', onPageHide)
     motionQuery?.removeEventListener?.('change', onMotionChange)

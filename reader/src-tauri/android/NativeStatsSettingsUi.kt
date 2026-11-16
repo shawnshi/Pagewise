@@ -394,6 +394,8 @@ internal class NativeStatsSettingsDialog(
     captions: List<Pair<Int, String>>,
 ) : AlertDialog(activity) {
     private val paper = ui.paper
+    private val borderInk = ui.primary
+    private val borderWidthPx = ui.dp(2)
     private val actions =
         captions.associate { (which, caption) ->
             which to
@@ -434,7 +436,13 @@ internal class NativeStatsSettingsDialog(
         super.onStart()
         window?.setWindowAnimations(0)
         window?.setDimAmount(0f)
-        window?.setBackgroundDrawable(android.graphics.drawable.ColorDrawable(paper))
+        window?.setBackgroundDrawable(
+            android.graphics.drawable.GradientDrawable().apply {
+                setColor(paper)
+                setStroke(borderWidthPx, borderInk)
+                cornerRadius = 0f
+            },
+        )
     }
 
     private class BoundedDialogContent(

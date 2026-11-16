@@ -48,7 +48,8 @@ class ReaderWindowState {
         keyCode: Int,
         action: Int,
         repeatCount: Int,
-    ): OnyxKeyDecision = hardwareKeyState.resolveKeyAction(resumed && !destroyed, keyCode, action, repeatCount)
+        speechActive: Boolean = false,
+    ): OnyxKeyDecision = hardwareKeyState.resolveKeyAction(resumed && !destroyed, keyCode, action, repeatCount, speechActive)
 }
 
 enum class OnyxWaveformMode(
@@ -89,46 +90,55 @@ class OnyxEpdState {
         private set
 
     fun configureGcInterval(pages: Int) {
-        gcIntervalPages = pages.coerceIn(0, 100)
-        if (gcIntervalPages == 0) pageTurnCount = 0
+        synchronized(this) {
+            gcIntervalPages = pages.coerceIn(0, 100)
+            if (gcIntervalPages == 0) pageTurnCount = 0
+        }
     }
 
-    fun recordPageTurn(): OnyxWaveformMode {
-        if (fastModeActive) return currentMode
-        pageTurnCount += 1
-        if (gcIntervalPages > 0 && pageTurnCount >= gcIntervalPages) {
-            pageTurnCount = 0
-            return OnyxWaveformMode.GC
+    fun recordPageTurn(): OnyxWaveformMode =
+        synchronized(this) {
+            if (fastModeActive) return@synchronized currentMode
+            pageTurnCount += 1
+            if (gcIntervalPages > 0 && pageTurnCount >= gcIntervalPages) {
+                pageTurnCount = 0
+                return@synchronized OnyxWaveformMode.GC
+            }
+            defaultMode
         }
-        return defaultMode
-    }
 
     fun resetPageTurnCounter() {
-        pageTurnCount = 0
+        synchronized(this) {
+            pageTurnCount = 0
+        }
     }
 
     fun enterFastMode(
         scene: String,
         mode: OnyxWaveformMode = OnyxWaveformMode.DU,
-    ): Boolean {
-        val changed = !fastModeActive || currentMode != mode || fastScene != scene
-        fastModeActive = true
-        fastScene = scene
-        currentMode = mode
-        return changed
-    }
+    ): Boolean =
+        synchronized(this) {
+            val changed = !fastModeActive || currentMode != mode || fastScene != scene
+            fastModeActive = true
+            fastScene = scene
+            currentMode = mode
+            changed
+        }
 
-    fun exitFastMode(): Boolean {
-        val wasFast = fastModeActive
-        fastModeActive = false
-        fastScene = ""
-        currentMode = defaultMode
-        return wasFast
-    }
+    fun exitFastMode(): Boolean =
+        synchronized(this) {
+            val wasFast = fastModeActive
+            fastModeActive = false
+            fastScene = ""
+            currentMode = defaultMode
+            wasFast
+        }
 
     fun setStaticMode(mode: OnyxWaveformMode) {
-        defaultMode = mode
-        if (!fastModeActive) currentMode = mode
+        synchronized(this) {
+            defaultMode = mode
+            if (!fastModeActive) currentMode = mode
+        }
     }
 
     fun onLifecyclePause(): Boolean = exitFastMode()
@@ -200,9 +210,11 @@ class OnyxScribbleState {
     var excludeRects: List<OnyxRectCss> = emptyList()
         private set
 
+    @get:Synchronized
     val activeRawDrawing: Boolean
         get() = enabled && !suspendedByModal && (limitRect?.valid == true)
 
+    @Synchronized
     fun configure(
         enable: Boolean,
         style: Int,
@@ -217,16 +229,19 @@ class OnyxScribbleState {
         excludeRects = excludes.filter { it.valid }
     }
 
+    @Synchronized
     fun setModalSuspended(suspended: Boolean): Boolean {
         val before = activeRawDrawing
         suspendedByModal = suspended
         return before != activeRawDrawing
     }
 
+    @Synchronized
     fun onLifecyclePause() {
-        suspendedByModal = false
+        // Keep suspendedByModal across backgrounding so resume over an open WebView modal does not draw over it.
     }
 
+    @Synchronized
     fun onLifecycleDestroy() {
         enabled = false
         suspendedByModal = false
@@ -252,6 +267,7 @@ class OnyxHardwareKeyState {
     var volumeKeysEnabled: Boolean = true
         private set
 
+    @Synchronized
     fun configure(
         capture: Boolean,
         volumeEnabled: Boolean = true,
@@ -260,25 +276,30 @@ class OnyxHardwareKeyState {
         volumeKeysEnabled = volumeEnabled
     }
 
+    @Synchronized
     fun onLifecycleDestroy() {
         captureEnabled = false
     }
 
+    @Synchronized
     fun resolveKeyAction(
         windowActive: Boolean,
         keyCode: Int,
         action: Int,
         repeatCount: Int,
+        speechActive: Boolean = false,
     ): OnyxKeyDecision {
         if (!windowActive || !captureEnabled) {
             return OnyxKeyDecision(intercept = false, direction = null)
         }
         val dir =
             when (keyCode) {
-                KEYCODE_VOLUME_UP -> if (volumeKeysEnabled) "prev" else null
-                KEYCODE_VOLUME_DOWN -> if (volumeKeysEnabled) "next" else null
-                KEYCODE_PAGE_UP -> "prev"
-                KEYCODE_PAGE_DOWN -> "next"
+                KEYCODE_VOLUME_UP -> if (volumeKeysEnabled && !speechActive) "prev" else null
+                KEYCODE_VOLUME_DOWN -> if (volumeKeysEnabled && !speechActive) "next" else null
+                KEYCODE_PAGE_UP, KEYCODE_DPAD_UP -> "prev"
+                KEYCODE_PAGE_DOWN, KEYCODE_DPAD_DOWN -> "next"
+                KEYCODE_MEDIA_PREVIOUS -> if (!speechActive) "prev" else null
+                KEYCODE_MEDIA_NEXT -> if (!speechActive) "next" else null
                 else -> null
             } ?: return OnyxKeyDecision(intercept = false, direction = null)
 
@@ -292,8 +313,12 @@ class OnyxHardwareKeyState {
     companion object {
         const val ACTION_DOWN = 0
         const val ACTION_UP = 1
+        const val KEYCODE_DPAD_UP = 19
+        const val KEYCODE_DPAD_DOWN = 20
         const val KEYCODE_VOLUME_UP = 24
         const val KEYCODE_VOLUME_DOWN = 25
+        const val KEYCODE_MEDIA_NEXT = 87
+        const val KEYCODE_MEDIA_PREVIOUS = 88
         const val KEYCODE_PAGE_UP = 92
         const val KEYCODE_PAGE_DOWN = 93
     }

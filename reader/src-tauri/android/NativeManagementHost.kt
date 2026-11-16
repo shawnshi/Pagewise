@@ -110,7 +110,13 @@ internal class NativeManagementHost(
 
                 else -> {
                     try {
-                        if (action == "show") pages.show(page, payload.optJSONObject("params") ?: JSONObject()) else pages.hide()
+                        if (action == "show") {
+                            pages.show(page, payload.optJSONObject("params") ?: JSONObject())
+                        } else {
+                            pages.hide()
+                            webView()?.requestFocus()
+                            (activity as? MainActivity)?.repaintManagementNow("regal")
+                        }
                         reply(JSONObject().put("applied", true).put("visible", action == "show"), null)
                         main.post { if (!closed) repaint() }
                     } catch (failure: Exception) {
@@ -134,6 +140,7 @@ internal class NativeManagementHost(
     private fun stateChanged() {
         activity.runOnUiThread {
             if (!closed) {
+                pages.invalidatePreferences()
                 emit("pagewise-native-state-changed", JSONObject())
                 repaint()
             }

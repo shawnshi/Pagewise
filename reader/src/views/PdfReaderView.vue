@@ -68,6 +68,8 @@ import TocList, { type TocItem } from '../components/TocList.vue'
 import OnyxInkLayer from '../components/OnyxInkLayer.vue'
 import { onyxEpd } from '../services/onyxEpd'
 import { onyxNativeAccelerator } from '../services/onyxNativeAccelerator'
+import { EinkStreamAggregator } from '../services/einkStreamAggregator'
+import { createDebouncedDraftSaver, listDrafts, loadNoteDraft, removeNoteDraft, type DebouncedDraftSaver } from '../services/noteDrafts'
 import { t } from '../i18n'
 
 const route = useRoute()
@@ -79,6 +81,13 @@ const bookId = String(route.params.id)
 const meta = ref<BookMeta>()
 const loading = ref(true)
 const scribbleEnabled = ref(false)
+const pdfBarsVisible = ref(true)
+const widePdfViewport = ref(typeof window !== 'undefined' ? window.innerWidth > 820 : true)
+const pdfScrubPreviewPage = ref<number | null>(null)
+function onPdfViewportResize() {
+  widePdfViewport.value = window.innerWidth > 820
+}
+const hasNativeDictionary = typeof window !== 'undefined' && typeof (window as Window & { LightReadInsets?: { lookupSystemDictionary?: (word: string) => boolean } }).LightReadInsets?.lookupSystemDictionary === 'function'
 const error = ref('')
 const reportReaderFailure = inject(readerActivityKey, () => () => {})()
 watch(error, value => { if (value) reportReaderFailure() })
@@ -1052,10 +1061,35 @@ function flushProgress(): Promise<void> {
 function jumpTo() {
   const n = parseInt(pageInput.value, 10)
   if (Number.isFinite(n)) {
-    gotoPage(Math.min(Math.max(n, 1), pageCount.value))
+    const target = Math.min(Math.max(n, 1), pageCount.value)
+    if (target !== currentPage.value) pushBack()
+    gotoPage(target)
   } else {
     pageInput.value = String(currentPage.value)
   }
+}
+
+function onPdfPageInputEnter(e: KeyboardEvent) {
+  if (e.isComposing || e.keyCode === 229) return
+  jumpTo()
+}
+
+function onPdfScrubInput(e: Event) {
+  const val = parseInt((e.target as HTMLInputElement).value, 10)
+  if (!Number.isFinite(val)) return
+  onyxEpd.enterFastMode('pdf-scrub', 'du')
+  onyxEpd.scheduleExitFastMode(300)
+  pdfScrubPreviewPage.value = Math.min(Math.max(val, 1), pageCount.value || 1)
+}
+
+function onPdfScrubCommit(e: Event) {
+  const val = parseInt((e.target as HTMLInputElement).value, 10)
+  pdfScrubPreviewPage.value = null
+  onyxEpd.scheduleExitFastMode(180)
+  if (!Number.isFinite(val)) return
+  const target = Math.min(Math.max(val, 1), pageCount.value || 1)
+  if (target !== currentPage.value) pushBack()
+  gotoPage(target)
 }
 
 function prevPage() {
@@ -1435,8 +1469,44 @@ interface SelInfo {
 
 const selection = ref<SelInfo | null>(null)
 const annotations = ref<AnnotationRec[]>([])
-const activeAnnotation = ref<AnnotationRec | null>(null)
+type EditablePdfAnnotation = Omit<AnnotationRec, 'id'> & {
+  id?: string
+  draftContextId?: string
+  __saved?: boolean
+  __discarded?: boolean
+}
+const activeAnnotation = ref<EditablePdfAnnotation | null>(null)
 const noteDraft = ref('')
+let pdfNoteDraftSaver: DebouncedDraftSaver | null = null
+watch(activeAnnotation, (next, prev) => {
+  if (prev && !next) {
+    const prevCtx = prev.draftContextId ?? (prev.id ? `anno:${prev.id}` : `sel:${prev.cfi}`)
+    if (prev.__saved || prev.__discarded) {
+      pdfNoteDraftSaver?.cancel()
+      removeNoteDraft({ bookId, contextId: prevCtx })
+    } else if (noteDraft.value.trim()) {
+      pdfNoteDraftSaver?.save(noteDraft.value)
+      pdfNoteDraftSaver?.flush()
+    } else {
+      pdfNoteDraftSaver?.cancel()
+      if (prev.draftContextId) removeNoteDraft({ bookId, contextId: prev.draftContextId })
+    }
+  }
+  pdfNoteDraftSaver = null
+  if (!next) return
+  const context = {
+    bookId,
+    contextId: next.draftContextId ?? (next.id ? `anno:${next.id}` : `sel:${next.cfi}`),
+    quote: next.text,
+    sourceLoc: next.cfi,
+  }
+  const restored = loadNoteDraft(context)
+  noteDraft.value = restored.success ? restored.draft.text : (next.note ?? '')
+  pdfNoteDraftSaver = createDebouncedDraftSaver(context, { delayMs: 300 })
+}, { flush: 'sync' })
+watch(noteDraft, text => {
+  if (activeAnnotation.value) pdfNoteDraftSaver?.save(text)
+})
 const popPos = ref({ x: 0, y: 0 })
 
 const encodeLoc = (page: number, rects: HlRect[]) =>
@@ -1635,6 +1705,7 @@ async function activatePdfSearchHit(index: number) {
   const hit = pdfSearchResults.value[normalizedIndex]
   const firstRect = hit.rects[0]
   if (!firstRect) return
+  if (hit.page !== currentPage.value) pushBack()
 
   selection.value = null
   if (pdfLayout.value === 'reflow') await switchPdfLayout('original')
@@ -1722,6 +1793,7 @@ function schedulePdfSearch() {
 }
 
 async function onPdfSearchKeydown(e: KeyboardEvent) {
+  if (e.isComposing || e.keyCode === 229) return
   if (e.key === 'Escape') {
     e.preventDefault()
     closePdfSearch()
@@ -2112,7 +2184,6 @@ const selBarStyle = computed(() => {
 async function addHighlight(color: string, withNote = false) {
   const s = selection.value
   if (!s) return
-  const storage = await getStorage()
   const rec: Omit<AnnotationRec, 'id'> = {
     bookId,
     kind: 'highlight',
@@ -2121,19 +2192,24 @@ async function addHighlight(color: string, withNote = false) {
     color,
     createdAt: Date.now(),
   }
-  const id = await storage.addAnnotation(rec)
-  const saved = { ...rec, id }
-  annotations.value.push(saved)
   window.getSelection()?.removeAllRanges()
   const anchor = s.anchor
   selection.value = null
+  // PW-02: opening the note editor must not commit a highlight before Save.
   if (withNote) {
-    noteDraft.value = ''
+    const previous = listDrafts(bookId)
+      .filter(draft => draft.contextId.startsWith('sel:') && draft.sourceLoc === rec.cfi && draft.quote === rec.text)
+      .sort((a, b) => b.updatedAt - a.updatedAt)[0]
+    const draftContextId = previous?.contextId ?? `sel:${crypto.randomUUID()}`
     popPos.value = clampPop(anchor.x - 160, anchor.y + 10)
-    activeAnnotation.value = saved
-  } else {
-    toast(t('reader.highlighted'), 'success')
+    activeAnnotation.value = { ...rec, draftContextId }
+    return
   }
+  const storage = await getStorage()
+  const id = await storage.addAnnotation(rec)
+  const saved = { ...rec, id }
+  annotations.value.push(saved)
+  toast(t('reader.highlighted'), 'success')
 }
 
 function clampPop(x: number, y: number) {
@@ -2147,14 +2223,27 @@ async function saveNote() {
   if (!activeAnnotation.value) return
   const storage = await getStorage()
   const note = noteDraft.value.trim() || undefined
-  await storage.updateAnnotation(activeAnnotation.value.id, { note })
-  const item = annotations.value.find(a => a.id === activeAnnotation.value!.id)
-  if (item) item.note = note
+  if (activeAnnotation.value.id) {
+    await storage.updateAnnotation(activeAnnotation.value.id, { note })
+    const item = annotations.value.find(a => a.id === activeAnnotation.value!.id)
+    if (item) item.note = note
+  } else {
+    const { id: _unusedId, draftContextId: _draftId, __saved: _s, __discarded: _x, ...rec } = activeAnnotation.value
+    const created: Omit<AnnotationRec, 'id'> = { ...rec, note }
+    const id = await storage.addAnnotation(created)
+    annotations.value.push({ ...created, id })
+  }
+  activeAnnotation.value.__saved = true
   activeAnnotation.value = null
   toast(t('reader.noteSaved'), 'success')
 }
 
-async function removeAnnotation(a: AnnotationRec) {
+async function removeAnnotation(a: EditablePdfAnnotation) {
+  a.__discarded = true
+  if (!a.id) {
+    activeAnnotation.value = null
+    return
+  }
   const storage = await getStorage()
   await storage.deleteAnnotation(a.id)
   annotations.value = annotations.value.filter(x => x.id !== a.id)
@@ -2305,11 +2394,48 @@ function onHolderClick(e: MouseEvent, page: number) {
     return
   }
   if (bookPaged.value) {
-    const ratio = (e.clientX - hb.left) / Math.max(1, hb.width)
-    const edge = presentationMode.value ? 0.5 : 0.14
-    if (ratio <= edge) prevPage()
-    else if (ratio >= 1 - edge) nextPage()
+    const ratioX = (e.clientX - hb.left) / Math.max(1, hb.width)
+    const ratioY = (e.clientY - hb.top) / Math.max(1, hb.height)
+    if (presentationMode.value) {
+      if (ratioX <= 0.5) prevPage()
+      else nextPage()
+    } else if (settings.readingMode.eink.oneHandedTapZones) {
+      if (ratioX >= 0.35 && ratioX <= 0.65 && ratioY >= 0.35 && ratioY <= 0.65) {
+        pdfBarsVisible.value = !pdfBarsVisible.value
+      } else if (ratioY < 1 / 3) {
+        prevPage()
+      } else {
+        nextPage()
+      }
+    } else {
+      if (ratioX < 0.30) prevPage()
+      else if (ratioX > 0.70) nextPage()
+      else pdfBarsVisible.value = !pdfBarsVisible.value
+    }
+  } else {
+    const ratioX = (e.clientX - hb.left) / Math.max(1, hb.width)
+    if (ratioX >= 0.30 && ratioX <= 0.70) pdfBarsVisible.value = !pdfBarsVisible.value
   }
+}
+
+function lookupPdfSelectionDictionary() {
+  const s = selection.value
+  if (!s?.text) return
+  const ok = (window as Window & { LightReadInsets?: { lookupSystemDictionary?: (word: string) => boolean } }).LightReadInsets?.lookupSystemDictionary?.(s.text)
+  if (!ok) toast(settings.language === 'en' ? 'No system dictionary app found' : '未检测到系统词典应用', 'info')
+}
+
+function listenFromPdfSelection() {
+  const s = selection.value
+  if (!s) return
+  const page = s.page
+  window.getSelection()?.removeAllRanges()
+  selection.value = null
+  if (page >= 1 && page <= pageCount.value && page !== currentPage.value) {
+    gotoPage(page)
+  }
+  ttsPanel.value = true
+  void startTTS()
 }
 
 async function copySelection() {
@@ -2345,6 +2471,14 @@ async function translateSelection() {
   const session = ++selTrSession
   selTrAbort?.abort()
   selTrAbort = new AbortController()
+  const streamAgg = new EinkStreamAggregator({
+    einkEnabled: !!settings.readingMode.eink.enabled,
+    signal: selTrAbort.signal,
+    onFlush: chunk => {
+      if (session !== selTrSession || !selTr.value) return
+      selTr.value.out += chunk
+    },
+  })
   try {
     const lang = settings.language === 'en' ? 'en' : 'zh'
     const messages = buildPdfAssistantMessages({
@@ -2352,10 +2486,16 @@ async function translateSelection() {
       text: s.text, question: explainPrompt(lang), language: lang,
     })
     for await (const delta of chatStream(messages, selTrAbort.signal)) {
-      if (session !== selTrSession) return
-      selTr.value.out += delta
+      if (session !== selTrSession) {
+        streamAgg.abort()
+        return
+      }
+      streamAgg.push(delta)
     }
+    if (session === selTrSession) streamAgg.complete()
+    else streamAgg.abort()
   } catch (e: any) {
+    streamAgg.abort()
     if (session === selTrSession && selTr.value) {
       selTr.value.incomplete = true
       toast(`${t('ai.requestFailed')}: ${e?.message ?? e}`, 'error', 6000)
@@ -2917,6 +3057,25 @@ function resumeTTS() {
   else resumeSpeech()
 }
 
+const pdfSleepMinutes = ref(0)
+let pdfSleepTimer: ReturnType<typeof setTimeout> | undefined
+
+function setPdfSleepTimer(minutes: number) {
+  clearTimeout(pdfSleepTimer)
+  pdfSleepTimer = undefined
+  pdfSleepMinutes.value = minutes
+  if (minutes > 0) {
+    pdfSleepTimer = setTimeout(() => {
+      pdfSleepMinutes.value = 0
+      pdfSleepTimer = undefined
+      if (ttsState.value === 'playing') {
+        pauseTTS()
+        toast(t('tts.sleepDone'), 'info')
+      }
+    }, minutes * 60_000)
+  }
+}
+
 function stopTTS() {
   ttsSession++
   ttsState.value = 'stopped'
@@ -2924,6 +3083,9 @@ function stopTTS() {
   else stopSpeech()
   nativeListening.value = null
 }
+watch(ttsState, s => {
+  if (s === 'stopped') setPdfSleepTimer(0)
+})
 
 /* ================= 生命周期 ================= */
 
@@ -3112,7 +3274,11 @@ async function readerBack() {
   if (endRecommendationsDialog.value?.isWriting()) return
   if (endRecommendationsOpen.value) { endRecommendationsOpen.value = false; return }
   if (bookmarkMutation) { await bookmarkMutation; return }
-  if (activeAnnotation.value) { await saveNote(); return }
+  if (activeAnnotation.value) {
+    if (activeAnnotation.value.id) { await saveNote(); return }
+    activeAnnotation.value = null
+    return
+  }
   if (selection.value || liveSel.value) {
     selection.value = null
     liveSel.value = null
@@ -3156,14 +3322,55 @@ function handleNativeReaderBack(): boolean {
   return true
 }
 let unbindPdfHardwareKeys: (() => void) | null = null
+function resolvePdfRouteTargetPage(raw: unknown): number | null {
+  if (typeof raw !== 'string' || !raw.trim()) return null
+  const decoded = decodeLoc(raw.trim())
+  if (decoded && Number.isFinite(decoded.page) && decoded.page >= 1) return decoded.page
+  const parsed = parseInt(raw.trim(), 10)
+  return Number.isFinite(parsed) && parsed >= 1 ? parsed : null
+}
+const pdfModalOrPopoverOpen = computed(() =>
+  moreMenu.value
+  || zoomMenu.value
+  || drawerOpen.value
+  || pdfSearchOpen.value
+  || propertiesOpen.value
+  || shortcutsOpen.value
+  || typographyOpen.value
+  || (pdfAiOpen.value && !widePdfViewport.value)
+  || ttsPanel.value
+  || autoPanel.value
+  || endRecommendationsOpen.value
+  || activeAnnotation.value !== null
+  || selection.value !== null
+  || selTr.value !== null,
+)
+function isPdfInteractiveFocused(): boolean {
+  const el = document.activeElement as HTMLElement | null
+  return !!el && (el.isContentEditable || /^(INPUT|TEXTAREA|SELECT)$/.test(el.tagName))
+}
 onMounted(() => {
   nativeBackHost.__pagewiseReaderBack = handleNativeReaderBack
+  window.addEventListener('resize', onPdfViewportResize)
   unbindPdfHardwareKeys = onyxNativeAccelerator.bindHardwarePageTurn(dir => {
-    if (scribbleEnabled.value || moreMenu.value || zoomMenu.value) return
+    if (pdfModalOrPopoverOpen.value || isPdfInteractiveFocused()) return
     runPdfShortcutCommand(dir === 'next' ? 'nextPage' : 'previousPage')
   })
 })
+watch(
+  [() => settings.readingMode.eink.volumeKeysEnabled, pdfModalOrPopoverOpen] as const,
+  ([volEnabled, blocked]) => {
+    onyxNativeAccelerator.setHardwareKeyCapture(!blocked, volEnabled !== false)
+  },
+  { immediate: true },
+)
+watch(() => [settings.readingMode.eink.enabled, settings.readingMode.eink.gcIntervalPages] as const, ([enabled, interval]) => {
+  onyxEpd.configureGcInterval(enabled ? interval : 0)
+}, { immediate: true })
 onBeforeUnmount(() => {
+  onyxNativeAccelerator.setHardwareKeyCapture(false, settings.readingMode.eink.volumeKeysEnabled !== false)
+  pdfNoteDraftSaver?.flush()
+  window.removeEventListener('resize', onPdfViewportResize)
   unbindPdfHardwareKeys?.()
   unbindPdfHardwareKeys = null
   if (nativeBackHost.__pagewiseReaderBack === handleNativeReaderBack) delete nativeBackHost.__pagewiseReaderBack
@@ -3246,7 +3453,8 @@ onMounted(async () => {
     pageCount.value = pdm.pages.length
     pageDims.value = pdm.pages.map(page => ({ w: page.w, h: page.h }))
     baseDims.value = pageDims.value[0] ?? { w: 612, h: 792 }
-    const saved = parseInt(meta.value.location ?? '1', 10)
+    const requestedPage = resolvePdfRouteTargetPage(route.query.loc)
+    const saved = requestedPage ?? parseInt(meta.value.location ?? '1', 10)
     currentPage.value = Number.isFinite(saved)
       ? Math.min(Math.max(saved, 1), pageCount.value)
       : 1
@@ -3309,7 +3517,11 @@ onMounted(async () => {
   }
 })
 
-watch(currentPage, () => { if (pdfAiOpen.value) closePdfAssistant() })
+watch(() => route.query.loc, raw => {
+  if (!readerAlive || loading.value || !pageCount.value) return
+  const target = resolvePdfRouteTargetPage(raw)
+  if (target != null && target <= pageCount.value) gotoPage(target)
+})
 watch([pdfSearchOpen, drawerOpen, typographyOpen, ttsPanel, moreMenu, propertiesOpen], flags => {
   if (pdfAiOpen.value && flags.some(Boolean)) closePdfAssistant()
 })
@@ -3317,13 +3529,19 @@ watch([pdfSearchOpen, drawerOpen, typographyOpen, ttsPanel, moreMenu, properties
 // 切后台 / 进程可能被回收: 把防抖中的当前页立即落库; 失败留给下次有界重试的旧值。
 function onVisibilityCheckpoint() {
   if (document.visibilityState !== 'hidden' || !readerAlive) return
+  pdfNoteDraftSaver?.flush()
   void flushProgress().catch(reportProgressError)
+}
+function onPdfBeforeUnload() {
+  if (readerAlive) pdfNoteDraftSaver?.flush()
 }
 
 document.addEventListener('visibilitychange', onVisibilityCheckpoint)
+window.addEventListener('beforeunload', onPdfBeforeUnload)
 
 onBeforeUnmount(() => {
   document.removeEventListener('visibilitychange', onVisibilityCheckpoint)
+  window.removeEventListener('beforeunload', onPdfBeforeUnload)
   readerAlive = false
   pdfEndGate.dispose()
   // 卸载前先取消防抖并写入最后位置; 失败不回滚已显示的内容, 也不阻塞退出。
@@ -3390,7 +3608,7 @@ onBeforeUnmount(() => {
       hidden
       @change="onPdfOpenPicked"
     />
-    <header class="paper-header">
+    <header v-show="pdfBarsVisible" class="paper-header">
       <div class="paper-bar">
         <div class="paper-document">
           <button class="icon-btn document-back" :title="backLabel" @click="handleNativeReaderBack">
@@ -3506,7 +3724,7 @@ onBeforeUnmount(() => {
             <AppIcon name="back" /><span>{{ t('reader.prevPage') }}</span>
           </button>
           <span class="paper-pagenum">
-            <input v-model="pageInput" class="input page-input" :aria-label="t('common.current')" @keyup.enter="jumpTo" @blur="jumpTo" />
+            <input v-model="pageInput" class="input page-input" :aria-label="t('common.current')" @keydown.enter="onPdfPageInputEnter" @blur="jumpTo" />
             <span>/ {{ pageCount }}</span>
           </span>
           <button class="icon-btn" :title="t('reader.nextPage')" :disabled="atLastPage" @click="nextPage">
@@ -3954,7 +4172,8 @@ onBeforeUnmount(() => {
                 :book-id="bookId"
                 :page-key="`pdf-page-${n}`"
                 v-model:enabled="scribbleEnabled"
-                :modal-open="moreMenu || zoomMenu || autoPanel || endRecommendationsOpen"
+                :active="n === currentPage"
+                :modal-open="pdfModalOrPopoverOpen"
               />
             </div>
           </div>
@@ -4013,7 +4232,8 @@ onBeforeUnmount(() => {
                 :book-id="bookId"
                 :page-key="`pdf-page-${n}`"
                 v-model:enabled="scribbleEnabled"
-                :modal-open="moreMenu || zoomMenu || autoPanel || endRecommendationsOpen"
+                :active="n === currentPage"
+                :modal-open="pdfModalOrPopoverOpen"
               />
             </div>
           </div>
@@ -4156,9 +4376,41 @@ onBeforeUnmount(() => {
         </div>
       </div>
 
+      <aside v-if="meta && !loading && !error && pdfAiOpen && widePdfViewport" class="pdf-ai-dock">
+        <PdfReadingAssistant
+          :open="pdfAiOpen"
+          docked
+          :book-title="meta.title"
+          :book-author="meta.author"
+          :page-number="pdfAiPage"
+          :source-text="pdfAiText"
+          :source-loading="pdfAiSourceBusy"
+          :source-error="pdfAiSourceError"
+          @close="closePdfAssistant"
+        />
+      </aside>
     </div>
 
-    <!-- 划词浮条: 高亮 / 想法 / 复制 / AI 解读 -->
+    <footer v-if="!loading && !error && pdfBarsVisible && !presentationMode" class="pdf-bottom-bar">
+      <button type="button" class="btn btn-sm" :disabled="atFirstPage" :aria-label="t('reader.prevPage')" @click="prevPage">‹</button>
+      <input
+        class="pdf-bottom-scrub"
+        type="range"
+        min="1"
+        :max="Math.max(1, pageCount)"
+        :value="pdfScrubPreviewPage ?? currentPage"
+        :aria-label="t('reader.progress')"
+        @input="onPdfScrubInput"
+        @change="onPdfScrubCommit"
+        @blur="pdfScrubPreviewPage = null"
+      />
+      <span class="pdf-bottom-meta">
+        {{ pdfScrubPreviewPage ?? currentPage }} / {{ pageCount }} · {{ Math.round(((pdfScrubPreviewPage ?? currentPage) / Math.max(1, pageCount)) * 100) }}%
+      </span>
+      <button type="button" class="btn btn-sm" :disabled="atLastPage" :aria-label="t('reader.nextPage')" @click="nextPage">›</button>
+    </footer>
+
+    <!-- 划词浮条: 高亮 / 想法 / 查词典 / 从这里听 / 复制 / AI 解读 -->
     <div
       v-if="selection"
       class="sel-bar"
@@ -4190,6 +4442,12 @@ onBeforeUnmount(() => {
         <svg viewBox="0 0 20 20" aria-hidden="true"><path d="M10.2 2.75c.45 3.2 1.85 4.6 5.05 5.05-3.2.45-4.6 1.85-5.05 5.05-.45-3.2-1.85-4.6-5.05-5.05 3.2-.45 4.6-1.85 5.05-5.05Z" /><path d="M15.15 12.65c.2 1.45.85 2.1 2.3 2.3-1.45.2-2.1.85-2.3 2.3-.2-1.45-.85-2.1-2.3-2.3 1.45-.2 2.1-.85 2.3-2.3Z" /></svg>
         <span>{{ t('ai.explain') }}</span>
       </button>
+      <button v-if="hasNativeDictionary" type="button" class="sel-act" @click="lookupPdfSelectionDictionary">
+        <span>{{ settings.language === 'en' ? 'Dictionary' : '查词典' }}</span>
+      </button>
+      <button type="button" class="sel-act" @click="listenFromPdfSelection">
+        <span>{{ t('tts.listenFromSelection') }}</span>
+      </button>
       <button type="button" class="sel-act" @click="copySelection">
         <svg viewBox="0 0 20 20" aria-hidden="true"><rect x="6.25" y="6.25" width="9.5" height="9.5" rx="1.75" /><path d="M13.75 6.25v-1.5a1.5 1.5 0 0 0-1.5-1.5h-7.5a1.5 1.5 0 0 0-1.5 1.5v7.5a1.5 1.5 0 0 0 1.5 1.5h1.5" /></svg>
         <span>{{ t('paper.copy') }}</span>
@@ -4217,6 +4475,7 @@ onBeforeUnmount(() => {
     <!-- 高亮想法编辑浮层 -->
     <div v-if="activeAnnotation" class="anno-pop card" :style="{ left: `${popPos.x}px`, top: `${popPos.y}px` }">
       <p class="quote">{{ activeAnnotation.text }}</p>
+      <p v-if="!activeAnnotation.id" class="pt-busy">{{ t('reader.ideaDraftHint') }}</p>
       <textarea
         v-model="noteDraft"
         class="note-input input"
@@ -4224,7 +4483,9 @@ onBeforeUnmount(() => {
         :placeholder="t('reader.notePlaceholder')"
       />
       <div class="pop-actions">
-        <button class="btn btn-sm btn-danger" @click="removeAnnotation(activeAnnotation)">{{ t('reader.deleteHighlight') }}</button>
+        <button class="btn btn-sm btn-danger" @click="removeAnnotation(activeAnnotation)">
+          {{ activeAnnotation.id ? t('reader.deleteHighlight') : t('reader.discardIdeaDraft') }}
+        </button>
         <span style="flex: 1" />
         <button class="btn btn-sm" @click="activeAnnotation = null">{{ t('common.cancel') }}</button>
         <button class="btn btn-sm btn-primary" @click="saveNote">{{ t('reader.saveNote') }}</button>
@@ -4299,6 +4560,21 @@ onBeforeUnmount(() => {
       </div>
       <p v-if="edgeAvailable() && settings.ttsEngine === 'local'" class="tts-local-hint">{{ t('tts.hintLocal') }}</p>
       <p v-else-if="settings.ttsEngine === 'system'" class="tts-hint">{{ t(isNativeSystemTts() ? systemVoiceHintKey(settings.ttsVoice) : 'tts.hintSystem') }}</p>
+      <div class="tts-row">
+        <label>{{ t('tts.sleep') }}</label>
+        <div class="seg" style="flex: 1">
+          <button
+            v-for="mins in [0, 15, 30, 45, 60]"
+            :key="mins"
+            type="button"
+            :class="{ active: pdfSleepMinutes === mins }"
+            :aria-pressed="pdfSleepMinutes === mins"
+            @click="setPdfSleepTimer(mins)"
+          >
+            {{ mins === 0 ? t('tts.sleepOff') : `${mins}m` }}
+          </button>
+        </div>
+      </div>
     </div>
 
     <!-- 自动翻页控制条：运行后自动收起到顶部状态按钮，避免遮挡正文。 -->
@@ -4334,7 +4610,7 @@ onBeforeUnmount(() => {
         <button class="icon-btn" :title="t('common.stop')" @click="autoPanel = false; stopAutoRead()" :aria-label="t('common.stop')"><svg viewBox="0 0 24 24" width="16" height="16" aria-hidden="true"><path fill="currentColor" d="M6.3 6.3a1 1 0 0 1 1.4 0L12 10.58l4.3-4.3a1 1 0 1 1 1.4 1.42L13.42 12l4.3 4.3a1 1 0 0 1-1.42 1.4L12 13.42l-4.3 4.3a1 1 0 0 1-1.4-1.42L10.58 12l-4.3-4.3a1 1 0 0 1 0-1.4z"/></svg></button>
       </section>
     </Transition>
-    <PdfReadingAssistant v-if="meta && !loading && !error" :open="pdfAiOpen" :book-title="meta.title" :book-author="meta.author" :page-number="pdfAiPage" :source-text="pdfAiText" :source-loading="pdfAiSourceBusy" :source-error="pdfAiSourceError" @close="closePdfAssistant" />
+    <PdfReadingAssistant v-if="meta && !loading && !error && !widePdfViewport" :open="pdfAiOpen" :book-title="meta.title" :book-author="meta.author" :page-number="pdfAiPage" :source-text="pdfAiText" :source-loading="pdfAiSourceBusy" :source-error="pdfAiSourceError" @close="closePdfAssistant" />
   </div>
 </template>
 
@@ -5649,14 +5925,42 @@ onBeforeUnmount(() => {
   color: var(--text-3);
 }
 .anno-del {
-  width: 24px;
-  height: 24px;
+  min-width: 48px;
+  min-height: 48px;
   flex-shrink: 0;
-  opacity: 0;
+  opacity: 1;
   align-self: flex-start;
 }
-.anno-item:hover .anno-del {
-  opacity: 1;
+.pdf-ai-dock {
+  flex: 0 0 min(400px, 38%);
+  min-width: 280px;
+  min-height: 0;
+  height: 100%;
+  display: flex;
+}
+.pdf-bottom-bar {
+  flex: 0 0 auto;
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 6px max(12px, var(--lr-safe-right)) calc(6px + var(--lr-safe-bottom)) max(12px, var(--lr-safe-left));
+  border-top: 1px solid var(--border);
+  background: var(--card);
+}
+.pdf-bottom-scrub {
+  flex: 1;
+  min-width: 0;
+  accent-color: var(--text);
+}
+.pdf-bottom-meta {
+  flex-shrink: 0;
+  font-size: 13px;
+  font-variant-numeric: tabular-nums;
+  color: var(--text-2);
+  white-space: nowrap;
+}
+.paper.is-fullscreen .pdf-bottom-bar {
+  display: none;
 }
 
 /* ---- 划词浮条 ---- */
@@ -5989,13 +6293,14 @@ onBeforeUnmount(() => {
 .back-pill {
   position: fixed;
   left: 20px;
-  bottom: 20px;
+  bottom: 66px;
+  min-height: 48px;
   z-index: 40;
-  border: 1px solid var(--border);
+  border: 1.5px solid var(--border-strong);
   border-radius: 999px;
   padding: 7px 14px;
-  font-size: 12.5px;
-  color: var(--text-2);
+  font-size: 13px;
+  color: var(--text);
 }
 .back-pill:hover {
   color: var(--brand);

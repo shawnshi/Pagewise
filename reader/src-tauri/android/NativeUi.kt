@@ -1,5 +1,7 @@
 package io.pagewise.reader
 
+import android.app.Activity
+import android.app.AlertDialog
 import android.content.Context
 import android.graphics.Canvas
 import android.graphics.Color
@@ -16,6 +18,7 @@ import android.widget.Button
 import android.widget.ImageButton
 import android.widget.ImageView
 import android.widget.LinearLayout
+import android.widget.ScrollView
 import android.widget.TextView
 
 /** Monochrome UI primitives; business state and persistence remain with their existing owners. */
@@ -143,7 +146,10 @@ internal object NativeUi {
         click: () -> Unit,
     ): Button =
         button(context, label, ink, background, click).apply {
-            val icon = NativeUiIcon(context, kind, ink).apply { setBounds(0, 0, dp(context, 18), dp(context, 18)) }
+            val icon =
+                NativeUiIcon(context, kind, ink, pressedInk = surface(background)).apply {
+                    setBounds(0, 0, dp(context, 18), dp(context, 18))
+                }
             setCompoundDrawablesRelative(icon, null, null, null)
             compoundDrawablePadding = dp(context, 6)
         }
@@ -158,8 +164,12 @@ internal object NativeUi {
         button(context, label, surface(background), background, click).apply {
             setTextColor(
                 android.content.res.ColorStateList(
-                    arrayOf(intArrayOf(-android.R.attr.state_enabled), intArrayOf()),
-                    intArrayOf(disabled(background), surface(background)),
+                    arrayOf(
+                        intArrayOf(-android.R.attr.state_enabled),
+                        intArrayOf(android.R.attr.state_pressed),
+                        intArrayOf(),
+                    ),
+                    intArrayOf(disabled(background), ink, surface(background)),
                 ),
             )
             val fill =
@@ -185,6 +195,37 @@ internal object NativeUi {
                         },
                     )
                     addState(intArrayOf(), fill)
+                }
+        }
+
+    fun subtleButton(
+        context: Context,
+        label: String,
+        ink: Int,
+        background: Int,
+        click: () -> Unit,
+    ): Button =
+        button(context, label, ink, background, click).apply {
+            this.background =
+                StateListDrawable().apply {
+                    addState(intArrayOf(-android.R.attr.state_enabled), shape(context, background))
+                    addState(
+                        intArrayOf(android.R.attr.state_pressed),
+                        GradientDrawable().apply {
+                            setColor(ink)
+                            setStroke(dp(context, 2), ink)
+                            cornerRadius = 0f
+                        },
+                    )
+                    addState(
+                        intArrayOf(android.R.attr.state_focused),
+                        GradientDrawable().apply {
+                            setColor(mutedSurface(background))
+                            setStroke(dp(context, 2), ink)
+                            cornerRadius = 0f
+                        },
+                    )
+                    addState(intArrayOf(), hairlineShape(context, background, sunken = true))
                 }
         }
 
@@ -265,7 +306,7 @@ internal object NativeUi {
         ImageButton(context).apply {
             contentDescription = label
             scaleType = ImageView.ScaleType.FIT_XY
-            setImageDrawable(NativeUiIcon(context, kind, ink))
+            setImageDrawable(NativeUiIcon(context, kind, ink, pressedInk = surface(background)))
             this.background = actionable(context, background, outlined = false)
             setPadding(dp(context, 12), dp(context, 12), dp(context, 12), dp(context, 12))
             minimumWidth = dp(context, 48)
@@ -288,16 +329,25 @@ internal object NativeUi {
             gravity = Gravity.CENTER
             minimumHeight = dp(context, 64)
             setPadding(dp(context, 4), dp(context, 4), dp(context, 4), dp(context, 6))
-            val pressState = StateListDrawable().apply {
-                addState(
-                    intArrayOf(android.R.attr.state_pressed),
-                    GradientDrawable().apply {
-                        setColor(mutedSurface(background))
-                        cornerRadius = dp(context, 2).toFloat()
-                    },
-                )
-                addState(intArrayOf(), GradientDrawable().apply { setColor(Color.TRANSPARENT) })
-            }
+            val pressState =
+                StateListDrawable().apply {
+                    addState(
+                        intArrayOf(android.R.attr.state_pressed),
+                        GradientDrawable().apply {
+                            setColor(ink)
+                            cornerRadius = 0f
+                        },
+                    )
+                    addState(
+                        intArrayOf(android.R.attr.state_focused),
+                        GradientDrawable().apply {
+                            setColor(surface(background))
+                            setStroke(dp(context, 2), ink)
+                            cornerRadius = 0f
+                        },
+                    )
+                    addState(intArrayOf(), GradientDrawable().apply { setColor(Color.TRANSPARENT) })
+                }
             this.background = pressState
             contentDescription = label
             isSelected = selected
@@ -325,7 +375,16 @@ internal object NativeUi {
             addView(
                 ImageView(context).apply {
                     scaleType = ImageView.ScaleType.FIT_XY
-                    setImageDrawable(NativeUiIcon(context, if (page == "annotations") "notes" else page, currentColor, selected))
+                    isDuplicateParentStateEnabled = true
+                    setImageDrawable(
+                        NativeUiIcon(
+                            context,
+                            if (page == "annotations") "notes" else page,
+                            currentColor,
+                            selected,
+                            pressedInk = surface(background),
+                        ),
+                    )
                     importantForAccessibility = View.IMPORTANT_FOR_ACCESSIBILITY_NO
                 },
                 LinearLayout.LayoutParams(dp(context, 28), dp(context, 28)),
@@ -336,7 +395,13 @@ internal object NativeUi {
                     textSize = 13f
                     gravity = Gravity.CENTER
                     setLineSpacing(0f, 1.25f)
-                    setTextColor(currentColor)
+                    isDuplicateParentStateEnabled = true
+                    setTextColor(
+                        android.content.res.ColorStateList(
+                            arrayOf(intArrayOf(android.R.attr.state_pressed), intArrayOf()),
+                            intArrayOf(surface(background), currentColor),
+                        ),
+                    )
                     setTypeface(null, if (selected) Typeface.BOLD else Typeface.NORMAL)
                     importantForAccessibility = View.IMPORTANT_FOR_ACCESSIBILITY_NO
                 },
@@ -397,7 +462,7 @@ internal object NativeUi {
                         addView(
                             TextView(context).apply {
                                 text = headerLabel
-                                textSize = 11f
+                                textSize = 12f
                                 typeface = monoTypeface(true)
                                 fontFeatureSettings = "tnum"
                                 setTextColor(secondary(background))
@@ -409,7 +474,7 @@ internal object NativeUi {
                             addView(
                                 TextView(context).apply {
                                     text = badgeLabel
-                                    textSize = 11f
+                                    textSize = 12f
                                     typeface = monoTypeface(true)
                                     fontFeatureSettings = "tnum"
                                     setTextColor(border(background))
@@ -490,7 +555,7 @@ internal object NativeUi {
             addView(
                 TextView(context).apply {
                     text = "──────  ◇  ──────"
-                    textSize = 11f
+                    textSize = 12f
                     typeface = monoTypeface(false)
                     setTextColor(disabled(background))
                     gravity = Gravity.CENTER
@@ -501,7 +566,7 @@ internal object NativeUi {
                 addView(
                     TextView(context).apply {
                         text = caption
-                        textSize = 11f
+                        textSize = 12f
                         typeface = monoTypeface(false)
                         fontFeatureSettings = "tnum"
                         setTextColor(secondary(background))
@@ -523,20 +588,75 @@ internal object NativeUi {
         view.isSelected = selected
         view.setTypeface(null, if (selected) Typeface.BOLD else Typeface.NORMAL)
         if (selected) {
+            view.setTextColor(
+                android.content.res.ColorStateList(
+                    arrayOf(
+                        intArrayOf(-android.R.attr.state_enabled),
+                        intArrayOf(android.R.attr.state_pressed),
+                        intArrayOf(),
+                    ),
+                    intArrayOf(disabled(background), ink, surface(background)),
+                ),
+            )
             view.background =
-                GradientDrawable().apply {
-                    setColor(ink)
-                    cornerRadius = 0f
+                StateListDrawable().apply {
+                    addState(intArrayOf(-android.R.attr.state_enabled), shape(context, background))
+                    addState(
+                        intArrayOf(android.R.attr.state_pressed),
+                        GradientDrawable().apply {
+                            setColor(surface(background))
+                            setStroke(dp(context, 2), ink)
+                            cornerRadius = 0f
+                        },
+                    )
+                    addState(
+                        intArrayOf(android.R.attr.state_focused),
+                        GradientDrawable().apply {
+                            setColor(ink)
+                            setStroke(dp(context, 2), surface(background))
+                            cornerRadius = 0f
+                        },
+                    )
+                    addState(
+                        intArrayOf(),
+                        GradientDrawable().apply {
+                            setColor(ink)
+                            cornerRadius = 0f
+                        },
+                    )
                 }
-            view.setTextColor(surface(background))
         } else {
+            view.setTextColor(
+                android.content.res.ColorStateList(
+                    arrayOf(
+                        intArrayOf(-android.R.attr.state_enabled),
+                        intArrayOf(android.R.attr.state_pressed),
+                        intArrayOf(),
+                    ),
+                    intArrayOf(disabled(background), surface(background), secondary(background)),
+                ),
+            )
             view.background =
-                GradientDrawable().apply {
-                    setColor(surface(background))
-                    setStroke(dp(context, 1), divider(background))
-                    cornerRadius = 0f
+                StateListDrawable().apply {
+                    addState(intArrayOf(-android.R.attr.state_enabled), shape(context, background))
+                    addState(
+                        intArrayOf(android.R.attr.state_pressed),
+                        GradientDrawable().apply {
+                            setColor(ink)
+                            setStroke(dp(context, 2), ink)
+                            cornerRadius = 0f
+                        },
+                    )
+                    addState(
+                        intArrayOf(android.R.attr.state_focused),
+                        GradientDrawable().apply {
+                            setColor(surface(background))
+                            setStroke(dp(context, 2), ink)
+                            cornerRadius = 0f
+                        },
+                    )
+                    addState(intArrayOf(), hairlineShape(context, background, false))
                 }
-            view.setTextColor(secondary(background))
         }
     }
 
@@ -789,7 +909,7 @@ internal class NativeActionFlow(
     context: Context,
 ) : ViewGroup(context) {
     private var rects = emptyList<NativeFlowRect>()
-    private val gap = NativeUi.dp(context, 6)
+    private val gap = NativeUi.dp(context, 8)
     var centerRows: Boolean = false
         set(value) {
             if (field != value) {
@@ -1171,8 +1291,9 @@ internal fun nativeIconVectorXml(
 private class NativeUiIcon(
     context: Context,
     kind: String,
-    ink: Int,
+    private val normalInk: Int,
     emphasis: Boolean = false,
+    private val pressedInk: Int? = null,
 ) : Drawable() {
     private data class Segment(
         val path: android.graphics.Path,
@@ -1182,11 +1303,28 @@ private class NativeUiIcon(
     private val density = context.resources.displayMetrics.density
     private val paint =
         android.graphics.Paint(android.graphics.Paint.ANTI_ALIAS_FLAG).apply {
-            color = ink
+            color = normalInk
             style = android.graphics.Paint.Style.STROKE
             strokeCap = android.graphics.Paint.Cap.ROUND
             strokeJoin = android.graphics.Paint.Join.ROUND
         }
+
+    override fun isStateful(): Boolean = pressedInk != null
+
+    override fun onStateChange(stateSet: IntArray): Boolean {
+        val next =
+            if (pressedInk != null && android.R.attr.state_pressed in stateSet) {
+                pressedInk
+            } else {
+                normalInk
+            }
+        if (paint.color != next) {
+            paint.color = next
+            invalidateSelf()
+            return true
+        }
+        return false
+    }
     private val segments: List<Segment> =
         buildList {
             val namespace = "http://schemas.android.com/apk/res/android"
@@ -1299,6 +1437,173 @@ internal class NativeBookGridLayout(
                 MeasureSpec.makeMeasureSpec(rect.bottom - rect.top, MeasureSpec.EXACTLY),
             )
             child.layout(paddingLeft + x, paddingTop + rect.top, paddingLeft + x + rect.right - rect.left, paddingTop + rect.bottom)
+        }
+    }
+}
+
+/** Zero-dim, zero-animation E-Ink modal dialog with 2dp solid border and bounded 80% height. */
+internal class NativeEinkDialog(
+    activity: Activity,
+    title: String,
+    content: View,
+    private val ink: Int,
+    private val background: Int,
+    captions: List<Pair<Int, String>>,
+    private val cancelableOutside: Boolean = true,
+    private val onDismissed: () -> Unit = {},
+) : AlertDialog(activity) {
+    val scrollView: ScrollView
+    private val actions: Map<Int, Button>
+    private val dismissHooks = mutableListOf<() -> Unit>()
+
+    init {
+        dismissHooks.add(onDismissed)
+        val innerContent =
+            if (content is ScrollView && content.childCount == 1) {
+                content.getChildAt(0).also { content.removeViewAt(0) }
+            } else {
+                content
+            }
+        val heading =
+            TextView(activity).apply {
+                text = title
+                textSize = 19f
+                typeface = NativeUi.editorialTypeface(true)
+                setTextColor(ink)
+                setPadding(0, 0, 0, NativeUi.dp(activity, 10))
+                if (android.os.Build.VERSION.SDK_INT >= 28) isAccessibilityHeading = true
+            }
+        scrollView =
+            ScrollView(activity).apply {
+                isFillViewport = false
+                addView(
+                    LinearLayout(activity).apply {
+                        orientation = LinearLayout.VERTICAL
+                        setPadding(
+                            NativeUi.dp(activity, 18),
+                            NativeUi.dp(activity, 14),
+                            NativeUi.dp(activity, 18),
+                            NativeUi.dp(activity, 10),
+                        )
+                        addView(heading)
+                        addView(innerContent)
+                    },
+                )
+            }
+        actions =
+            captions.associate { (which, caption) ->
+                val btn =
+                    if (which == BUTTON_POSITIVE && captions.size > 1) {
+                        NativeUi.primaryButton(activity, caption, ink, background) { dismiss() }
+                    } else {
+                        NativeUi.button(activity, caption, ink, background) { dismiss() }
+                    }
+                which to
+                    btn.apply {
+                        id =
+                            when (which) {
+                                BUTTON_POSITIVE -> android.R.id.button1
+                                BUTTON_NEGATIVE -> android.R.id.button2
+                                else -> android.R.id.button3
+                            }
+                    }
+            }
+        val footer =
+            NativeActionFlow(activity).apply {
+                setPadding(
+                    NativeUi.dp(activity, 14),
+                    NativeUi.dp(activity, 8),
+                    NativeUi.dp(activity, 14),
+                    NativeUi.dp(activity, 10),
+                )
+                actions.values.forEach { addView(it) }
+            }
+        setView(BoundedContent(activity, scrollView, footer))
+        setCanceledOnTouchOutside(cancelableOutside)
+        super.setOnDismissListener { dismissHooks.toList().forEach { it() } }
+    }
+
+    fun addOnDismiss(hook: () -> Unit) {
+        dismissHooks.add(hook)
+    }
+
+    override fun getButton(whichButton: Int): Button? = actions[whichButton] ?: super.getButton(whichButton)
+
+    fun disableContentButtons() {
+        fun walk(view: View) {
+            if (view is Button) view.isEnabled = false
+            if (view is ViewGroup) {
+                for (i in 0 until view.childCount) walk(view.getChildAt(i))
+            }
+        }
+        walk(scrollView)
+    }
+
+    fun pageScroll(direction: Int): Boolean {
+        if (currentFocus is android.widget.EditText) return false
+        return scrollView.pageScroll(direction)
+    }
+
+    override fun onStart() {
+        super.onStart()
+        window?.apply {
+            clearFlags(
+                android.view.WindowManager.LayoutParams.FLAG_NOT_FOCUSABLE or
+                    android.view.WindowManager.LayoutParams.FLAG_ALT_FOCUSABLE_IM,
+            )
+            setWindowAnimations(0)
+            setDimAmount(0f)
+            setBackgroundDrawable(
+                GradientDrawable().apply {
+                    setColor(NativeUi.surface(background))
+                    setStroke(NativeUi.dp(context, 2), ink)
+                    cornerRadius = 0f
+                },
+            )
+        }
+    }
+
+    private class BoundedContent(
+        context: Context,
+        private val body: View,
+        private val footer: View,
+    ) : ViewGroup(context) {
+        init {
+            addView(body)
+            addView(footer)
+        }
+
+        override fun onMeasure(
+            widthMeasureSpec: Int,
+            heightMeasureSpec: Int,
+        ) {
+            val width = resolveSize(resources.displayMetrics.widthPixels, widthMeasureSpec)
+            val limit =
+                if (MeasureSpec.getMode(heightMeasureSpec) == MeasureSpec.UNSPECIFIED) {
+                    (resources.displayMetrics.heightPixels * 0.8f).toInt()
+                } else {
+                    MeasureSpec.getSize(heightMeasureSpec)
+                }
+            val childWidth = MeasureSpec.makeMeasureSpec((width - paddingLeft - paddingRight).coerceAtLeast(0), MeasureSpec.EXACTLY)
+            val available = (limit - paddingTop - paddingBottom).coerceAtLeast(0)
+            footer.measure(childWidth, MeasureSpec.makeMeasureSpec(available, MeasureSpec.AT_MOST))
+            body.measure(childWidth, MeasureSpec.makeMeasureSpec((available - footer.measuredHeight).coerceAtLeast(0), MeasureSpec.AT_MOST))
+            setMeasuredDimension(
+                width,
+                resolveSize(body.measuredHeight + footer.measuredHeight + paddingTop + paddingBottom, heightMeasureSpec),
+            )
+        }
+
+        override fun onLayout(
+            changed: Boolean,
+            left: Int,
+            top: Int,
+            right: Int,
+            bottom: Int,
+        ) {
+            val footerTop = (height - paddingBottom - footer.measuredHeight).coerceAtLeast(paddingTop)
+            body.layout(paddingLeft, paddingTop, width - paddingRight, minOf(paddingTop + body.measuredHeight, footerTop))
+            footer.layout(paddingLeft, footerTop, width - paddingRight, footerTop + footer.measuredHeight)
         }
     }
 }

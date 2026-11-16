@@ -267,9 +267,12 @@ export function createFolderLibrary(deps: FolderLibraryDependencies) {
     }
   }
 
+  const isAndroidHost = () => typeof window !== 'undefined' && Boolean((window as { LightReadInsets?: unknown }).LightReadInsets)
+
   function foreground() {
     if (typeof document !== 'undefined' && document.visibilityState === 'hidden') return
-    if (Date.now() - lastForegroundScan < 15_000) return
+    const minInterval = isAndroidHost() ? FOREGROUND_INTERVAL : 15_000
+    if (Date.now() - lastForegroundScan < minInterval) return
     lastForegroundScan = Date.now()
     void requestScan(false)
   }
@@ -280,7 +283,9 @@ export function createFolderLibrary(deps: FolderLibraryDependencies) {
       unsubscribe = deps.subscribeMonitoredFolderChanges(() => { void rescan() })
       if (typeof document !== 'undefined') document.addEventListener('visibilitychange', foreground)
       if (typeof window !== 'undefined') window.addEventListener('focus', foreground)
-      timer = setInterval(foreground, FOREGROUND_INTERVAL)
+      if (!isAndroidHost()) {
+        timer = setInterval(foreground, FOREGROUND_INTERVAL)
+      }
       lastForegroundScan = Date.now()
       void rescan()
     }

@@ -20,7 +20,11 @@ internal class NativeClassificationEditor(
     private val request: (String, JSONObject, NativePageReply) -> Unit,
     private val onSaved: () -> Unit,
     private val onError: (String) -> Unit,
+    private val foreground: Int = android.graphics.Color.BLACK,
+    private val background: Int = android.graphics.Color.WHITE,
 ) {
+    private val fg = foreground
+    private val bg = background
     private var context = JSONObject(initial.toString())
     private var closed = false
     private var busy = false
@@ -28,16 +32,22 @@ internal class NativeClassificationEditor(
     private val form =
         LinearLayout(activity).apply {
             orientation = LinearLayout.VERTICAL
-            val padH = NativeUi.dp(activity, 20)
-            val padV = NativeUi.dp(activity, 12)
+            val padH = NativeUi.dp(activity, 8)
+            val padV = NativeUi.dp(activity, 6)
             setPadding(padH, padV, padH, padV)
         }
-    private val category = Spinner(activity)
-    private val categoryLock = CheckBox(activity).apply { text = "锁定类别" }
+    private val topicLockHost = LinearLayout(activity).apply { orientation = LinearLayout.VERTICAL }
+    private val category = Spinner(activity).apply { minimumHeight = NativeUi.dp(activity, 48) }
+    private val categoryLock = styledCheck("锁定类别")
     private val topics =
         EditText(activity).apply {
             hint = "主题（每行一个）"
             minLines = 3
+            minimumHeight = NativeUi.dp(activity, 48)
+            setTextColor(fg)
+            setHintTextColor(NativeUi.disabled(bg))
+            setBackground(NativeUi.shape(activity, bg))
+            setPadding(NativeUi.dp(activity, 10), NativeUi.dp(activity, 8), NativeUi.dp(activity, 10), NativeUi.dp(activity, 8))
             inputType =
                 InputType.TYPE_CLASS_TEXT or InputType.TYPE_TEXT_FLAG_MULTI_LINE
         }
@@ -45,43 +55,69 @@ internal class NativeClassificationEditor(
         EditText(activity).apply {
             hint = "特征（可留空）"
             isSingleLine = true
+            minimumHeight = NativeUi.dp(activity, 48)
+            setTextColor(fg)
+            setHintTextColor(NativeUi.disabled(bg))
+            setBackground(NativeUi.shape(activity, bg))
+            setPadding(NativeUi.dp(activity, 10), NativeUi.dp(activity, 8), NativeUi.dp(activity, 10), NativeUi.dp(activity, 8))
         }
-    private val featureLock = CheckBox(activity).apply { text = "锁定特征" }
-    private val lockedChanges = CheckBox(activity).apply { text = "明确允许修改/移除现有锁定项" }
+    private val featureLock = styledCheck("锁定特征")
+    private val lockedChanges = styledCheck("明确允许修改/移除现有锁定项")
     private val topicLocks = mutableMapOf<String, CheckBox>()
-    private val state = TextView(activity)
+    private val state =
+        TextView(activity).apply {
+            textSize = 13f
+            setTextColor(NativeUi.secondary(bg))
+            setPadding(0, NativeUi.dp(activity, 8), 0, NativeUi.dp(activity, 4))
+        }
     private var categories = JSONArray()
+
+    private fun styledCheck(caption: String) =
+        CheckBox(activity).apply {
+            text = caption
+            textSize = 14f
+            minimumHeight = NativeUi.dp(activity, 48)
+            setTextColor(fg)
+            buttonTintList = android.content.res.ColorStateList.valueOf(fg)
+        }
 
     fun show(autoGenerate: Boolean = false): AlertDialog {
         form.addView(
             TextView(activity).apply {
                 text = "类别、主题、特征分别编辑。生成只填草稿；保存才写入书库。"
-                textSize = 16f
+                textSize = 15f
+                setTextColor(fg)
+                setPadding(0, 0, 0, NativeUi.dp(activity, 8))
             },
         )
         form.addView(category)
         form.addView(categoryLock)
-        form.addView(topics)
-        form.addView(feature)
+        form.addView(topics, LinearLayout.LayoutParams(-1, -2).apply { bottomMargin = NativeUi.dp(activity, 8) })
+        form.addView(topicLockHost)
+        form.addView(feature, LinearLayout.LayoutParams(-1, -2).apply { topMargin = NativeUi.dp(activity, 4) })
         form.addView(featureLock)
         form.addView(lockedChanges)
         form.addView(state)
         populate()
         val window =
-            AlertDialog
-                .Builder(activity)
-                .setTitle("分类与标签")
-                .setView(ScrollView(activity).apply { addView(form) })
-                .setPositiveButton("保存", null)
-                .setNeutralButton("AI 补全草稿", null)
-                .setNegativeButton("关闭", null)
-                .create()
+            NativeEinkDialog(
+                activity,
+                "分类与标签",
+                form,
+                foreground,
+                background,
+                listOf(
+                    AlertDialog.BUTTON_POSITIVE to "保存",
+                    AlertDialog.BUTTON_NEUTRAL to "AI 补全草稿",
+                    AlertDialog.BUTTON_NEGATIVE to "关闭",
+                ),
+                cancelableOutside = false,
+                onDismissed = { closed = true },
+            )
         dialog = window
-        window.window?.setWindowAnimations(0)
-        window.setOnDismissListener { closed = true }
         window.setOnShowListener {
-            window.getButton(AlertDialog.BUTTON_POSITIVE).setOnClickListener { save() }
-            window.getButton(AlertDialog.BUTTON_NEUTRAL).setOnClickListener { generate() }
+            window.getButton(AlertDialog.BUTTON_POSITIVE)?.setOnClickListener { save() }
+            window.getButton(AlertDialog.BUTTON_NEUTRAL)?.setOnClickListener { generate() }
             if (autoGenerate) generate()
         }
         window.show()
@@ -93,7 +129,30 @@ internal class NativeClassificationEditor(
         categories = context.getJSONArray("categories")
         val labels = mutableListOf("不设置类别")
         for (i in 0 until categories.length()) labels.add(categories.getJSONObject(i).getString("label"))
-        category.adapter = ArrayAdapter(activity, android.R.layout.simple_spinner_dropdown_item, labels)
+        category.adapter =
+            object : ArrayAdapter<String>(activity, android.R.layout.simple_spinner_dropdown_item, labels) {
+                override fun getView(
+                    position: Int,
+                    convertView: android.view.View?,
+                    parent: android.view.ViewGroup,
+                ): android.view.View =
+                    (super.getView(position, convertView, parent) as TextView).apply {
+                        setTextColor(fg)
+                        setBackgroundColor(NativeUi.surface(bg))
+                        minimumHeight = NativeUi.dp(activity, 48)
+                    }
+
+                override fun getDropDownView(
+                    position: Int,
+                    convertView: android.view.View?,
+                    parent: android.view.ViewGroup,
+                ): android.view.View =
+                    (super.getDropDownView(position, convertView, parent) as TextView).apply {
+                        setTextColor(fg)
+                        setBackgroundColor(NativeUi.surface(bg))
+                        minimumHeight = NativeUi.dp(activity, 48)
+                    }
+            }
         val current = draft.optJSONObject("category")
         var selected = 0
         for (i in 0 until categories.length()) {
@@ -107,18 +166,17 @@ internal class NativeClassificationEditor(
         categoryLock.isChecked = current?.optBoolean("locked") == true
         val tags = draft.getJSONArray("topics")
         topics.setText((0 until tags.length()).joinToString("\n") { tags.getJSONObject(it).getString("value") })
-        topicLocks.values.forEach { form.removeView(it) }
+        topicLockHost.removeAllViews()
         topicLocks.clear()
         for (i in 0 until tags.length()) {
             val tag = tags.getJSONObject(i)
             val value = tag.getString("value")
             val control =
-                CheckBox(activity).apply {
-                    text = "锁定主题：$value"
+                styledCheck("锁定主题：$value").apply {
                     isChecked = tag.getBoolean("locked")
                 }
             topicLocks[value] = control
-            form.addView(control)
+            topicLockHost.addView(control)
         }
         val single = draft.optJSONObject("feature")
         feature.setText(single?.optString("value").orEmpty())

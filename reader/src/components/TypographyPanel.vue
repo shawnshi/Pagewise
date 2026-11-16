@@ -1326,35 +1326,36 @@ let systemFontsLoading = false
 /* 触屏交互 */
 @media (pointer: coarse) {
   .tp-close {
-    width: 44px;
-    height: 44px;
+    min-inline-size: 48px;
+    min-block-size: 48px;
     margin: -6px -8px -6px 0;
   }
   .seg button,
   .step-btn {
-    height: 44px;
+    min-block-size: 48px;
   }
   .step-btn {
-    width: 44px;
+    min-inline-size: 48px;
   }
   .set-row select.input {
-    height: 44px;
+    min-block-size: 48px;
   }
   .theme-btn {
-    width: 44px;
-    height: 44px;
+    min-inline-size: 48px;
+    min-block-size: 48px;
   }
   .tp-more summary {
-    min-height: 40px;
+    min-block-size: 48px;
   }
   .tp-actions .btn {
-    min-height: 40px;
+    min-block-size: 48px;
   }
 }
 
 /* 移动端抽屉 */
 @media (max-width: 600px) {
   .settings-pop {
+    overscroll-behavior: contain;
     top: auto;
     left: 0;
     right: 0;

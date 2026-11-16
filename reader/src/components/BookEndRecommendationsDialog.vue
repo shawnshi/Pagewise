@@ -54,8 +54,10 @@ defineExpose({requestClose,isWriting:()=>writing.value||panel.value?.isWriting()
  </Teleport>
 </template>
 <style scoped>
-.book-end-backdrop {position:fixed;inset:0;z-index:10000;background:rgb(0 0 0 / 35%);display:flex;align-items:center;justify-content:center;padding:12px;box-sizing:border-box;}
-.book-end-dialog {width:min(960px,100%);max-height:calc(100dvh - 24px);display:flex;flex-direction:column;min-height:0;border:2px solid currentColor;border-radius:6px;background:var(--bg,#fff);color:var(--text,#111);}
+.book-end-backdrop {position:fixed;inset:0;z-index:10000;background:rgb(0 0 0 / 35%);display:flex;align-items:center;justify-content:center;padding:12px;box-sizing:border-box;overscroll-behavior:contain;}
+:global(.pagewise-eink) .book-end-backdrop {background:var(--bg, #ffffff);}
+.book-end-dialog {width:min(960px,100%);max-height:calc(100dvh - 24px);display:flex;flex-direction:column;min-height:0;border:2px solid currentColor;border-radius:6px;background:var(--bg,#fff);color:var(--text,#111);overscroll-behavior:contain;}
+:global(.pagewise-eink) .book-end-dialog {border-radius:0;box-shadow:none;}
 header,footer {padding:16px;flex:none;}
 header {border-bottom:1px solid currentColor;}
 h2 {margin:0 0 8px;font-size:1.3rem;overflow-wrap:anywhere;}

@@ -4,24 +4,40 @@
 
 # 知页阅读器 · Pagewise
 
-面向文石（Onyx BOOX）Android 墨水屏设备的本地阅读应用。当前版本为 **2.5.0**，Android 版本码为 **2005000**。
+面向文石（Onyx BOOX）Android 墨水屏设备的本地阅读应用。当前版本为 **2.6.0**，Android 版本码为 **2006000**。
 
 项目专为 BOOX Android 设备设计与调优。浏览器仅用于前端组件开发与单元测试，不提供桌面、iOS 或 PWA 发行版。
 
 ## 当前状态
 
-2.5.0 已在 **Note X3 Pro（Android API 32, Carta 1200 墨水屏）** 上完成构建、签名校验、覆盖安装与实机界面核验：
+2.6.0 已在 **Note X3 Pro（Android API 32, Carta 1200 墨水屏）** 上完成构建、覆盖安装与设备端版本核验：
 
 | 变体 | 桌面显示名称 | 包名 | 下载 |
 |---|---|---|---|
-| Release | 知页 | `io.pagewise.reader` | [Pagewise-2.5.0-release.apk](https://github.com/shawnshi/Pagewise/releases/download/v2.5.0/Pagewise-2.5.0-release.apk) |
-| Debug | 知页 2.5.0 测试版 | `io.pagewise.reader.debug` | [Pagewise-2.5.0-debug.apk](https://github.com/shawnshi/Pagewise/releases/download/v2.5.0/Pagewise-2.5.0-debug.apk) |
+| Release | 知页 | `io.pagewise.reader` | [Pagewise-2.6.0-release.apk](https://github.com/shawnshi/Pagewise/releases/download/v2.6.0/Pagewise-2.6.0-release.apk) |
+| Debug | 知页 2.6.0 测试版 | `io.pagewise.reader.debug` | [Pagewise-2.6.0-debug.apk](https://github.com/shawnshi/Pagewise/releases/download/v2.6.0/Pagewise-2.6.0-debug.apk) |
 
 ### 校验信息 (SHA-256)
-- **Release APK (`Pagewise-2.5.0-release.apk`)**:
-  `01d5e9db4dcc241b6723bffeeb1826dfb9d5deea355f51dfdde9c40f0397e6ac`
-- **Debug APK (`Pagewise-2.5.0-debug.apk`)**:
-  `dd6c42d8c1eaf50843b241c067380e538beb9a1ea1de459287a542fd3dc410fb`
+- **Release APK (`Pagewise-2.6.0-release.apk`)**:
+  `c3a9fcb8ec6cbf88aff6ecf90d0921e2805584d4ea1762605ee03a956b157534`
+- **Debug APK (`Pagewise-2.6.0-debug.apk`)**:
+  `d0185a0e0527b55e44cf18b559f3a1aa6d0f0ed7199173adc182c71fac1da54`
+
+### 2.6.0 核心演进：全端 E-Ink 体验与硬件深度治理闭环
+
+本版在 2.5.0 基础上完成全量页面与 BOOX 硬件能力审计及工程闭环：
+
+1. **BOOX 硬件真值探测与 UI 线程零竞态桥接**：
+   - 收紧 `isBooxHardware()`、`readFrontLightSnapshot()` 与 `isEinkHardwareEnvironment()` 判定，杜绝非 BOOX 设备误开墨水屏或伪造冷暖双色温前光能力；
+   - `MainActivity.InsetsBridge` 改用 `CountDownLatch` 同步 UI 线程调度，并锁定 `ReaderWindowState` 状态机，消除弹窗关闭或息屏唤醒后的 `TouchHelper` 电磁笔失灵与跨线程竞态。
+2. **Native 壳层零残影弹窗与多视图加固**：
+   - 抽提零动画（`setWindowAnimations(0)`）、零暗化遮罩（`setDimAmount(0f)`）、锐利直角与 `2dp` 高对比边框的 `NativeEinkDialog` 与 `NativeStatsSettingsDialog`；
+   - 补齐统计热力图、设置预设模型弹窗 `subDialog`、手册 `NativeManualRenderer` GFM 表格与实时偏好失效通知，并放行原生弹窗 `DPAD_*` 焦点导航。
+3. **EPUB / PDF 阅读器与双页手写批注增强**：
+   - 引入 `EinkStreamAggregator` 聚合 AI 流式输出（单批 `>= 18` 字符或 `650ms` 节流并用 `Regal` 收尾）；解除音量键/方向键对 `scribbleEnabled` 的误绑定并在 TTS 播报期间自动让渡音量与媒体按键；
+   - `OnyxInkLayer` 支持 PDF 双页跨栏落笔、滚动/缩放几何重同步、全浮层手写屏蔽与 Wacom 侧键橡皮擦；补齐 PDF 底栏拖拽、宽屏分栏停靠、`?loc=` 深链、EPUB 同节脚注浮卡/媒体缩放灯箱及 `PW-02` 选区草稿先行保护。
+4. **外部打开存储根统一**：
+   - 对齐 `externalOpen.ts`（`BaseDirectory.AppData`）与 `OnyxSdkBridge.kt`（`context.dataDir`），消除外部 PDF/EPUB 导入路径分裂。
 
 ### 2.5.0 核心演进：全页面电纸书体验审计、原生多视图交互与 BOOX 硬件深度联动
 

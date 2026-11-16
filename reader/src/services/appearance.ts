@@ -52,7 +52,7 @@ export function useAppearance() {
     const pref = settings.appearance
     const eink = settings.readingMode.eink.enabled
     if (typeof document !== 'undefined') document.documentElement.classList.toggle('pagewise-eink', eink)
-    applyTheme(eink ? 'light' : pref === 'system' ? (systemPrefersDark() ? 'dark' : 'light') : pref)
+    applyTheme(pref === 'system' ? (systemPrefersDark() ? 'dark' : 'light') : pref)
   }
 
   watchEffect(sync)
