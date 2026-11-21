@@ -80,11 +80,13 @@ export interface PdfLayoutInput {
   portrait: boolean
   /** 幻灯片放映自己决定整页翻页, 不受竖屏锁定影响 */
   presentation?: boolean
+  /** 墨水屏模式下禁止竖屏强制切换为连续滚动，保留用户分页/裁边控制 */
+  einkActive?: boolean
 }
 
 /** PDF 的生效阅读方式与页布局 */
 export function effectivePdfLayout(input: PdfLayoutInput) {
-  const locked = input.portraitScroll && input.portrait && !input.presentation
+  const locked = input.portraitScroll && input.portrait && !input.presentation && !input.einkActive
   return {
     mode: locked ? 'scroll' as const : input.mode,
     spreadMode: locked ? 'single' as const : input.spreadMode,

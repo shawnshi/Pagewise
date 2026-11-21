@@ -18,6 +18,8 @@ export const NATIVE_SETTINGS_FIELDS: readonly NativeSettingField[] = Object.free
   field('readingMode.eink.enabled', '墨水屏模式', 'E-Ink mode', 'eink', 'boolean'),
   field('readingMode.eink.volumeKeysEnabled', '音量键翻页', 'Volume keys turn pages', 'eink', 'boolean'),
   field('readingMode.eink.gcIntervalPages', '全屏刷新间隔（页数）', 'Full-refresh interval (pages)', 'eink', 'number', { min: 0, max: 50, integer: true }),
+  field('readingMode.eink.tapZoneLayout', '触控翻页分区', 'Tap-zone layout', 'eink', 'enum', { options: ['standard', 'left', 'right'] }),
+  field('readingMode.eink.sleepCover', '休眠封面写入系统相册', 'Save sleep cover to Photos', 'eink', 'boolean'),
   field('pdf.renderer', 'PDF 渲染器', 'PDF renderer', 'reading', 'enum', { options: ['mupdf', 'pdfium'] }),
   field('reader.fontSize', '字号', 'Font size', 'reading', 'number', { min: 8, max: 64, integer: true }),
   field('reader.lineHeight', '行高', 'Line height', 'reading', 'number', { min: 1, max: 3 }),
@@ -58,6 +60,7 @@ export function nativeSettingOptionLabel(value: unknown, language: 'zh' | 'en', 
     single: ['单页', 'Single page'], facing: ['对页', 'Facing pages'], book: ['书籍对页', 'Book spread'],
     both: ['页码与百分比', 'Page and percentage'], page: ['页码', 'Page'], percent: ['百分比', 'Percentage'],
     edge: ['在线朗读', 'Online speech'], local: ['本地朗读', 'Local speech'], mupdf: ['MuPDF', 'MuPDF'], pdfium: ['PDFium', 'PDFium'],
+    standard: ['标准三区', 'Standard'], left: ['左手单手', 'Left-handed'], right: ['右手单手', 'Right-handed'],
   }
   const pair = options[String(value)]
   return pair ? pair[language === 'en' ? 1 : 0] : String(value)

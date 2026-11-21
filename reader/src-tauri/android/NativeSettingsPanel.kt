@@ -26,6 +26,7 @@ internal class NativeSettingsPanel(
     private val background: Int,
     private val changed: () -> Unit,
     private val repaint: () -> Unit,
+    private val onLocalChange: () -> Unit = changed,
 ) {
     private var closed = false
     private var busy = false
@@ -36,7 +37,10 @@ internal class NativeSettingsPanel(
     private val ui = NativeStatsSettingsUi(activity, ink, background)
     private var pageLayout: NativeSettingsPageLayout? = null
     private var pageUiState: NativeSettingsUiState? = null
+    private var frontLightStep = 10
     private val english = preferences.optString("language") == "en"
+    private var statusView: TextView? = null
+    private val groupBuilders = linkedMapOf<String, () -> Unit>()
 
     private fun tr(
         zh: String,
@@ -118,7 +122,9 @@ internal class NativeSettingsPanel(
             },
         )
         root.addView(recRow)
-        perform("settingsSchema", JSONObject(), { schema ->
+        val applySchema: (JSONObject) -> Unit = { schema ->
+            cachedSchemaJson = schema
+            groupBuilders.clear()
             root.removeAllViews()
             val recRowSettled =
                 LinearLayout(activity).apply {
@@ -134,30 +140,31 @@ internal class NativeSettingsPanel(
                 },
             )
             root.addView(recRowSettled)
+            val feedbackView =
+                text("").apply {
+                    visibility = View.GONE
+                    setPadding(ui.dp(4), ui.dp(2), ui.dp(4), ui.dp(6))
+                }
+            statusView = feedbackView
+            root.addView(feedbackView)
             providers = schema.getJSONArray("providers")
             val fields = schema.getJSONArray("fields")
-            for ((group, title) in listOf(
-                "general" to tr("通用", "General"),
-                "eink" to tr("墨水屏与硬件", "E-Ink & Hardware"),
-                "folder" to tr("监控文件夹", "Monitored folder"),
-                "library" to tr("藏书显示", "Library display"),
-                "reading" to tr("阅读与声音", "Reading and speech"),
-                "ai" to tr("AI 服务", "AI service"),
-                "network" to tr("网络", "Network"),
-                "data" to tr("数据", "Data"),
-                "about" to tr("关于", "About"),
-            )) {
-                if (group in listOf("folder", "data", "about") && !extraSections.containsKey(group)) continue
-                val section = ui.card()
-                root.addView(section)
-                onSection(group, section)
+            fun buildGroup(
+                group: String,
+                title: String,
+                section: LinearLayout,
+            ) {
+                section.removeAllViews()
                 section.addView(ui.heading(title))
-                extraSections[group]?.let { section.addView(it) }
-                if (extraSections.containsKey(group)) continue
+                extraSections[group]?.let { extra ->
+                    (extra.parent as? android.view.ViewGroup)?.removeView(extra)
+                    section.addView(extra)
+                }
+                if (extraSections.containsKey(group)) return
                 if (group == "eink") {
                     renderEinkSchemaFields(section, fields)
                     renderEinkHardwareSection(section, fields)
-                    continue
+                    return
                 }
                 if (group == "reading") {
                     val readerCfg = preferences.optJSONObject("reader") ?: JSONObject()
@@ -396,6 +403,7 @@ internal class NativeSettingsPanel(
                                     "仅恢复默认阅读排版；书籍、批注、密钥及单书/语言配置保留。",
                                     "Reset reader defaults only; books, notes, keys and book/language overrides remain.",
                                 ),
+                                tr("恢复默认排版", "Reset defaults"),
                             )
                         },
                     )
@@ -405,6 +413,7 @@ internal class NativeSettingsPanel(
                             confirmMutation(
                                 "settingsCalibrationClear",
                                 tr("清除手动尺标校准；不删除书籍或排版覆盖。", "Clear manual ruler calibration without deleting books or overrides."),
+                                tr("清除校准", "Clear calibration"),
                             )
                         },
                     )
@@ -417,10 +426,37 @@ internal class NativeSettingsPanel(
                 }
                 if (group == "network") section.addView(button(tr("测试代理连接", "Test proxy connection")) { probe("settingsTestProxy") })
             }
+            for ((group, title) in listOf(
+                "general" to tr("通用", "General"),
+                "eink" to tr("墨水屏与硬件", "E-Ink & Hardware"),
+                "folder" to tr("监控文件夹", "Monitored folder"),
+                "library" to tr("藏书显示", "Library display"),
+                "reading" to tr("阅读与声音", "Reading and speech"),
+                "ai" to tr("AI 服务", "AI service"),
+                "network" to tr("网络", "Network"),
+                "data" to tr("数据", "Data"),
+                "about" to tr("关于", "About"),
+            )) {
+                if (group in listOf("folder", "data", "about") && !extraSections.containsKey(group)) continue
+                val section = ui.card()
+                root.addView(section)
+                onSection(group, section)
+                groupBuilders[group] = { buildGroup(group, title, section) }
+                buildGroup(group, title, section)
+            }
             status.text = ""
-            root.addView(status)
+            feedbackView.text = ""
+            feedbackView.visibility = View.GONE
             repaint()
-        }, { code -> status.text = tr("设置定义加载失败：", "Schema load failed: ") + code })
+        }
+        val cached = cachedSchemaJson
+        if (cached != null) {
+            applySchema(cached)
+        } else {
+            perform("settingsSchema", JSONObject(), applySchema) { code ->
+                status.text = tr("设置定义加载失败：", "Schema load failed: ") + code
+            }
+        }
         return root
     }
 
@@ -447,18 +483,66 @@ internal class NativeSettingsPanel(
         return null
     }
 
+    private fun showInlineError(code: String) {
+        statusView?.apply {
+            text = tr("保存失败：", "Save failed: ") + code
+            visibility = View.VISIBLE
+        }
+    }
+
+    private fun setPreferenceAtPath(
+        path: JSONArray,
+        value: Any,
+    ) {
+        var cur = preferences
+        for (i in 0 until path.length() - 1) {
+            val seg = path.getString(i)
+            var child = cur.optJSONObject(seg)
+            if (child == null) {
+                child = JSONObject()
+                cur.put(seg, child)
+            }
+            cur = child
+        }
+        cur.put(path.getString(path.length() - 1), value)
+    }
+
+    private fun requiresFullReload(path: JSONArray): Boolean {
+        val joined = (0 until path.length()).joinToString(".") { path.getString(it) }
+        return joined in setOf("language", "theme", "appearance", "readingMode.eink.enabled", "reader.theme")
+    }
+
+    private fun commitSinglePatch(
+        group: String,
+        path: JSONArray,
+        afterValue: Any,
+    ) {
+        statusView?.apply {
+            text = ""
+            visibility = View.GONE
+        }
+        setPreferenceAtPath(path, afterValue)
+        if (requiresFullReload(path)) {
+            changed()
+            return
+        }
+        groupBuilders[group]?.invoke()
+        repaint()
+        onLocalChange()
+    }
+
     private fun renderEinkSchemaFields(
         section: LinearLayout,
         fields: JSONArray,
     ) {
-        for (pathDot in listOf("readingMode.eink.enabled", "readingMode.eink.volumeKeysEnabled")) {
+        for (pathDot in listOf("readingMode.eink.enabled", "readingMode.eink.volumeKeysEnabled", "readingMode.eink.sleepCover")) {
             val rule = findRule(fields, pathDot) ?: continue
             val path = rule.getJSONArray("path")
             val parent = parentOf(path)
             val key = path.getString(path.length() - 1)
-            val hasKey = parent?.has(key) == true
+            val hasKey = parent != null && parent.has(key)
             val defaultVal = pathDot == "readingMode.eink.volumeKeysEnabled"
-            val currentVal = if (hasKey) parent!!.optBoolean(key, defaultVal) else defaultVal
+            val currentVal = if (parent != null && parent.has(key)) parent.optBoolean(key, defaultVal) else defaultVal
             val label = rule.getString(if (english) "labelEn" else "label")
             val badgeState = if (currentVal) "on" else "off"
             val display = optionLabel(rule, currentVal)
@@ -472,11 +556,61 @@ internal class NativeSettingsPanel(
                                 JSONObject().put("present", hasKey).apply { if (hasKey) put("value", currentVal) },
                             ).put("after", JSONObject().put("present", true).put("value", !currentVal))
                     perform("settingsPatch", JSONObject().put("patches", JSONArray().put(patch)), {
-                        changed()
-                    }, {})
+                        commitSinglePatch("eink", path, !currentVal)
+                    }, { code -> showInlineError(code) })
                 }
             }
             section.addView(ui.settingRow(label, display, badgeState, toggleAction, toggleAction))
+            if (pathDot == "readingMode.eink.enabled") {
+                section.addView(
+                    ui.note(
+                        if (currentVal) {
+                            tr(
+                                "已启用墨水屏预设：纯黑白高对比、字重 +100、零动画翻页，可搭配前光或夜间模式使用。",
+                                "E-Ink preset active: monochrome high contrast, +100 font weight, zero-motion refresh.",
+                            )
+                        } else {
+                            tr(
+                                "开启后自动切换纯黑白高对比、字重 +100 与无动画刷新（退出时自动恢复原排版）。",
+                                "Automatically applies monochrome high contrast, +100 font weight, and zero-motion refresh.",
+                            )
+                        },
+                    ),
+                )
+            }
+        }
+        val tapRule = findRule(fields, "readingMode.eink.tapZoneLayout")
+        if (tapRule != null) {
+            val tapPath = tapRule.getJSONArray("path")
+            val tapParent = parentOf(tapPath)
+            val tapKey = tapPath.getString(tapPath.length() - 1)
+            val hasTap = tapParent != null && tapParent.has(tapKey)
+            val currentTap = if (tapParent != null && tapParent.has(tapKey)) tapParent.optString(tapKey, "standard") else "standard"
+            section.addView(ui.note(tapRule.getString(if (english) "labelEn" else "label")))
+            val tapRow = NativeActionFlow(activity)
+            val opts = tapRule.optJSONArray("options") ?: JSONArray().put("standard").put("left").put("right")
+            for (i in 0 until opts.length()) {
+                val optVal = opts.getString(i)
+                tapRow.addView(
+                    button(optionLabel(tapRule, optVal)) {
+                        if (!busy && !closed && optVal != currentTap) {
+                            val patch =
+                                JSONObject()
+                                    .put("path", tapPath)
+                                    .put(
+                                        "before",
+                                        JSONObject().put("present", hasTap).apply { if (hasTap) put("value", currentTap) },
+                                    ).put("after", JSONObject().put("present", true).put("value", optVal))
+                            perform("settingsPatch", JSONObject().put("patches", JSONArray().put(patch)), {
+                                commitSinglePatch("eink", tapPath, optVal)
+                            }, { code -> showInlineError(code) })
+                        }
+                    }.apply {
+                        NativeUi.styleTab(this, optVal == currentTap, ink, this@NativeSettingsPanel.background)
+                    },
+                )
+            }
+            section.addView(tapRow)
         }
     }
 
@@ -494,35 +628,33 @@ internal class NativeSettingsPanel(
         section.addView(ui.note(tr("EPD 全屏清残影间隔（页数）", "EPD full-refresh (GC16) interval (pages)")))
         val gcRow = NativeActionFlow(activity)
         for (pages in listOf(0, 5, 10, 15, 20, 30)) {
-            val caption = if (pages == 0) tr("跟随系统", "System") else "$pages" + tr(" 页", " p")
+            val caption = if (pages == 0) tr("关闭（跟随系统）", "Off (System)") else "$pages" + tr(" 页", " p")
             gcRow.addView(
                 button(caption) {
-                    bridge?.configureGcInterval(pages)
                     if (gcRule != null) {
-                        val hasGc = einkObj?.has("gcIntervalPages") == true
+                        val gcPath = gcRule.getJSONArray("path")
+                        val hasGc = einkObj != null && einkObj.has("gcIntervalPages")
+                        val prevGc = if (einkObj != null && hasGc) einkObj.getInt("gcIntervalPages") else 0
                         val patch =
                             JSONObject()
-                                .put("path", gcRule.getJSONArray("path"))
+                                .put("path", gcPath)
                                 .put(
                                     "before",
                                     JSONObject().put("present", hasGc).apply {
-                                        if (hasGc) put("value", einkObj!!.getInt("gcIntervalPages"))
+                                        if (hasGc) put("value", prevGc)
                                     },
                                 ).put("after", JSONObject().put("present", true).put("value", pages))
                         perform("settingsPatch", JSONObject().put("patches", JSONArray().put(patch)), {
-                            changed()
-                        }, {
-                            section.removeAllViews()
-                            section.addView(ui.heading(tr("墨水屏与硬件", "E-Ink & Hardware")))
-                            renderEinkSchemaFields(section, fields)
-                            renderEinkHardwareSection(section, fields)
+                            bridge?.configureGcInterval(pages)
+                            commitSinglePatch("eink", gcPath, pages)
+                        }, { code ->
+                            showInlineError(code)
+                            groupBuilders["eink"]?.invoke()
                             repaint()
                         })
                     } else {
-                        section.removeAllViews()
-                        section.addView(ui.heading(tr("墨水屏与硬件", "E-Ink & Hardware")))
-                        renderEinkSchemaFields(section, fields)
-                        renderEinkHardwareSection(section, fields)
+                        bridge?.configureGcInterval(pages)
+                        groupBuilders["eink"]?.invoke()
                         repaint()
                     }
                 }.apply {
@@ -541,10 +673,17 @@ internal class NativeSettingsPanel(
         )
         if (fl.optBoolean("supported", false)) {
             val flEnabled = fl.optBoolean("enabled", true)
+            val ctmSupported = fl.optBoolean("ctmSupported", true)
             val cold = fl.optInt("cold", 45)
             val warm = fl.optInt("warm", 35)
+            val summary =
+                if (ctmSupported) {
+                    tr("前光与双色温控制（冷光 $cold% · 暖光 $warm%）", "Frontlight & CTM (Cold $cold% · Warm $warm%)")
+                } else {
+                    tr("前光亮度控制（冷光 $cold%）", "Frontlight Brightness (Cold $cold%)")
+                }
             section.addView(
-                ui.note(tr("前光与双色温控制（冷光 $cold% · 暖光 $warm%）", "Frontlight & CTM (Cold $cold% · Warm $warm%)")).apply {
+                ui.note(summary).apply {
                     fontFeatureSettings = "tnum"
                 },
             )
@@ -562,28 +701,47 @@ internal class NativeSettingsPanel(
                     refreshEinkSection()
                 }.apply { NativeUi.styleTab(this, flEnabled, ink, this@NativeSettingsPanel.background) },
             )
-            presetRow.addView(
-                button(tr("日间清透", "Daylight")) {
-                    bridge?.setFrontLightEnabled(true)
-                    bridge?.setColdLightPercent(55)
-                    bridge?.setWarmLightPercent(15)
-                    refreshEinkSection()
-                },
-            )
-            presetRow.addView(
-                button(tr("夜间暖光", "Night Warm")) {
-                    bridge?.setFrontLightEnabled(true)
-                    bridge?.setColdLightPercent(15)
-                    bridge?.setWarmLightPercent(75)
-                    refreshEinkSection()
-                },
-            )
+            if (ctmSupported) {
+                presetRow.addView(
+                    button(tr("日间清透", "Daylight")) {
+                        bridge?.setFrontLightEnabled(true)
+                        bridge?.setColdLightPercent(55)
+                        bridge?.setWarmLightPercent(15)
+                        refreshEinkSection()
+                    },
+                )
+                presetRow.addView(
+                    button(tr("夜间暖光", "Night Warm")) {
+                        bridge?.setFrontLightEnabled(true)
+                        bridge?.setColdLightPercent(15)
+                        bridge?.setWarmLightPercent(75)
+                        refreshEinkSection()
+                    },
+                )
+            }
             section.addView(presetRow)
+            val stepSelectRow = NativeActionFlow(activity).apply { setPadding(0, ui.dp(4), 0, ui.dp(2)) }
+            stepSelectRow.addView(
+                ui.note(tr("调光步长：", "Step: ")).apply {
+                    setPadding(0, ui.dp(8), ui.dp(6), ui.dp(8))
+                },
+            )
+            for (s in listOf(1, 5, 10)) {
+                stepSelectRow.addView(
+                    button("$s%") {
+                        frontLightStep = s
+                        refreshEinkSection()
+                    }.apply {
+                        fontFeatureSettings = "tnum"
+                        NativeUi.styleTab(this, frontLightStep == s, ink, this@NativeSettingsPanel.background)
+                    },
+                )
+            }
+            section.addView(stepSelectRow)
             val coldRow = NativeActionFlow(activity).apply { setPadding(0, ui.dp(6), 0, ui.dp(4)) }
             coldRow.addView(
-                button(tr("冷光 −10%", "Cold −10%")) {
-                    bridge?.setFrontLightEnabled(true)
-                    bridge?.setColdLightPercent((cold - 10).coerceIn(0, 100))
+                button(tr("冷光 −$frontLightStep%", "Cold −$frontLightStep%")) {
+                    bridge?.setColdLightPercent((cold - frontLightStep).coerceIn(0, 100))
                     refreshEinkSection()
                 }.apply { isEnabled = cold > 0 },
             )
@@ -599,40 +757,41 @@ internal class NativeSettingsPanel(
                 },
             )
             coldRow.addView(
-                button(tr("冷光 +10%", "Cold +10%")) {
+                button(tr("冷光 +$frontLightStep%", "Cold +$frontLightStep%")) {
                     bridge?.setFrontLightEnabled(true)
-                    bridge?.setColdLightPercent((cold + 10).coerceIn(0, 100))
+                    bridge?.setColdLightPercent((cold + frontLightStep).coerceIn(0, 100))
                     refreshEinkSection()
                 }.apply { isEnabled = cold < 100 },
             )
             section.addView(coldRow)
-            val warmRow = NativeActionFlow(activity).apply { setPadding(0, ui.dp(2), 0, ui.dp(4)) }
-            warmRow.addView(
-                button(tr("暖光 −10%", "Warm −10%")) {
-                    bridge?.setFrontLightEnabled(true)
-                    bridge?.setWarmLightPercent((warm - 10).coerceIn(0, 100))
-                    refreshEinkSection()
-                }.apply { isEnabled = warm > 0 },
-            )
-            warmRow.addView(
-                TextView(activity).apply {
-                    text = tr("暖光 $warm%", "Warm $warm%")
-                    textSize = 13f
-                    typeface = NativeUi.monoTypeface(true)
-                    fontFeatureSettings = "tnum"
-                    setTextColor(ui.primary)
-                    gravity = android.view.Gravity.CENTER_VERTICAL
-                    setPadding(ui.dp(6), ui.dp(10), ui.dp(6), ui.dp(10))
-                },
-            )
-            warmRow.addView(
-                button(tr("暖光 +10%", "Warm +10%")) {
-                    bridge?.setFrontLightEnabled(true)
-                    bridge?.setWarmLightPercent((warm + 10).coerceIn(0, 100))
-                    refreshEinkSection()
-                }.apply { isEnabled = warm < 100 },
-            )
-            section.addView(warmRow)
+            if (ctmSupported) {
+                val warmRow = NativeActionFlow(activity).apply { setPadding(0, ui.dp(2), 0, ui.dp(4)) }
+                warmRow.addView(
+                    button(tr("暖光 −$frontLightStep%", "Warm −$frontLightStep%")) {
+                        bridge?.setWarmLightPercent((warm - frontLightStep).coerceIn(0, 100))
+                        refreshEinkSection()
+                    }.apply { isEnabled = warm > 0 },
+                )
+                warmRow.addView(
+                    TextView(activity).apply {
+                        text = tr("暖光 $warm%", "Warm $warm%")
+                        textSize = 13f
+                        typeface = NativeUi.monoTypeface(true)
+                        fontFeatureSettings = "tnum"
+                        setTextColor(ui.primary)
+                        gravity = android.view.Gravity.CENTER_VERTICAL
+                        setPadding(ui.dp(6), ui.dp(10), ui.dp(6), ui.dp(10))
+                    },
+                )
+                warmRow.addView(
+                    button(tr("暖光 +$frontLightStep%", "Warm +$frontLightStep%")) {
+                        bridge?.setFrontLightEnabled(true)
+                        bridge?.setWarmLightPercent((warm + frontLightStep).coerceIn(0, 100))
+                        refreshEinkSection()
+                    }.apply { isEnabled = warm < 100 },
+                )
+                section.addView(warmRow)
+            }
         }
     }
 
@@ -669,12 +828,14 @@ internal class NativeSettingsPanel(
         val initialPosition = state.positions[state.group] ?: 0
         var restoring = true
         val contentScroll =
-            ScrollView(activity).apply {
-                isFillViewport = false
-                addView(content)
-                setOnScrollChangeListener { _, _, y, _, _ -> if (!restoring) state.positions[state.group] = y }
-            }
-        val navScroll = ScrollView(activity).apply { addView(nav) }
+            NativeUi.configureEinkScroll(
+                ScrollView(activity).apply {
+                    isFillViewport = false
+                    addView(content)
+                    setOnScrollChangeListener { _, _, y, _, _ -> if (!restoring) state.positions[state.group] = y }
+                },
+            )
+        val navScroll = NativeUi.configureEinkScroll(ScrollView(activity).apply { addView(nav) })
         val layout = NativeSettingsPageLayout(activity, navScroll, contentScroll).apply { directory = state.directory }
         pageLayout = layout
         pageUiState = state
@@ -764,10 +925,11 @@ internal class NativeSettingsPanel(
     private fun modal(
         title: String,
         content: View,
+        confirmLabel: String = tr("保存", "Save"),
         save: (AlertDialog) -> Unit,
     ): AlertDialog {
         dialog?.dismiss()
-        val alert: AlertDialog =
+        val alert =
             NativeStatsSettingsDialog(
                 activity,
                 title,
@@ -776,16 +938,16 @@ internal class NativeSettingsPanel(
                 listOf(
                     AlertDialog.BUTTON_NEGATIVE to tr("关闭（不撤销已提交操作）", "Close (does not cancel submitted work)"),
                     AlertDialog.BUTTON_NEUTRAL to tr("核对恢复", "Recovery"),
-                    AlertDialog.BUTTON_POSITIVE to tr("保存", "Save"),
+                    AlertDialog.BUTTON_POSITIVE to confirmLabel,
                 ),
             )
         dialog = alert
         alert.setCanceledOnTouchOutside(false)
-        alert.setOnDismissListener { if (dialog === alert) dialog = null }
+        alert.addOnDismiss { if (dialog === alert) dialog = null }
         alert.setOnShowListener {
-            alert.getButton(AlertDialog.BUTTON_NEGATIVE).setOnClickListener { if (!busy) alert.dismiss() }
-            alert.getButton(AlertDialog.BUTTON_POSITIVE).setOnClickListener { if (!busy) save(alert) }
-            alert.getButton(AlertDialog.BUTTON_NEUTRAL).setOnClickListener { if (!busy) recovery() }
+            alert.getButton(AlertDialog.BUTTON_NEGATIVE)?.setOnClickListener { if (!busy) alert.dismiss() }
+            alert.getButton(AlertDialog.BUTTON_POSITIVE)?.setOnClickListener { if (!busy) save(alert) }
+            alert.getButton(AlertDialog.BUTTON_NEUTRAL)?.setOnClickListener { if (!busy) recovery() }
         }
         alert.show()
         return alert
@@ -817,7 +979,7 @@ internal class NativeSettingsPanel(
         recoveryParent = parent
         dialog = alert
         alert.setCanceledOnTouchOutside(false)
-        alert.setOnDismissListener {
+        alert.addOnDismiss {
             if (dialog === alert) dialog = if (!closed && parent?.isShowing == true) parent else null
             recoveryParent = null
         }
@@ -912,13 +1074,14 @@ internal class NativeSettingsPanel(
         afterValue: Any,
     ) {
         val path = rule.getJSONArray("path")
+        val group = rule.optString("group")
         val patch =
             JSONObject()
                 .put("path", path)
                 .put("before", JSONObject().put("present", true).put("value", before))
                 .put("after", JSONObject().put("present", true).put("value", afterValue))
         perform("settingsPatch", JSONObject().put("patches", JSONArray().put(patch)), {
-            changed()
+            commitSinglePatch(group, path, afterValue)
         }, {
             edit(rule, before)
         })
@@ -931,13 +1094,14 @@ internal class NativeSettingsPanel(
         val currentBool = before == true || before.toString() == "true"
         val nextBool = !currentBool
         val path = rule.getJSONArray("path")
+        val group = rule.optString("group")
         val patch =
             JSONObject()
                 .put("path", path)
                 .put("before", JSONObject().put("present", true).put("value", currentBool))
                 .put("after", JSONObject().put("present", true).put("value", nextBool))
         perform("settingsPatch", JSONObject().put("patches", JSONArray().put(patch)), {
-            changed()
+            commitSinglePatch(group, path, nextBool)
         }, {
             edit(rule, before)
         })
@@ -1025,12 +1189,34 @@ internal class NativeSettingsPanel(
                                 listOf(AlertDialog.BUTTON_NEGATIVE to tr("取消", "Cancel")),
                             ).also { dlg ->
                                 subDialog = dlg
-                                dlg.setOnDismissListener { if (subDialog === dlg) subDialog = null }
+                                dlg.addOnDismiss { if (subDialog === dlg) subDialog = null }
                                 dlg.show()
                             }
                     },
                 )
             }
+        }
+        if (path.length() == 2 && path.getString(0) == "reader" && path.getString(1) == "fontFamily") {
+            val presetRow = NativeActionFlow(activity)
+            for ((fontVal, fontCap) in listOf(
+                "auto" to tr("自动", "Auto"),
+                "songti" to tr("宋体 / 衬线", "Songti / Serif"),
+                "sans" to tr("无衬线黑体", "Sans-serif"),
+                "mono" to tr("等宽体", "Monospace"),
+            )) {
+                presetRow.addView(
+                    button(fontCap) { input.setText(fontVal) },
+                )
+            }
+            form.addView(presetRow)
+        } else if (path.length() == 1 && (path.getString(0) == "edgeVoice" || path.getString(0) == "ttsVoice")) {
+            val presetRow = NativeActionFlow(activity)
+            for (voiceId in listOf("zh-TW-HsiaoChenNeural", "zh-CN-XiaoxiaoNeural", "zh-CN-YunxiNeural", "en-US-JennyNeural")) {
+                presetRow.addView(
+                    button(voiceId) { input.setText(voiceId) },
+                )
+            }
+            form.addView(presetRow)
         }
         val options = if (rule.getString("kind") == "boolean") JSONArray().put(false).put(true) else rule.optJSONArray("options")
         if (options != null) {
@@ -1101,7 +1287,7 @@ internal class NativeSettingsPanel(
                     ).put("after", JSONObject().put("present", true).put("value", value))
             perform("settingsPatch", JSONObject().put("patches", JSONArray().put(patch)), {
                 alert.dismiss()
-                changed()
+                commitSinglePatch(rule.optString("group"), path, value)
             }, { code ->
                 error.text =
                     code
@@ -1190,9 +1376,17 @@ internal class NativeSettingsPanel(
                 error.text = "invalid_provider"
                 return@modal
             }
-            perform("selectAiProvider", JSONObject().put("provider", providers.getJSONObject(selected).getString("id")), {
+            val nextProvider = providers.getJSONObject(selected).getString("id")
+            perform("selectAiProvider", JSONObject().put("provider", nextProvider), {
                 alert.dismiss()
-                changed()
+                preferences.put("aiProvider", nextProvider)
+                if (groupBuilders.containsKey("ai")) {
+                    groupBuilders["ai"]?.invoke()
+                    repaint()
+                    onLocalChange()
+                } else {
+                    changed()
+                }
             }, { code ->
                 error.text =
                     code
@@ -1203,12 +1397,13 @@ internal class NativeSettingsPanel(
     private fun confirmMutation(
         action: String,
         explanation: String,
+        confirmLabel: String = tr("确认", "Confirm"),
     ) {
         val form = column()
         val error = text("")
         form.addView(text(explanation))
         form.addView(error)
-        modal(tr("确认", "Confirm"), form) { alert ->
+        modal(confirmLabel, form, confirmLabel = confirmLabel) { alert ->
             perform(action, JSONObject().put("confirm", true), {
                 alert.dismiss()
                 changed()
@@ -1386,5 +1581,10 @@ internal class NativeSettingsPanel(
         parent?.dismiss()
         recoveryParent = null
         dialog = null // An accepted mutation continues in its existing owner.
+    }
+
+    companion object {
+        @Volatile
+        private var cachedSchemaJson: JSONObject? = null
     }
 }

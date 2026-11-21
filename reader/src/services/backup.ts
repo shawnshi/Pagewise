@@ -20,6 +20,7 @@ import { importReadingLogRows, listReadingLog, normalizeRow, rowKey, type Readin
 import { normalizeReadingStatus } from './readingStatus.ts'
 
 import { parseClassification, classificationTags } from './bookClassification'
+import { exportAllInkStrokes, importAllInkStrokes, type OnyxInkBackupEntry } from './onyxScribble.ts'
 
 const LEGACY_JSON_FORMAT = 'org.lightread.library'
 /** 每日阅读记录, 放在包根目录 (OKF 解析只看 .md, 不受影响); 旧包没有此文件 */
@@ -29,6 +30,8 @@ const LEGACY_JSON_VERSION = 2
 /** 书单 (含待找条目), 放在包根目录; 旧包没有此文件. 见 docs/booklists.md */
 const BOOKLISTS_PATH = 'booklists.json'
 const BOOKLISTS_FORMAT = 'org.lightread.booklists'
+const INK_STROKES_PATH = 'ink-strokes.json'
+const INK_STROKES_FORMAT = 'org.pagewise.ink-strokes'
 export const LIBRARY_ARCHIVE_EXTENSION = '.okf.zip'
 export const OKF_VERSION = '0.1'
 export const LIBRARY_OKF_PROFILE =
@@ -891,6 +894,10 @@ export async function exportBackupToSink(write: ArchiveChunkSink, onProgress?: (
     zip.terminate()
     throw new Error(`Booklists export failed; archive is incomplete: ${err instanceof Error ? err.message : String(err)}`, { cause: err })
   }
+  const inkEntries = await exportAllInkStrokes()
+  if (inkEntries.length) {
+    await addEntry(INK_STROKES_PATH, strToU8(JSON.stringify({ format: INK_STROKES_FORMAT, version: 1, entries: inkEntries })))
+  }
   zip.end()
   if (zipFailure) throw zipFailure
   if (!finalChunkSeen) throw new Error('Archive compression did not finish')
@@ -961,6 +968,7 @@ export async function importBackup(
 
   const logRows = entries[READING_LOG_PATH] ? parseReadingLog(entries[READING_LOG_PATH]) : undefined
   const booklists = entries[BOOKLISTS_PATH] ? parseBooklists(entries[BOOKLISTS_PATH]) : undefined
+  const inkEntries = entries[INK_STROKES_PATH] ? parseInkStrokes(entries[INK_STROKES_PATH]) : undefined
   const archiveIds = new Set<string>()
   for (const book of manifest.books) {
     if (archiveIds.has(book.meta.id)) archiveError(`duplicate book id: ${book.meta.id}`)
@@ -1066,6 +1074,11 @@ export async function importBackup(
     operation = 'restore reading log'
     progress.readingLog = await importReadingLog(logRows, idMap)
   }
+  if (inkEntries) {
+    checkArchiveAbort(signal)
+    operation = 'restore ink strokes'
+    await importAllInkStrokes(inkEntries, idMap)
+  }
   return progress
   } catch (cause) {
     throw new ArchiveRestoreError({ ...progress }, operation, cause)
@@ -1122,6 +1135,48 @@ async function importReadingLog(rows: ReadingLogRow[], idMap: Map<string, string
     byKey.set(row.key, prev ? { ...prev, seconds: prev.seconds + row.seconds } : row)
   }
   return importReadingLogRows([...byKey.values()])
+}
+
+function parseInkStrokes(bytes: Uint8Array): OnyxInkBackupEntry[] {
+  const parsed = parseOptionalJson(bytes, INK_STROKES_PATH)
+  if (!isRecord(parsed) || parsed.format !== INK_STROKES_FORMAT || parsed.version !== 1 || !Array.isArray(parsed.entries)) {
+    archiveError('ink-strokes.json format/version/entries invalid')
+  }
+  return parsed.entries.map((raw, index) => {
+    if (
+      !isRecord(raw)
+      || typeof raw.bookId !== 'string'
+      || !raw.bookId.trim()
+      || typeof raw.pageKey !== 'string'
+      || !raw.pageKey.trim()
+      || !Array.isArray(raw.strokes)
+      || !raw.strokes.every(stroke =>
+        isRecord(stroke)
+        && typeof stroke.id === 'string'
+        && stroke.id.length > 0
+        && (stroke.tool === 'fountain' || stroke.tool === 'pencil' || stroke.tool === 'marker')
+        && typeof stroke.width === 'number'
+        && Number.isFinite(stroke.width)
+        && stroke.width > 0
+        && typeof stroke.createdAt === 'number'
+        && Number.isFinite(stroke.createdAt)
+        && Array.isArray(stroke.points)
+        && stroke.points.length > 0
+        && stroke.points.every(pt =>
+          isRecord(pt)
+          && typeof pt.x === 'number'
+          && Number.isFinite(pt.x)
+          && typeof pt.y === 'number'
+          && Number.isFinite(pt.y)
+          && typeof pt.p === 'number'
+          && Number.isFinite(pt.p),
+        ),
+      )
+    ) {
+      archiveError(`ink-strokes.json entry ${index} invalid`)
+    }
+    return raw as unknown as OnyxInkBackupEntry
+  })
 }
 
 /**

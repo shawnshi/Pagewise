@@ -3,7 +3,7 @@ import { computed, inject, nextTick, onBeforeUnmount, onMounted, reactive, ref, 
 import { onBeforeRouteLeave, useRoute, useRouter } from 'vue-router'
 import { blocksReaderTurn, createReaderContext, createReaderSession, isReaderInteractive, readerBackTarget } from '../services/readerSession'
 import { getStorage, type AnnotationRec, type BookMeta } from '../storage'
-import { useSettings, resolveEffectiveTypography, prepareTypographyCommit } from '../stores/settings'
+import { useSettings, resolveEffectiveTypography, prepareTypographyCommit, isEinkHardwareEnvironment } from '../stores/settings'
 import { useLibrary } from '../stores/library'
 import { isSupportedBookFormat, isTextLike } from '../services/format'
 import { convertToEpub, TEXT_EPUB_LAYOUT } from '../services/textToEpub'
@@ -98,7 +98,8 @@ const effectiveTypography = computed(() => {
     languagesMap: candidate.typographyLanguages, booksMap: candidate.typographyBooks,
     profile: context.profile, protectedLayout: !!context.protectedLayout,
     calibration: settings.typographyCalibration, dpr: typographyDpr.value, textScale: typographyTextScale.value,
-    viewportWidth: Math.min(typographyViewport.value.width, window.screen.width || Infinity, window.screen.height || Infinity) })
+    viewportWidth: Math.min(typographyViewport.value.width, window.screen.width || Infinity, window.screen.height || Infinity),
+    einkDevice: lateModes.value?.einkDevice ?? (isEinkHardwareEnvironment() || !!settings.readingMode.eink.enabled) })
   if (resolved.source === 'base' && lateModes.value?.largeTextOn.value) {
     return { ...resolved, fontSize: settings.reader.fontSize, lineHeight: settings.reader.lineHeight }
   }
@@ -166,8 +167,10 @@ let barsTimer: ReturnType<typeof setTimeout> | undefined
 const epubFootnote = ref<{ text: string; href: string } | null>(null)
 const epubMediaModal = ref<{ kind: 'image' | 'table'; src?: string; alt?: string; html?: string; zoom: number } | null>(null)
 
-const anyOverlayOpen = () =>
-  panel.value !== 'none' || settingsOpen.value || ttsPanel.value || modes.panelOpen.value || !!activeAnnotation.value || jumpOpen.value || dj.overlayOpen.value || readerMoreOpen.value || endRecommendationsOpen.value || !!epubFootnote.value || !!epubMediaModal.value
+const anyOverlayOpen = (blockingOnly = false) => {
+  const dockedSidePanel = blockingOnly && panel.value !== 'none' && (container.value?.clientWidth ?? 9999) >= 680
+  return (panel.value !== 'none' && !dockedSidePanel) || settingsOpen.value || ttsPanel.value || modes.panelOpen.value || !!activeAnnotation.value || jumpOpen.value || dj.overlayOpen.value || readerMoreOpen.value || endRecommendationsOpen.value || !!epubFootnote.value || !!epubMediaModal.value
+}
 
 /** 显示工具栏; autoHide 时若几秒内无交互且无面板打开则自动隐去 */
 function showBars(autoHide = false) {
@@ -286,7 +289,26 @@ const bookmarks = computed(() => annotations.value.filter(a => a.kind === 'bookm
 
 // 书签
 const currentCfi = ref('')
-const isBookmarked = computed(() => bookmarks.value.some(b => b.cfi === currentCfi.value))
+function isBookmarkAtCurrentPage(bmCfi: string): boolean {
+  if (!bmCfi || !currentCfi.value) return false
+  if (bmCfi === currentCfi.value) return true
+  const visible = view?.lastLocation?.range as Range | undefined
+  if (!visible) return false
+  try {
+    const resolved = view?.resolveNavigation?.(bmCfi)
+    const shown = resolved ? loadedContent(resolved.index) : null
+    if (!shown || shown.doc !== visible.startContainer.ownerDocument) return false
+    const targetRange = typeof resolved.anchor === 'function' ? resolved.anchor(shown.doc) : null
+    if (!isRange(targetRange)) return false
+    const visEnd = visible.cloneRange()
+    visEnd.collapse(false)
+    return targetRange.compareBoundaryPoints(Range.START_TO_START, visible) >= 0
+      && targetRange.compareBoundaryPoints(Range.START_TO_START, visEnd) <= 0
+  } catch {
+    return false
+  }
+}
+const isBookmarked = computed(() => bookmarks.value.some(b => isBookmarkAtCurrentPage(b.cfi)))
 
 // 听书
 const ttsPanel = primaryToggle('tts')
@@ -1142,13 +1164,13 @@ function interruptTTSForReposition() {
 
 let pageTurning = false
 async function turnPage(dir: 'left' | 'right') {
-  if (pageTurning || blocksReaderTurn({ panel: anyOverlayOpen(), selection: !!selection.value, navigating: readerSession.navigating })) return
+  if (pageTurning || blocksReaderTurn({ panel: anyOverlayOpen(true), selection: !!selection.value, navigating: readerSession.navigating })) return
+  clearFlashMark()
   interruptTTSForReposition()
   hideBars()
   pageTurning = true
   try {
     await (dir === 'left' ? view?.goLeft() : view?.goRight())
-    onyxEpd.notifyPageTurn()
   }
   catch { toast(t('reader.cantGoto'), 'error') }
   finally { pageTurning = false; consumeEndRecommendationOffer() }
@@ -1202,7 +1224,7 @@ let unbindHardwareKeys: (() => void) | null = null
 onMounted(() => {
   nativeBackHost.__pagewiseReaderBack = handleNativeReaderBack
   unbindHardwareKeys = onyxNativeAccelerator.bindHardwarePageTurn(dir => {
-    if (anyOverlayOpen() || selection.value) return
+    if (anyOverlayOpen(true) || selection.value) return
     turnPage(dir === 'next' ? 'right' : 'left')
   })
 })
@@ -1805,6 +1827,7 @@ function highlightListen(range: Range, scroll: boolean | 'force' = true) {
 // ---- 阅读焦点 (services/readingFocus.ts): 程序把视图移到一段文字时, 落在可读区 38% 的焦点线,
 // 不贴顶边、不钻到顶栏下面; 跟随时在 25%–65% 舒适区里就不动。只管滚动模式, 翻页模式照旧翻到目标所在页 ----
 const prefersReducedMotion = () => {
+  if (lateModes.value?.einkActive.value || lateModes.value?.einkDevice || settings.readingMode.eink.enabled) return true
   try { return !!window.matchMedia?.('(prefers-reduced-motion: reduce)').matches } catch { return false }
 }
 /** 滚动模式且渲染器支持阅读焦点 (fork 的 rangeBox / scrollToRange) */
@@ -2582,6 +2605,14 @@ function onSectionLoad(e: CustomEvent) {
       turnPage(dy < 0 ? 'right' : 'left')
       return
     }
+    if (effectiveFlow.value === 'paginated' && Math.abs(dx) >= 60 && Math.abs(dx) >= Math.abs(dy) * 1.5) {
+      const sel = doc.getSelection()
+      if (sel && !sel.isCollapsed) return
+      e.stopImmediatePropagation()
+      suppressClickUntil = Date.now() + 700
+      turnPage(dx < 0 ? 'right' : 'left')
+      return
+    }
     if (st.crossed) return
     // 滚动模式也能「翻页」: 明显的左右横滑按一屏滚动 (左滑下一屏 / 右滑上一屏)
     if (effectiveFlow.value === 'scrolled' && Math.abs(dx) >= 60 && Math.abs(dx) >= Math.abs(dy) * 1.5) {
@@ -2769,6 +2800,7 @@ function jumpToFootnoteSource() {
 }
 
 function handleEpubRichMediaTap(target: Element | null | undefined): boolean {
+  if (view?.isFixedLayout || fixedLayout.value) return false
   if (!target || target.closest?.('a[href]')) return false
   const img = target.closest?.('img') as HTMLImageElement | null
   if (img && (img.naturalWidth >= 100 || img.getBoundingClientRect().width >= 80)) {
@@ -2787,10 +2819,15 @@ function handleEpubRichMediaTap(target: Element | null | undefined): boolean {
 }
 
 function resolveTapAction(x: number, y: number, width: number, height: number): 'prev' | 'next' | 'bars' {
-  if (settings.readingMode.eink.oneHandedTapZones) {
+  const layout = settings.readingMode.eink.tapZoneLayout
+    ?? (settings.readingMode.eink.oneHandedTapZones ? 'right' : 'standard')
+  if (layout === 'left' || layout === 'right') {
     const inCenter = x >= width * 0.35 && x <= width * 0.65 && y >= height * 0.35 && y <= height * 0.65
     if (inCenter) return 'bars'
-    return y < height / 3 ? 'prev' : 'next'
+    if (y < height / 3) return 'prev'
+    if (layout === 'right' && x < width * 0.25) return 'prev'
+    if (layout === 'left' && x > width * 0.75) return 'prev'
+    return 'next'
   }
   if (x < width * 0.30) return 'prev'
   if (x > width * 0.70) return 'next'
@@ -2809,7 +2846,19 @@ function onContentClick(clientX: number, doc: Document, target?: Element | null,
   const sel = doc.getSelection()
   if (sel && !sel.isCollapsed) return
   if (blocksReaderTurn({ panel: anyOverlayOpen(), selection: !!selection.value, navigating: readerSession.navigating, interactive: isReaderInteractive(target) })) return
-  if (handleEpubRichMediaTap(target)) return
+  // iframe 内坐标换算到窗口坐标 (分页模式下 iframe 比可视区宽且随翻页平移)
+  const frameRect = doc.defaultView?.frameElement?.getBoundingClientRect()
+  const contentRect = container.value?.getBoundingClientRect()
+  const action = frameRect && contentRect
+    ? resolveTapAction(
+        frameRect.left + clientX - contentRect.left,
+        frameRect.top + clientY - contentRect.top,
+        contentRect.width,
+        contentRect.height,
+      )
+    : 'bars'
+  if (action === 'bars' && handleEpubRichMediaTap(target)) return
+  if (!frameRect || !contentRect) return
   // 伴读: 点到概念 / 注释时弹出解释卡, 不翻页
   if (dj.onContentTap(doc, clientX, clientY)) return
   // 打字机运行时轻点切换暂停或菜单, 不翻页
@@ -2819,13 +2868,6 @@ function onContentClick(clientX: number, doc: Document, target?: Element | null,
     else hideBars()
     return
   }
-  // iframe 内坐标换算到窗口坐标 (分页模式下 iframe 比可视区宽且随翻页平移)
-  const frameRect = doc.defaultView?.frameElement?.getBoundingClientRect()
-  const contentRect = container.value?.getBoundingClientRect()
-  if (!frameRect || !contentRect) return
-  const x = frameRect.left + clientX - contentRect.left
-  const y = frameRect.top + clientY - contentRect.top
-  const action = resolveTapAction(x, y, contentRect.width, contentRect.height)
   // 自动翻页 / 滚动中: 轻点暂停并呼出工具栏, 再点继续 (滚动时整屏都可点; 翻页时左右两侧仍可手动翻)
   const middle = action === 'bars'
   if (autoReading.value && (middle || effectiveFlow.value === 'scrolled')) {
@@ -2937,6 +2979,30 @@ function selectSectionText() {
   if (doc?.body) doc.getSelection()?.selectAllChildren(doc.body)
 }
 
+const highlightBarRef = ref<HTMLElement | null>(null)
+const highlightBarHeight = ref(56)
+const highlightBarWidth = ref(280)
+const highlightMoreOpen = ref(false)
+watch(selection, async val => {
+  highlightMoreOpen.value = false
+  if (!val) return
+  await nextTick()
+  const el = highlightBarRef.value
+  if (el) {
+    highlightBarHeight.value = Math.max(48, el.offsetHeight)
+    highlightBarWidth.value = Math.max(120, el.offsetWidth)
+  }
+})
+watch(highlightMoreOpen, async () => {
+  if (!selection.value) return
+  await nextTick()
+  const el = highlightBarRef.value
+  if (el) {
+    highlightBarHeight.value = Math.max(48, el.offsetHeight)
+    highlightBarWidth.value = Math.max(120, el.offsetWidth)
+  }
+})
+
 /** 划词浮条就近吸附在当前选区上方/下方，单手握持触手可及 */
 const highlightBarStyle = computed(() => {
   if (!selection.value || !selectionRange) return {}
@@ -2947,13 +3013,15 @@ const highlightBarStyle = computed(() => {
     const iframe = doc?.defaultView?.frameElement as HTMLIFrameElement | null
     const iframeRect = iframe?.getBoundingClientRect() ?? { left: 0, top: 0 }
     const x = iframeRect.left + rangeRect.left + rangeRect.width / 2
-    const barHeight = 52
+    const barHeight = highlightBarHeight.value || 56
     const safeTop = parseInt(getComputedStyle(document.documentElement).getPropertyValue('--safe-top') || '0', 10) || 0
     const minTop = 56 + safeTop
     const topAbove = iframeRect.top + rangeRect.top - barHeight - 10
     const topBelow = iframeRect.top + rangeRect.bottom + 10
-    const top = topAbove >= minTop ? topAbove : Math.min(topBelow, window.innerHeight - barHeight - 16)
-    const clampedX = Math.max(20, Math.min(window.innerWidth - 20, x))
+    const rawTop = topAbove >= minTop ? topAbove : topBelow
+    const top = Math.min(Math.max(minTop, rawTop), Math.max(minTop, window.innerHeight - barHeight - 16))
+    const halfWidth = Math.min(window.innerWidth / 2 - 12, Math.max(20, (highlightBarWidth.value || 240) / 2 + 12))
+    const clampedX = Math.max(halfWidth, Math.min(window.innerWidth - halfWidth, x))
     return {
       left: `${clampedX}px`,
       top: `${Math.max(minTop, top)}px`,
@@ -3106,11 +3174,29 @@ function discardAnnotationDraft() {
 function protectReaderUnload(event: BeforeUnloadEvent) {
   if (typographyApplying.value || !preserveReaderNote()) { event.preventDefault(); event.returnValue = '' }
 }
+let sleepCoverBookReady = false
+let lastSleepCoverKey = ''
+function syncSleepCoverIfEnabled(): void {
+  if (!settings.readingMode.eink.sleepCover || !sleepCoverBookReady || !meta.value) return
+  const rawProgress = fraction.value > 0 ? fraction.value : (meta.value.progress ?? 0)
+  const pct = Math.max(0, Math.min(100, Math.round(rawProgress * 100)))
+  const title = meta.value.title ?? ''
+  const author = meta.value.author ?? ''
+  const key = `${bookId}:${pct}:${title}:${author}`
+  if (key === lastSleepCoverKey) return
+  lastSleepCoverKey = key
+  try {
+    const bridge = (window as Window & { LightReadInsets?: { updateSleepCover?: (t: string, a: string, p: number, c: string) => string } }).LightReadInsets
+    bridge?.updateSleepCover?.(title, author, pct, `covers/${bookId}.jpg`)
+  } catch { /* 休眠封面生成失败不阻塞阅读 */ }
+}
+
 // 移动 WebView 切后台后可能被回收, beforeunload 不保证执行: 隐藏时显式冲账进度与草稿。
 function onVisibilityCheckpoint() {
   if (document.visibilityState !== 'hidden') return
   void readerSession.flush().catch(() => { /* 仍有下次退出重试机会 */ })
   noteDraftSaver?.flush()
+  syncSleepCoverIfEnabled()
 }
 window.addEventListener('beforeunload', protectReaderUnload)
 onBeforeUnmount(() => {
@@ -3191,7 +3277,7 @@ async function saveNote() {
 
 async function toggleBookmark() {
   if (!currentCfi.value) return
-  const existing = bookmarks.value.find(b => b.cfi === currentCfi.value)
+  const existing = bookmarks.value.find(b => isBookmarkAtCurrentPage(b.cfi))
   const storage = await getStorage()
   if (existing) {
     await storage.deleteAnnotation(existing.id)
@@ -3248,6 +3334,7 @@ async function gotoAnnotation(a: AnnotationRec) {
 async function runSearch() {
   const query = searchQuery.value.trim()
   if (!query || !view) return
+  clearFlashMark()
   const session = ++searchSession
   const context = readerContext.capture()
   const searchView = view
@@ -3284,11 +3371,23 @@ function gotoSearchHit(hit: SearchHit) {
 }
 
 /**
- * 跳到搜索结果后把命中的字短暂标出来 (约 2 秒淡出), 眼睛不用满屏找。
- * 与朗读句同一套主题色 (墨水屏为下划线); 减少动态效果时不渐隐, 到时直接撤下
+ * 跳到搜索结果后把命中的字标出来: 墨水屏下持久高亮至清除搜索 / 翻页 / 重搜,
+ * 非墨水屏下约 2 秒淡出。
  */
 const FLASH_MARK = 'lr-search-flash'
 let flashTimer: ReturnType<typeof setTimeout> | undefined
+let activeFlashOverlayer: any = null
+function clearFlashMark() {
+  clearTimeout(flashTimer)
+  flashTimer = undefined
+  if (activeFlashOverlayer) {
+    try { activeFlashOverlayer.remove(FLASH_MARK) } catch { /* 分节已卸载 */ }
+    activeFlashOverlayer = null
+  }
+  for (const c of view?.renderer?.getContents?.() ?? []) {
+    try { c.overlayer?.remove(FLASH_MARK) } catch { /* 分节已卸载 */ }
+  }
+}
 function flashText(cfi: string) {
   try {
     const resolved = view?.resolveNavigation?.(cfi)
@@ -3297,15 +3396,19 @@ function flashText(cfi: string) {
     if (!shown || !isRange(range)) return
     const overlayer = (view.renderer.getContents?.() ?? []).find((c: any) => c.doc === shown.doc)?.overlayer
     if (!overlayer) return
-    clearTimeout(flashTimer)
-    const still = prefersReducedMotion() || modes.einkActive.value
+    clearFlashMark()
+    const persistEink = Boolean(lateModes.value?.einkActive.value || lateModes.value?.einkDevice || settings.readingMode.eink.enabled)
+    const still = prefersReducedMotion() || persistEink
+    activeFlashOverlayer = overlayer
     overlayer.add(FLASH_MARK, range, (rects: any[], opts: any) => {
       const g = drawListenMark(rects, opts)
-      // 停留 0.8 秒后 1.2 秒渐隐 (redraw 时重新开始, 不影响撤下的时间)
+      // 停留 0.8 秒后 1.2 秒渐隐 (墨水屏下常驻直至翻页/关闭搜索)
       if (!still) try { g.animate([{ opacity: g.style.opacity }, { opacity: g.style.opacity, offset: 0.4 }, { opacity: 0 }], { duration: 2000, fill: 'forwards' }) } catch { /* 无 Web Animations: 到时直接撤下 */ }
       return g
     }, { mark: listenMark.value, padding: 1 })
-    flashTimer = setTimeout(() => { try { overlayer.remove(FLASH_MARK) } catch { /* 分节已卸载 */ } }, still ? 1500 : 2000)
+    if (!persistEink) {
+      flashTimer = setTimeout(() => { try { overlayer.remove(FLASH_MARK) } catch { /* 分节已卸载 */ } }, still ? 1500 : 2000)
+    }
   } catch { /* 定位失败: 不标也能看 */ }
 }
 
@@ -3314,6 +3417,7 @@ function closeSearch() {
   searching.value = false
   panel.value = 'none'
   searchResults.value = []
+  clearFlashMark()
 }
 
 /** 打开书的瞬间 view.init 尚未归位, 此时跳转会被 init 落点覆盖 — 等它完成 */
@@ -3491,18 +3595,27 @@ const modes = useReadingModes({
   pauseWhen: () => panel.value !== 'none' || settingsOpen.value || ttsPanel.value || jumpOpen.value
     || readerMoreOpen.value || !!activeAnnotation.value || !!lateCompanion.value?.overlayOpen.value,
   beforePanelOpen: closeOverlays,
-  // 沉浸: 安卓隐藏系统栏 + 常亮 (网页 / 桌面用 Wake Lock), 并收起工具栏
+  // 沉浸: 安卓隐藏系统栏 + 常亮 (墨水屏仅在主动自动翻页/听书时保持唤醒), 并收起工具栏
   onImmersiveChange: on => {
     setSystemBarsHidden(on)
-    void setKeepScreenOn(on)
+    syncKeepScreenOn()
     if (on) hideBars()
   },
   refreshMarginals: () => updateMarginals(),
   onReminder: () => stopAutoRead(),
 })
 lateModes.value = modes
-watch(sheetOpen, open => {
-  if (!open && modes.einkActive.value) {
+function syncKeepScreenOn() {
+  const eink = Boolean(modes.einkActive.value || modes.einkDevice || settings.readingMode.eink.enabled)
+  const activePlayback = (autoReading.value && !autoPaused.value) || ttsState.value === 'playing'
+  const keepOn = eink ? activePlayback : Boolean(modes.immersive.value || activePlayback)
+  void setKeepScreenOn(keepOn)
+}
+watch(() => [modes.einkActive.value, modes.immersive.value, autoReading.value, autoPaused.value, ttsState.value] as const, () => {
+  syncKeepScreenOn()
+})
+watch(anyOverlayOpen, (open, prev) => {
+  if (prev && !open && (modes.einkActive.value || modes.einkDevice)) {
     onyxEpd.repaintAfterOverlayClose('regal')
   }
 })
@@ -3570,7 +3683,7 @@ const dj = usePagewiseCompanion({
 })
 lateCompanion.value = dj
 watch(
-  () => [settings.readingMode.eink.volumeKeysEnabled, anyOverlayOpen(), Boolean(selection.value)] as const,
+  () => [settings.readingMode.eink.volumeKeysEnabled, anyOverlayOpen(true), Boolean(selection.value)] as const,
   ([volEnabled, overlayOpen, hasSel]) => {
     onyxNativeAccelerator.setHardwareKeyCapture(!overlayOpen && !hasSel, volEnabled !== false)
   },
@@ -3746,11 +3859,9 @@ onMounted(async () => {
       recommendationRenderer.addEventListener('relocate', captureRecommendationRelocate, true)
     }
     bookOpened = true
-    if (!readerContext.current(context)) { openedView.close?.(); return }
-    try {
-      const bridge = (window as Window & { LightReadInsets?: { updateSleepCover?: (t: string, a: string, p: number, c: string) => string } }).LightReadInsets
-      bridge?.updateSleepCover?.(meta.value.title ?? '', meta.value.author ?? '', Math.round((meta.value.progress ?? 0) * 100), `covers/${bookId}.jpg`)
-    } catch { /* 休眠封面生成失败不阻塞阅读 */ }
+    sleepCoverBookReady = true
+    if (!readerContext.current(context)) { sleepCoverBookReady = false; openedView.close?.(); return }
+    syncSleepCoverIfEnabled()
     // 跨章连续滚动的渲染器事件 (view 不转发): 主章切换、远处分节卸载。旧版渲染器不会派发
     view.renderer?.addEventListener?.('section-change', onRendererSectionChange)
     view.renderer?.addEventListener?.('unload', onRendererUnload)
@@ -3760,6 +3871,10 @@ onMounted(async () => {
     loadPageMeasure()
     void buildTocAnchors()
     applyPrefs()
+    const recoveredCheckpoint = onyxNativeAccelerator.consumeReadingCheckpoint()
+    if (recoveredCheckpoint && recoveredCheckpoint.bookId === bookId && recoveredCheckpoint.readingDeltaSeconds > 0) {
+      void library.addReadingTime(bookId, recoveredCheckpoint.readingDeltaSeconds, recoveredCheckpoint.updatedAtMs || undefined)
+    }
     // 文本类书籍的内存 EPUB 版式变过 (v2: 多章合为一个分节), 旧版式下存的 CFI 指向别处;
     // 这类书首次用新版式打开时按阅读进度比例定位, 之后照常用 CFI
     const layoutKey = `lightread-text-layout:${bookId}`
@@ -3767,7 +3882,18 @@ onMounted(async () => {
     if (isTextLike(meta.value.format) && meta.value.location) {
       try { staleTextLocation = localStorage.getItem(layoutKey) !== TEXT_EPUB_LAYOUT } catch { /* 存储不可用时按新版式处理 */ }
     }
-    const savedTypographyAnchor = !staleTextLocation && meta.value.location ? getTypographyAnchor(meta.value.location) : undefined
+    const useCheckpointLocation = Boolean(
+      !staleTextLocation
+      && recoveredCheckpoint
+      && recoveredCheckpoint.bookId === bookId
+      && recoveredCheckpoint.cfi
+      && recoveredCheckpoint.updatedAtMs > (meta.value.lastReadAt ?? 0),
+    )
+    const rawSavedLocation = useCheckpointLocation ? recoveredCheckpoint!.cfi : meta.value.location
+    const savedTypographyAnchor = !staleTextLocation && rawSavedLocation ? getTypographyAnchor(rawSavedLocation) : undefined
+    if (useCheckpointLocation && recoveredCheckpoint) {
+      void library.saveProgress(bookId, recoveredCheckpoint.cfi, recoveredCheckpoint.progress || meta.value.progress || 0)
+    }
     // 只有进度比例、没有位置的书 (如由 MOBI 等转换来的 EPUB): 按比例定位
     if (staleTextLocation || (!meta.value.location && meta.value.progress)) {
       await view.init({})
@@ -3835,11 +3961,14 @@ watch(() => route.query.loc, async loc => {
 })
 
 onBeforeUnmount(() => {
+  syncSleepCoverIfEnabled()
+  sleepCoverBookReady = false
   endRecommendationGate.dispose()
   recommendationRenderer?.removeEventListener('relocate', captureRecommendationRelocate, true)
   recommendationRenderer = null
   textConversion.abort()
   setPageBarsDark(null)
+  void setKeepScreenOn(false)
   window.removeEventListener('keydown', handleKeydown)
   document.removeEventListener('fullscreenchange', syncFullscreenState)
   document.removeEventListener('visibilitychange', onVisibilityCheckpoint)
@@ -3851,7 +3980,7 @@ onBeforeUnmount(() => {
   void readerSession.flush().catch(() => toast(t('reader.progressSaveFailed'), 'error'))
   readerSession.dispose()
   clearTimeout(pageSaveTimer)
-  clearTimeout(flashTimer)
+  clearFlashMark()
   clearTimeout(prefsTimer)
   clearTimeout(barsTimer)
   clearTimeout(jumpBackTimer)
@@ -3907,7 +4036,7 @@ onBeforeRouteLeave(async () => {
 </script>
 
 <template>
-  <div class="reader" :class="[{ 'bars-on': barsVisible, 'portrait-scroll': portraitView && effectiveFlow === 'scrolled' }, modes.shellClass.value]" :data-reader-theme="themeColors.bg === '#000000' ? 'dark' : 'light'" :style="{ background: themeColors.bg, color: themeColors.fg }">
+  <div class="reader" :class="[{ 'bars-on': barsVisible, 'portrait-scroll': portraitView && effectiveFlow === 'scrolled', 'eink-reduced-motion': modes.einkActive.value || modes.einkDevice }, modes.shellClass.value]" :data-reader-theme="themeColors.bg === '#000000' ? 'dark' : 'light'" :style="{ background: themeColors.bg, color: themeColors.fg }">
     <!-- 工具栏隐藏时: 鼠标/触摸轻点上下边缘呼出 -->
     <div v-if="!barsVisible" class="bar-peek top" aria-hidden="true" @mouseenter="showBars()" @click="showBars()" @pointerdown.stop="showBars()" />
     <div v-if="!barsVisible" class="bar-peek bottom" aria-hidden="true" @mouseenter="showBars()" @click="showBars()" @pointerdown.stop="showBars()" />
@@ -3917,6 +4046,7 @@ onBeforeRouteLeave(async () => {
       v-if="isFullscreen && !barsVisible"
       class="fs-exit"
       :title="t('reader.exitFullscreen')"
+      :aria-label="t('reader.exitFullscreen')"
       @click="toggleFullscreen"
     >
       <svg viewBox="0 0 24 24" width="16" height="16"><path fill="currentColor" d="M8 3a1 1 0 0 1 1 1v3a2 2 0 0 1-2 2H4a1 1 0 0 1 0-2h3V4a1 1 0 0 1 1-1zm8 0a1 1 0 0 1 1 1v3h3a1 1 0 1 1 0 2h-3a2 2 0 0 1-2-2V4a1 1 0 0 1 1-1zM4 15h3a2 2 0 0 1 2 2v3a1 1 0 1 1-2 0v-3H4a1 1 0 0 1 0-2zm13 0h3a1 1 0 1 1 0 2h-3v3a1 1 0 1 1-2 0v-3a2 2 0 0 1 2-2z"/></svg>
@@ -4375,11 +4505,11 @@ onBeforeRouteLeave(async () => {
     </div>
 
     <!-- 高亮选区浮条 (就近浮动式微型工具栏) -->
-    <div v-if="selection" class="highlight-bar card" :style="highlightBarStyle">
+    <div v-if="selection" ref="highlightBarRef" class="highlight-bar card" :style="highlightBarStyle">
       <p v-if="localDraftError" role="alert" style="flex-basis: 100%; margin: 0">{{ localDraftError }}</p>
       <button class="btn btn-sm" @click="copySelectedText">{{ t('reader.copySelection') }}</button>
       <button v-if="hasNativeDictionary" class="btn btn-sm" @click="lookupSelectedDictionary">{{ settings.language === 'en' ? 'Dictionary' : '查词典' }}</button>
-      <button class="btn btn-sm" @click="selectSectionText">{{ t('reader.selectSection') }}</button>
+      <button v-if="!modes.einkActive.value || highlightMoreOpen" class="btn btn-sm" @click="selectSectionText">{{ t('reader.selectSection') }}</button>
       <span class="hl-hint">{{ t('reader.highlight') }}</span>
       <button
         v-for="name in Object.keys(HIGHLIGHT_COLORS)"
@@ -4392,9 +4522,10 @@ onBeforeRouteLeave(async () => {
         @click="addHighlight(name as string)"
       ><span>{{ t(annotationLabelKey(name as string, modes.einkActive.value)) }}</span></button>
       <button class="btn btn-sm" @click="addHighlight('yellow', true)"><svg viewBox="0 0 24 24" width="14" height="14" aria-hidden="true"><path fill="currentColor" d="M5 4h14a2 2 0 0 1 2 2v9a2 2 0 0 1-2 2H10l-4.3 3.4A1 1 0 0 1 4 19.6V6a2 2 0 0 1 1-2zm1 2v11.5L9.3 15H19V6H6zm2 2.5h8a1 1 0 1 1 0 2H8a1 1 0 1 1 0-2zm0 3h5a1 1 0 1 1 0 2H8a1 1 0 1 1 0-2z"/></svg>{{ t('reader.writeNote') }}</button>
-      <button class="btn btn-sm" @click="aiExplainSelection"><svg viewBox="0 0 24 24" width="14" height="14" aria-hidden="true"><path fill="currentColor" d="M10 3a1 1 0 0 1 .95.68l1.3 3.9a3 3 0 0 0 1.9 1.9l3.9 1.3a1 1 0 0 1 0 1.9l-3.9 1.3a3 3 0 0 0-1.9 1.9l-1.3 3.9a1 1 0 0 1-1.9 0l-1.3-3.9a3 3 0 0 0-1.9-1.9l-3.9-1.3a1 1 0 0 1 0-1.9l3.9-1.3a3 3 0 0 0 1.9-1.9l1.3-3.9A1 1 0 0 1 10 3zm8-1a1 1 0 0 1 .95.68l.4 1.2.97.32a1 1 0 0 1 0 1.9l-.97.32-.4 1.2a1 1 0 0 1-1.9 0l-.4-1.2-.97-.32a1 1 0 0 1 0-1.9l.97-.32.4-1.2A1 1 0 0 1 18 2z"/></svg>{{ t('ai.explain') }}</button>
-      <button v-if="dj.selectionKey.value" class="btn btn-sm" @click="dj.openKeyCard(); selection = null">{{ t('companion.why') }}</button>
-      <button v-if="!fixedLayout" class="btn btn-sm" @click="listenFromSelection"><svg viewBox="0 0 24 24" width="14" height="14" aria-hidden="true"><path fill="currentColor" d="M12 3a7 7 0 0 0-7 7v1.1A3.5 3.5 0 0 0 3 14.5v2A3.5 3.5 0 0 0 6.5 20H8a1 1 0 0 0 1-1v-7a1 1 0 0 0-1-1h-.9A5 5 0 0 1 12 5a5 5 0 0 1 4.9 6H16a1 1 0 0 0-1 1v7a1 1 0 0 0 1 1h1.5a3.5 3.5 0 0 0 3.5-3.5v-2a3.5 3.5 0 0 0-2-3.16V10a7 7 0 0 0-7-7z"/></svg>{{ t('tts.listenFromSelection') }}</button>
+      <button v-if="modes.einkActive.value" type="button" class="btn btn-sm" :aria-expanded="highlightMoreOpen" @click="highlightMoreOpen = !highlightMoreOpen">{{ t('common.more') }}</button>
+      <button v-if="!modes.einkActive.value || highlightMoreOpen" class="btn btn-sm" @click="aiExplainSelection"><svg viewBox="0 0 24 24" width="14" height="14" aria-hidden="true"><path fill="currentColor" d="M10 3a1 1 0 0 1 .95.68l1.3 3.9a3 3 0 0 0 1.9 1.9l3.9 1.3a1 1 0 0 1 0 1.9l-3.9 1.3a3 3 0 0 0-1.9 1.9l-1.3 3.9a1 1 0 0 1-1.9 0l-1.3-3.9a3 3 0 0 0-1.9-1.9l-3.9-1.3a1 1 0 0 1 0-1.9l3.9-1.3a3 3 0 0 0 1.9-1.9l1.3-3.9A1 1 0 0 1 10 3zm8-1a1 1 0 0 1 .95.68l.4 1.2.97.32a1 1 0 0 1 0 1.9l-.97.32-.4 1.2a1 1 0 0 1-1.9 0l-.4-1.2-.97-.32a1 1 0 0 1 0-1.9l.97-.32.4-1.2A1 1 0 0 1 18 2z"/></svg>{{ t('ai.explain') }}</button>
+      <button v-if="dj.selectionKey.value && (!modes.einkActive.value || highlightMoreOpen)" class="btn btn-sm" @click="dj.openKeyCard(); selection = null">{{ t('companion.why') }}</button>
+      <button v-if="!fixedLayout && (!modes.einkActive.value || highlightMoreOpen)" class="btn btn-sm" @click="listenFromSelection"><svg viewBox="0 0 24 24" width="14" height="14" aria-hidden="true"><path fill="currentColor" d="M12 3a7 7 0 0 0-7 7v1.1A3.5 3.5 0 0 0 3 14.5v2A3.5 3.5 0 0 0 6.5 20H8a1 1 0 0 0 1-1v-7a1 1 0 0 0-1-1h-.9A5 5 0 0 1 12 5a5 5 0 0 1 4.9 6H16a1 1 0 0 0-1 1v7a1 1 0 0 0 1 1h1.5a3.5 3.5 0 0 0 3.5-3.5v-2a3.5 3.5 0 0 0-2-3.16V10a7 7 0 0 0-7-7z"/></svg>{{ t('tts.listenFromSelection') }}</button>
       <button class="icon-btn" :title="t('common.cancel')" :aria-label="t('common.cancel')" @click="clearSelection"><svg viewBox="0 0 24 24" width="16" height="16" aria-hidden="true"><path fill="currentColor" d="M6.3 6.3a1 1 0 0 1 1.4 0L12 10.58l4.3-4.3a1 1 0 1 1 1.4 1.42L13.42 12l4.3 4.3a1 1 0 0 1-1.42 1.4L12 13.42l-4.3 4.3a1 1 0 0 1-1.4-1.42L10.58 12l-4.3-4.3a1 1 0 0 1 0-1.4z"/></svg></button>
     </div>
 
@@ -4665,8 +4796,10 @@ onBeforeRouteLeave(async () => {
   top: 12px;
   right: 12px;
   z-index: 12;
-  width: 36px;
-  height: 36px;
+  min-width: 48px;
+  min-height: 48px;
+  width: 48px;
+  height: 48px;
   border: 1px solid var(--eink-solid-black, #000000);
   border-radius: var(--radius, 2px);
   background: var(--eink-surface-pure, #ffffff);
@@ -5838,7 +5971,11 @@ onBeforeRouteLeave(async () => {
 }
 .ai-msg.assistant .ai-bubble {
   background: var(--bg);
-  color: var(--text-2);
+  color: var(--text);
+}
+.reader.lr-eink .ai-cursor {
+  color: var(--text);
+  animation: none;
 }
 .ai-cursor {
   color: var(--brand);
@@ -6194,5 +6331,17 @@ onBeforeRouteLeave(async () => {
     transition: none;
     animation: none;
   }
+}
+.reader.eink-reduced-motion,
+.reader.eink-reduced-motion * {
+  transition: none !important;
+  animation: none !important;
+}
+.reader.lr-eink .tts-mini-btn,
+.reader.lr-eink .seg button,
+.reader.lr-eink .anno-tabs button {
+  min-width: 48px;
+  min-height: 48px;
+  height: auto;
 }
 </style>

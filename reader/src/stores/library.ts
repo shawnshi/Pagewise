@@ -2,6 +2,7 @@ import { defineStore } from 'pinia'
 import type { BookMeta, BookMetadataFields, BookMetadataSnapshot, ReadingStatus } from '../storage'
 import { getStorage } from '../storage'
 import { recordReading } from '../services/readingLog.ts'
+import { deleteBookInkStrokes } from '../services/onyxScribble.ts'
 
 export const useLibrary = defineStore('library', {
   state: () => ({
@@ -22,6 +23,7 @@ export const useLibrary = defineStore('library', {
         throw new Error('Source-linked books cannot be removed. Manage the monitored folder instead.')
       }
       await storage.deleteBook(id)
+      void deleteBookInkStrokes(id)
       this.books = this.books.filter(b => b.id !== id)
     },
     async saveProgress(id: string, location: string, progress: number) {

@@ -43,6 +43,7 @@ export function profileDefaults(profile: TypographyProfile, opts: {
   dpr?: number
   textScale?: number
   viewportWidth?: number
+  einkDevice?: boolean
 } = {}): TypographySettings {
   const base = opts.base ?? {}
   const original = profile === 'original'
@@ -52,11 +53,14 @@ export function profileDefaults(profile: TypographyProfile, opts: {
   if (!original && size === 18 && (opts.viewportWidth ?? 0) >= 768) size = profile === 'en' ? 29 : 30
   const calibration = normalizeTypographyCalibration(opts.calibration)
   if (!original && calibration && calibrationStatus(calibration, opts.dpr ?? 1, opts.textScale ?? 1) === 'calibrated') size = (profile === 'en' ? 12 : 12.5) * 25.4 / 72 * calibration.cssPxPerMm / calibration.textScale
+  if (!original && opts.einkDevice) size = Math.max(18, size)
+  const rawLineHeight = original ? finite(base.lineHeight, 1.8) : profile === 'zh' ? 1.7 : profile === 'en' ? 1.55 : 1.75
+  const lineHeight = !original && opts.einkDevice ? Math.max(1.65, rawLineHeight) : rawLineHeight
   return {
     profile,
     displayMode: original ? 'publisher' : 'optimized',
     fontSize: Math.min(64, Math.max(8, Math.round(size))),
-    lineHeight: original ? finite(base.lineHeight, 1.8) : profile === 'zh' ? 1.7 : profile === 'en' ? 1.55 : 1.75,
+    lineHeight,
     gap: Math.min(20, Math.max(2, finite(base.gap, 6) === 6 && !original ? profile === 'en' ? 9 : 8 : finite(base.gap, 6))),
     fontFamily: original ? typeof base.fontFamily === 'string' ? base.fontFamily : '' : 'auto',
     justify: original ? base.justify ?? true : profile === 'zh',

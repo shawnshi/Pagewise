@@ -114,28 +114,7 @@ export function readOnyxHardwareProfile(host: EnvironmentHost | undefined): Onyx
         },
       }
     }
-    const env = readNativeReaderEnvironment(host)
-    if (env.status === 'available' && env.value.boox) {
-      return {
-        status: 'available',
-        value: {
-          version: 1,
-          boox: true,
-          sdkAvailable: false,
-          model: 'NoteX3Pro',
-          lowRam: env.value.lowRam,
-          memoryClassMb: env.value.memoryClassMb,
-          physicalWidthPx: 1860,
-          physicalHeightPx: 2480,
-          densityDpi: 300,
-          epdController: true,
-          frontLight: true,
-          ctmLight: true,
-          stylus: true,
-          colorEink: false,
-        },
-      }
-    }
+    // Never spoof hardcoded BOOX hardware dimensions/capabilities when native getOnyxHardwareProfile is absent.
     return { status: 'unavailable' }
   } catch (error) {
     return { status: 'error', error: error instanceof Error ? error.message : String(error) }

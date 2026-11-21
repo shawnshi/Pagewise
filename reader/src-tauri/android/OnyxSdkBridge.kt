@@ -1,5 +1,6 @@
 package io.pagewise.reader
 
+import android.content.ActivityNotFoundException
 import android.content.ContentValues
 import android.content.Context
 import android.content.Intent
@@ -18,19 +19,25 @@ import android.os.ParcelFileDescriptor
 import android.provider.MediaStore
 import android.provider.OpenableColumns
 import android.util.Base64
+import android.util.Log
 import android.view.KeyEvent
 import android.view.View
 import android.webkit.WebView
+import com.onyx.android.sdk.api.device.FrontLightController
+import com.onyx.android.sdk.api.device.epd.EpdController
+import com.onyx.android.sdk.api.device.epd.UpdateMode
+import com.onyx.android.sdk.data.note.TouchPoint
+import com.onyx.android.sdk.pen.RawInputCallback
+import com.onyx.android.sdk.pen.TouchHelper
+import com.onyx.android.sdk.pen.data.TouchPointList
 import org.json.JSONArray
 import org.json.JSONObject
 import java.io.ByteArrayOutputStream
 import java.io.File
 import java.io.FileOutputStream
-import java.lang.reflect.InvocationHandler
-import java.lang.reflect.Method
-import java.lang.reflect.Proxy
 import java.util.Locale
 import java.util.UUID
+import java.util.concurrent.Executors
 import java.util.zip.ZipFile
 
 /**
@@ -44,21 +51,20 @@ class OnyxSdkBridge(
     private val context: Context,
     private val windowState: ReaderWindowState,
 ) {
-    private val epdClass: Class<*>? = findClass("com.onyx.android.sdk.api.device.epd.EpdController")
-    private val updateModeClass: Class<*>? = findClass("com.onyx.android.sdk.api.device.epd.UpdateMode")
-    private val frontLightClass: Class<*>? = findClass("com.onyx.android.sdk.api.device.FrontLightController")
-    private val deviceClass: Class<*>? = findClass("com.onyx.android.sdk.device.Device")
-    private val deviceUtilsClass: Class<*>? = findClass("com.onyx.android.sdk.utils.DeviceUtils")
-    private val deviceEnvClass: Class<*>? = findClass("com.onyx.android.sdk.device.DeviceEnvironment")
-    private val touchHelperClass: Class<*>? = findClass("com.onyx.android.sdk.pen.TouchHelper")
-    private val rawInputCallbackClass: Class<*>? = findClass("com.onyx.android.sdk.pen.RawInputCallback")
-
     private val epdHandler = Handler(Looper.getMainLooper())
+    private val ioExecutor = Executors.newSingleThreadExecutor()
     private var pendingFastExit: Runnable? = null
     private var pendingOverlayRepaint: Runnable? = null
     private var managementOverlayView: View? = null
 
-    private var touchHelperInstance: Any? = null
+    @Volatile
+    private var touchHelperInstance: TouchHelper? = null
+
+    @Volatile
+    private var lastEpdApplied: Boolean = false
+    private val epdProbeReady: Boolean
+    private val regalSupported: Boolean
+    private val maxTouchPressure: Float
     private val externalOpenQueue = ArrayList<JSONObject>()
     private var activePdfPath: String? = null
     private var activePdfDescriptor: ParcelFileDescriptor? = null
@@ -66,6 +72,26 @@ class OnyxSdkBridge(
 
     init {
         restoreCheckpointFromDisk()
+        val boox = isBooxHardware()
+        regalSupported = if (boox) runCatching { EpdController.supportRegal() }.getOrDefault(false) else false
+        maxTouchPressure =
+            if (boox) {
+                runCatching { EpdController.getMaxTouchPressure() }.getOrDefault(0f)
+            } else {
+                0f
+            }
+        epdProbeReady =
+            boox &&
+            runCatching {
+                EpdController.getSystemDefaultUpdateMode()
+                true
+            }.getOrDefault(regalSupported || maxTouchPressure > 0f)
+        val hasFl = if (boox) queryHasFrontLight() else false
+        val hasCtm = if (boox) queryHasCtmBrightness() else false
+        Log.i(
+            "OnyxSdkBridge",
+            "probe boox=$boox epd=$epdProbeReady regal=$regalSupported frontLight=$hasFl ctm=$hasCtm maxPressure=$maxTouchPressure model=${resolveDeviceModel()}",
+        )
     }
 
     fun isBooxHardware(): Boolean {
@@ -73,10 +99,11 @@ class OnyxSdkBridge(
             listOf(Build.MANUFACTURER, Build.BRAND)
                 .mapNotNull { it?.lowercase(Locale.ROOT) }
         if (brands.any { it.contains("onyx") || it.contains("boox") }) return true
-        val sysBrand = readSystemProperty("ro.product.manufacturer").lowercase(Locale.ROOT)
-        if (sysBrand.contains("onyx") || sysBrand.contains("boox")) return true
+        val sysMfg = readSystemProperty("ro.product.manufacturer").lowercase(Locale.ROOT)
+        val sysBrand = readSystemProperty("ro.product.brand").lowercase(Locale.ROOT)
+        if (sysMfg.contains("onyx") || sysMfg.contains("boox") || sysBrand.contains("onyx") || sysBrand.contains("boox")) return true
         if (readSystemProperty("ro.onyx.model").isNotEmpty()) return true
-        return epdClass != null
+        return readSystemProperty("ro.vendor.build.onyxid").isNotEmpty()
     }
 
     fun buildHardwareProfileJson(
@@ -88,9 +115,11 @@ class OnyxSdkBridge(
         val heightPx = metrics.heightPixels.coerceAtLeast(1)
         val densityDpi = metrics.densityDpi.coerceAtLeast(72)
         val boox = isBooxHardware()
-        val hasFrontLight = queryHasFrontLight()
-        val hasCtm = queryHasCtmBrightness()
-        val sdkReady = epdClass != null || frontLightClass != null
+        val hasFrontLight = boox && queryHasFrontLight()
+        val hasCtm = hasFrontLight && queryHasCtmBrightness()
+        val epdReady = boox && epdProbeReady
+        val stylusReady = boox && (touchHelperInstance != null || maxTouchPressure > 0f)
+        val sdkReady = boox && (epdReady || hasFrontLight || stylusReady)
         val modelName = resolveDeviceModel()
         val colorEink =
             modelName.lowercase(Locale.ROOT).let {
@@ -107,10 +136,10 @@ class OnyxSdkBridge(
             .put("physicalWidthPx", widthPx)
             .put("physicalHeightPx", heightPx)
             .put("densityDpi", densityDpi)
-            .put("epdController", epdClass != null)
+            .put("epdController", epdReady)
             .put("frontLight", hasFrontLight)
             .put("ctmLight", hasCtm)
-            .put("stylus", touchHelperClass != null)
+            .put("stylus", stylusReady)
             .put("colorEink", colorEink)
             .toString()
     }
@@ -120,34 +149,17 @@ class OnyxSdkBridge(
     // =========================================================================
 
     fun attachWebView(webView: WebView) {
-        val appliedWebView =
-            invokeStatic(
-                epdClass,
-                "setWebViewContrastOptimize",
-                arrayOf(WebView::class.java, Boolean::class.javaPrimitiveType!!),
-                arrayOf(webView, true),
-            )
-        if (!appliedWebView) {
-            invokeStatic(
-                epdClass,
-                "setWebViewContrastOptimize",
-                arrayOf(View::class.java, Boolean::class.javaPrimitiveType!!),
-                arrayOf(webView, true),
-            )
+        if (isBooxHardware()) {
+            runCatching { EpdController.setWebViewContrastOptimize(webView, true) }
         }
         applyViewDefaultUpdateMode(webView, windowState.epdState.defaultMode)
     }
 
     fun attachManagementOverlay(overlay: View) {
         managementOverlayView = overlay
+        if (!isBooxHardware()) return
         val enumVal = resolveUpdateModeEnum(OnyxWaveformMode.GU) ?: return
-        val modeCls = updateModeClass ?: return
-        invokeStatic(
-            epdClass,
-            "setViewDefaultUpdateMode",
-            arrayOf(View::class.java, modeCls),
-            arrayOf(overlay, enumVal),
-        )
+        runCatching { EpdController.setViewDefaultUpdateMode(overlay, enumVal) }
     }
 
     fun configureGcInterval(pages: Int): String {
@@ -159,8 +171,6 @@ class OnyxSdkBridge(
         val targetMode = windowState.epdState.recordPageTurn()
         if (targetMode == OnyxWaveformMode.GC) {
             repaintScreen(webView, OnyxWaveformMode.GC)
-        } else {
-            repaintScreen(webView, targetMode)
         }
         return buildEpdStatusJson()
     }
@@ -215,28 +225,46 @@ class OnyxSdkBridge(
         if (enabled) {
             val fastMode = OnyxWaveformMode.fromWire(modeWire ?: "du")
             val changed = windowState.epdState.enterFastMode(scene.ifBlank { "scroll" }, fastMode)
-            if (changed) {
-                invokeStatic(
-                    epdClass,
-                    "applyApplicationFastMode",
-                    arrayOf(String::class.java, Boolean::class.javaPrimitiveType!!, Boolean::class.javaPrimitiveType!!),
-                    arrayOf(context.packageName, true, true),
-                )
-                if (webView != null) applyViewDefaultUpdateMode(webView, fastMode)
+            if (changed && isBooxHardware()) {
+                val enumVal = resolveUpdateModeEnum(fastMode) ?: UpdateMode.DU
+                val appApplied =
+                    runCatching {
+                        EpdController.applyAppScopeUpdate(context.packageName, true, true, enumVal, Int.MAX_VALUE)
+                    }.getOrDefault(false)
+                val sysApplied =
+                    if (!appApplied) {
+                        runCatching {
+                            EpdController.applySystemFastMode(true)
+                            true
+                        }.getOrDefault(false)
+                    } else {
+                        false
+                    }
+                val viewApplied = webView?.let { applyViewDefaultUpdateMode(it, fastMode) } ?: false
+                lastEpdApplied = appApplied || sysApplied || viewApplied
             }
         } else {
             val wasFast = windowState.epdState.exitFastMode()
-            if (wasFast) {
-                invokeStatic(
-                    epdClass,
-                    "applyApplicationFastMode",
-                    arrayOf(String::class.java, Boolean::class.javaPrimitiveType!!, Boolean::class.javaPrimitiveType!!),
-                    arrayOf(context.packageName, false, true),
-                )
-                if (webView != null) {
-                    applyViewDefaultUpdateMode(webView, windowState.epdState.defaultMode)
-                    repaintScreen(webView, OnyxWaveformMode.REGAL)
-                }
+            if (wasFast && isBooxHardware()) {
+                val cleared = runCatching { EpdController.clearAppScopeUpdate(true) }.getOrDefault(false)
+                val sysCleared =
+                    if (!cleared) {
+                        runCatching {
+                            EpdController.applySystemFastMode(false)
+                            true
+                        }.getOrDefault(false)
+                    } else {
+                        false
+                    }
+                val viewApplied =
+                    if (webView != null) {
+                        val v = applyViewDefaultUpdateMode(webView, windowState.epdState.defaultMode)
+                        repaintScreen(webView, OnyxWaveformMode.REGAL)
+                        v || lastEpdApplied
+                    } else {
+                        false
+                    }
+                lastEpdApplied = cleared || sysCleared || viewApplied
             }
         }
         return buildEpdStatusJson()
@@ -261,52 +289,46 @@ class OnyxSdkBridge(
         val targetView: View? =
             managementOverlayView?.takeIf { it.isAttachedToWindow && it.visibility == View.VISIBLE } ?: webView
         val enumVal = resolveUpdateModeEnum(mode)
-        if (enumVal != null && updateModeClass != null) {
-            val repainted =
-                invokeStatic(
-                    epdClass,
-                    "repaintEveryThing",
-                    arrayOf(updateModeClass),
-                    arrayOf(enumVal),
-                )
-            if (!repainted && targetView != null) {
-                invokeStatic(
-                    epdClass,
-                    "invalidate",
-                    arrayOf(View::class.java, updateModeClass),
-                    arrayOf(targetView, enumVal),
-                )
+        var applied = false
+        if (isBooxHardware() && enumVal != null) {
+            if (mode == OnyxWaveformMode.GC) {
+                applied =
+                    runCatching {
+                        EpdController.repaintEveryThing(enumVal)
+                        true
+                    }.getOrDefault(false)
+            }
+            if (!applied && targetView != null) {
+                applied =
+                    runCatching {
+                        EpdController.invalidate(targetView, enumVal)
+                        true
+                    }.getOrDefault(false)
             }
         }
+        lastEpdApplied = applied
         targetView?.postInvalidate()
     }
 
     private fun applyViewDefaultUpdateMode(
         webView: WebView,
         mode: OnyxWaveformMode,
-    ) {
-        val enumVal = resolveUpdateModeEnum(mode) ?: return
-        val modeCls = updateModeClass ?: return
-        invokeStatic(
-            epdClass,
-            "setViewDefaultUpdateMode",
-            arrayOf(View::class.java, modeCls),
-            arrayOf(webView, enumVal),
-        )
+    ): Boolean {
+        if (!isBooxHardware()) return false
+        val enumVal = resolveUpdateModeEnum(mode) ?: return false
+        val ok = runCatching { EpdController.setViewDefaultUpdateMode(webView, enumVal) }.getOrDefault(false)
+        lastEpdApplied = ok
+        return ok
     }
 
-    private fun resolveUpdateModeEnum(mode: OnyxWaveformMode): Any? {
-        val cls = updateModeClass ?: return null
-        val constants = cls.enumConstants ?: return null
-        for (candidate in mode.sdkCandidates) {
-            for (constant in constants) {
-                if ((constant as? Enum<*>)?.name.equals(candidate, ignoreCase = true)) {
-                    return constant
-                }
-            }
+    private fun resolveUpdateModeEnum(mode: OnyxWaveformMode): UpdateMode? =
+        when (mode) {
+            OnyxWaveformMode.REGAL -> if (regalSupported) UpdateMode.REGAL else UpdateMode.GU
+            OnyxWaveformMode.GC -> UpdateMode.GC
+            OnyxWaveformMode.GU -> UpdateMode.GU
+            OnyxWaveformMode.DU -> UpdateMode.DU
+            OnyxWaveformMode.A2 -> UpdateMode.ANIMATION_QUALITY
         }
-        return null
-    }
 
     private fun buildEpdStatusJson(): String =
         JSONObject()
@@ -316,18 +338,20 @@ class OnyxSdkBridge(
             .put("scene", windowState.epdState.fastScene)
             .put("pageTurnCount", windowState.epdState.pageTurnCount)
             .put("gcIntervalPages", windowState.epdState.gcIntervalPages)
+            .put("applied", lastEpdApplied)
             .toString()
 
     // =========================================================================
     // 2. FrontLightController: Dual-Color-Temperature (Cold & Warm) Control
     // =========================================================================
 
-    private var cachedColdPercent: Int = 45
-    private var cachedWarmPercent: Int = 35
-    private var cachedLightEnabled: Boolean = true
+    private val frontLightLock = Any()
+    @Volatile private var cachedColdPercent: Int = 45
+    @Volatile private var cachedWarmPercent: Int = 35
+    @Volatile private var cachedLightEnabled: Boolean = true
 
     fun getFrontLightStateJson(): String {
-        val snap = readFrontLightSnapshot()
+        val snap = synchronized(frontLightLock) { readFrontLightSnapshot() }
         return JSONObject()
             .put("supported", snap.supported)
             .put("ctmSupported", snap.ctmSupported)
@@ -344,113 +368,115 @@ class OnyxSdkBridge(
     }
 
     fun setFrontLightEnabled(enabled: Boolean): String {
-        cachedLightEnabled = enabled
-        val method = if (enabled) "openFrontLight" else "closeFrontLight"
-        invokeStatic(frontLightClass, method, arrayOf(Context::class.java), arrayOf(context))
+        synchronized(frontLightLock) {
+            val applied =
+                if (isBooxHardware()) {
+                    runCatching {
+                        if (enabled) FrontLightController.turnOn(context) else FrontLightController.turnOff(context)
+                        true
+                    }.getOrDefault(false)
+                } else {
+                    true
+                }
+            if (applied) cachedLightEnabled = enabled
+        }
         return getFrontLightStateJson()
     }
 
     fun setColdLightPercent(percent: Int): String {
         val clamped = percent.coerceIn(0, 100)
-        cachedColdPercent = clamped
-        val (minVal, maxVal) = queryLightRange("getColdLightValues")
-        val raw = OnyxFrontLightSnapshot.percentToRaw(clamped, minVal, maxVal)
-        val ok =
-            invokeStatic(
-                frontLightClass,
-                "setColdLightDeviceValue",
-                arrayOf(Context::class.java, Int::class.javaPrimitiveType!!),
-                arrayOf(context, raw),
-            )
-        invokeStatic(
-            frontLightClass,
-            "setColdLightConfigValue",
-            arrayOf(Context::class.java, Int::class.javaPrimitiveType!!),
-            arrayOf(context, raw),
-        )
-        if (!ok) {
-            invokeStatic(
-                frontLightClass,
-                "setBrightness",
-                arrayOf(Context::class.java, Int::class.javaPrimitiveType!!),
-                arrayOf(context, raw),
-            )
-        }
-        if (clamped > 0 && !cachedLightEnabled) {
-            setFrontLightEnabled(true)
+        synchronized(frontLightLock) {
+            val (minVal, maxVal) = queryLightRange(cold = true)
+            val raw = OnyxFrontLightSnapshot.percentToRaw(clamped, minVal, maxVal)
+            val applied =
+                if (isBooxHardware()) {
+                    val primaryOk =
+                        runCatching {
+                            if (clamped > 0 && !cachedLightEnabled) FrontLightController.turnOn(context)
+                            FrontLightController.setColdLightDeviceValue(context, raw)
+                        }.getOrDefault(false)
+                    if (primaryOk) {
+                        true
+                    } else {
+                        runCatching {
+                            FrontLightController.setBrightness(context, raw)
+                            true
+                        }.getOrDefault(false)
+                    }
+                } else {
+                    true
+                }
+            if (applied) {
+                cachedColdPercent = clamped
+                if (clamped > 0 && !cachedLightEnabled) cachedLightEnabled = true
+            }
         }
         return getFrontLightStateJson()
     }
 
     fun setWarmLightPercent(percent: Int): String {
         val clamped = percent.coerceIn(0, 100)
-        cachedWarmPercent = clamped
-        val (minVal, maxVal) = queryLightRange("getWarmLightValues")
-        val raw = OnyxFrontLightSnapshot.percentToRaw(clamped, minVal, maxVal)
-        invokeStatic(
-            frontLightClass,
-            "setWarmLightDeviceValue",
-            arrayOf(Context::class.java, Int::class.javaPrimitiveType!!),
-            arrayOf(context, raw),
-        )
-        invokeStatic(
-            frontLightClass,
-            "setWarmLightConfigValue",
-            arrayOf(Context::class.java, Int::class.javaPrimitiveType!!),
-            arrayOf(context, raw),
-        )
-        if (clamped > 0 && !cachedLightEnabled) {
-            setFrontLightEnabled(true)
+        synchronized(frontLightLock) {
+            val (minVal, maxVal) = queryLightRange(cold = false)
+            val raw = OnyxFrontLightSnapshot.percentToRaw(clamped, minVal, maxVal)
+            val applied =
+                if (isBooxHardware()) {
+                    runCatching {
+                        if (clamped > 0 && !cachedLightEnabled) FrontLightController.turnOn(context)
+                        FrontLightController.setWarmLightDeviceValue(context, raw)
+                    }.getOrDefault(false)
+                } else {
+                    true
+                }
+            if (applied) {
+                cachedWarmPercent = clamped
+                if (clamped > 0 && !cachedLightEnabled) cachedLightEnabled = true
+            }
         }
         return getFrontLightStateJson()
     }
 
     private fun readFrontLightSnapshot(): OnyxFrontLightSnapshot {
-        val supported = queryHasFrontLight()
+        val boox = isBooxHardware()
+        val supported = boox && queryHasFrontLight()
         val ctm = supported && queryHasCtmBrightness()
-        val enabled =
-            invokeStaticReturn(frontLightClass, "isFrontLightOn", arrayOf(Context::class.java), arrayOf(context)) as? Boolean
-                ?: cachedLightEnabled
-        val (coldMin, coldMax) = queryLightRange("getColdLightValues")
-        val (warmMin, warmMax) = queryLightRange("getWarmLightValues")
+        val hwEnabled =
+            if (boox) {
+                runCatching { FrontLightController.isLightOn(context) }.getOrNull()
+            } else {
+                null
+            }
+        if (hwEnabled != null) {
+            cachedLightEnabled = hwEnabled
+        }
+        val enabled = hwEnabled ?: cachedLightEnabled
+        val (coldMin, coldMax) = queryLightRange(cold = true)
+        val (warmMin, warmMax) = queryLightRange(cold = false)
 
         val coldRaw =
-            (
-                invokeStaticReturn(
-                    frontLightClass,
-                    "getColdLightConfigValue",
-                    arrayOf(Context::class.java),
-                    arrayOf(context),
-                ) as? Number
-            )?.toInt()
-                ?: (
-                    invokeStaticReturn(
-                        frontLightClass,
-                        "getBrightness",
-                        arrayOf(Context::class.java),
-                        arrayOf(context),
-                    ) as? Number
-                )?.toInt()
-                ?: OnyxFrontLightSnapshot.percentToRaw(cachedColdPercent, coldMin, coldMax)
+            if (boox) {
+                runCatching { FrontLightController.getColdLightConfigValue(context) }.getOrNull()
+                    ?: runCatching { FrontLightController.getBrightness(context) }.getOrNull()
+                    ?: OnyxFrontLightSnapshot.percentToRaw(cachedColdPercent, coldMin, coldMax)
+            } else {
+                OnyxFrontLightSnapshot.percentToRaw(cachedColdPercent, coldMin, coldMax)
+            }
         val warmRaw =
-            (
-                invokeStaticReturn(
-                    frontLightClass,
-                    "getWarmLightConfigValue",
-                    arrayOf(Context::class.java),
-                    arrayOf(context),
-                ) as? Number
-            )?.toInt()
-                ?: OnyxFrontLightSnapshot.percentToRaw(cachedWarmPercent, warmMin, warmMax)
+            if (boox) {
+                runCatching { FrontLightController.getWarmLightConfigValue(context) }.getOrNull()
+                    ?: OnyxFrontLightSnapshot.percentToRaw(cachedWarmPercent, warmMin, warmMax)
+            } else {
+                OnyxFrontLightSnapshot.percentToRaw(cachedWarmPercent, warmMin, warmMax)
+            }
 
         val coldPercent =
-            if (frontLightClass != null) {
+            if (supported) {
                 OnyxFrontLightSnapshot.rawToPercent(coldRaw, coldMin, coldMax)
             } else {
                 cachedColdPercent
             }
         val warmPercent =
-            if (frontLightClass != null) {
+            if (supported) {
                 OnyxFrontLightSnapshot.rawToPercent(warmRaw, warmMin, warmMax)
             } else {
                 cachedWarmPercent
@@ -471,27 +497,22 @@ class OnyxSdkBridge(
     }
 
     private fun queryHasFrontLight(): Boolean =
-        invokeStaticReturn(frontLightClass, "hasFrontLight", arrayOf(Context::class.java), arrayOf(context)) as? Boolean ?: false
+        runCatching {
+            FrontLightController.hasFLBrightness(context) || FrontLightController.hasCTMBrightness(context)
+        }.getOrDefault(false)
 
     private fun queryHasCtmBrightness(): Boolean =
-        invokeStaticReturn(frontLightClass, "hasCTMBrightness", arrayOf(Context::class.java), arrayOf(context)) as? Boolean ?: false
+        runCatching { FrontLightController.hasCTMBrightness(context) }.getOrDefault(false)
 
-    private fun queryLightRange(valuesMethod: String): Pair<Int, Int> {
-        val rawValues = invokeStaticReturn(frontLightClass, valuesMethod, arrayOf(Context::class.java), arrayOf(context))
-        when (rawValues) {
-            is IntArray -> {
-                if (rawValues.isNotEmpty()) return Pair(rawValues.minOrNull() ?: 0, rawValues.maxOrNull() ?: 255)
-            }
-
-            is Array<*> -> {
-                val ints = rawValues.mapNotNull { (it as? Number)?.toInt() }
-                if (ints.isNotEmpty()) return Pair(ints.minOrNull() ?: 0, ints.maxOrNull() ?: 255)
-            }
-
-            is Collection<*> -> {
-                val ints = rawValues.mapNotNull { (it as? Number)?.toInt() }
-                if (ints.isNotEmpty()) return Pair(ints.minOrNull() ?: 0, ints.maxOrNull() ?: 255)
-            }
+    private fun queryLightRange(cold: Boolean): Pair<Int, Int> {
+        if (!isBooxHardware()) return Pair(0, 32)
+        val rawValues =
+            runCatching {
+                if (cold) FrontLightController.getColdLightValues(context) else FrontLightController.getWarmLightValues(context)
+            }.getOrNull()
+        val ints = rawValues?.map { it }?.filter { it >= 0 }.orEmpty()
+        if (ints.isNotEmpty()) {
+            return Pair(ints.minOrNull() ?: 0, ints.maxOrNull() ?: 255)
         }
         return Pair(0, 32)
     }
@@ -535,13 +556,11 @@ class OnyxSdkBridge(
     fun onLifecyclePause(webView: WebView?) {
         cancelPendingEpdWork()
         val exitedFast = windowState.epdState.onLifecyclePause()
-        if (exitedFast) {
-            invokeStatic(
-                epdClass,
-                "applyApplicationFastMode",
-                arrayOf(String::class.java, Boolean::class.javaPrimitiveType!!, Boolean::class.javaPrimitiveType!!),
-                arrayOf(context.packageName, false, true),
-            )
+        if (exitedFast && isBooxHardware()) {
+            val cleared = runCatching { EpdController.clearAppScopeUpdate(true) }.getOrDefault(false)
+            if (!cleared) {
+                runCatching { EpdController.applySystemFastMode(false) }
+            }
         }
         windowState.scribbleState.onLifecyclePause()
         setNativeRawDrawingEnabled(false)
@@ -555,19 +574,20 @@ class OnyxSdkBridge(
         setNativeRawDrawingEnabled(false)
         val helper = touchHelperInstance
         if (helper != null) {
-            invokeInstance(helper, "closeRawDrawing", emptyArray(), emptyArray())
+            runCatching { helper.closeRawDrawing() }
         }
         touchHelperInstance = null
         closeActivePdfRenderer()
+        runCatching { ioExecutor.shutdownNow() }
     }
 
     private fun syncRawDrawingState(webView: WebView?) {
-        val shouldEnable = windowState.canEnableRawDrawing()
+        val shouldEnable = isBooxHardware() && windowState.canEnableRawDrawing()
         if (!shouldEnable || webView == null) {
             setNativeRawDrawingEnabled(false)
             return
         }
-        val helper = ensureTouchHelper(webView)
+        val helper = ensureTouchHelper(webView) ?: return
         val density =
             webView.resources.displayMetrics.density
                 .coerceAtLeast(1.0f)
@@ -575,92 +595,100 @@ class OnyxSdkBridge(
         val limitRect = cssToPhysicalRect(limitCss, density)
         val excludeRects = windowState.scribbleState.excludeRects.map { cssToPhysicalRect(it, density) }
 
-        if (helper != null) {
-            invokeInstance(
-                helper,
-                "setStrokeWidth",
-                arrayOf(Float::class.javaPrimitiveType!!),
-                arrayOf(windowState.scribbleState.strokeWidth * density),
-            )
-            invokeInstance(
-                helper,
-                "setStrokeStyle",
-                arrayOf(Int::class.javaPrimitiveType!!),
-                arrayOf(windowState.scribbleState.strokeStyle),
-            )
-            invokeInstance(helper, "setLimitRect", arrayOf(Rect::class.java, java.util.List::class.java), arrayOf(limitRect, excludeRects))
-            invokeInstance(helper, "openRawDrawing", emptyArray(), emptyArray())
-            invokeInstance(helper, "setRawDrawingRenderEnabled", arrayOf(Boolean::class.javaPrimitiveType!!), arrayOf(true))
-            invokeInstance(helper, "setRawDrawingEnabled", arrayOf(Boolean::class.javaPrimitiveType!!), arrayOf(true))
+        runCatching {
+            helper.setStrokeWidth(windowState.scribbleState.strokeWidth * density)
+            helper.setStrokeStyle(windowState.scribbleState.strokeStyle)
+            helper.setLimitRect(limitRect, excludeRects)
+            helper.enableSideBtnErase(true)
+            if (!helper.isRawDrawingCreated()) {
+                helper.openRawDrawing()
+            }
+            helper.setRawDrawingRenderEnabled(true)
+            helper.setRawDrawingEnabled(true)
+        }.onFailure { err ->
+            Log.w("OnyxSdkBridge", "syncRawDrawingState failed", err)
         }
     }
 
     private fun setNativeRawDrawingEnabled(enabled: Boolean) {
         val helper = touchHelperInstance ?: return
-        invokeInstance(helper, "setRawDrawingEnabled", arrayOf(Boolean::class.javaPrimitiveType!!), arrayOf(enabled))
+        runCatching { helper.setRawDrawingEnabled(enabled) }
     }
 
-    private fun ensureTouchHelper(webView: WebView): Any? {
-        if (touchHelperInstance != null) return touchHelperInstance
-        val helperCls = touchHelperClass ?: return null
-        val callbackCls = rawInputCallbackClass ?: return null
-        if (!callbackCls.isInterface) {
-            return null
-        }
-        val callbackProxy =
-            Proxy.newProxyInstance(
-                callbackCls.classLoader,
-                arrayOf(callbackCls),
-                InvocationHandler { _, method, args ->
-                    handleRawInputCallback(webView, method.name, args)
-                },
-            )
-        touchHelperInstance =
-            invokeStaticReturn(
-                helperCls,
-                "create",
-                arrayOf(View::class.java, callbackCls),
-                arrayOf(webView, callbackProxy),
-            )
-        return touchHelperInstance
+    private fun ensureTouchHelper(webView: WebView): TouchHelper? {
+        touchHelperInstance?.let { return it }
+        if (!isBooxHardware()) return null
+        val created =
+            runCatching {
+                TouchHelper.create(webView, PagewiseRawInputCallback(this, webView))
+            }.onFailure { err ->
+                Log.w("OnyxSdkBridge", "TouchHelper.create failed", err)
+            }.getOrNull()
+        touchHelperInstance = created
+        return created
     }
 
-    private fun handleRawInputCallback(
-        webView: WebView,
-        methodName: String,
-        args: Array<out Any?>?,
-    ): Any? {
-        when (methodName) {
-            "onRawDrawingTouchPointListReceived" -> {
-                val pointList = args?.getOrNull(0) ?: return null
-                emitTouchPointListToWebView(webView, "stroke", pointList)
-            }
+    private class PagewiseRawInputCallback(
+        private val bridge: OnyxSdkBridge,
+        private val webView: WebView,
+    ) : RawInputCallback() {
+        override fun onBeginRawDrawing(
+            b: Boolean,
+            touchPoint: TouchPoint?,
+        ) {}
 
-            "onRawErasingTouchPointListReceived" -> {
-                val pointList = args?.getOrNull(0) ?: return null
-                emitTouchPointListToWebView(webView, "erase", pointList)
-            }
+        override fun onEndRawDrawing(
+            b: Boolean,
+            touchPoint: TouchPoint?,
+        ) {}
+
+        override fun onRawDrawingTouchPointMoveReceived(touchPoint: TouchPoint?) {}
+
+        override fun onRawDrawingTouchPointListReceived(touchPointList: TouchPointList?) {
+            val points = touchPointList?.getPoints() ?: return
+            bridge.emitTouchPointListToWebView(webView, "stroke", points)
         }
-        return null
+
+        override fun onBeginRawErasing(
+            b: Boolean,
+            touchPoint: TouchPoint?,
+        ) {}
+
+        override fun onEndRawErasing(
+            b: Boolean,
+            touchPoint: TouchPoint?,
+        ) {}
+
+        override fun onRawErasingTouchPointMoveReceived(touchPoint: TouchPoint?) {}
+
+        override fun onRawErasingTouchPointListReceived(touchPointList: TouchPointList?) {
+            val points = touchPointList?.getPoints() ?: return
+            bridge.emitTouchPointListToWebView(webView, "erase", points)
+        }
     }
 
     private fun emitTouchPointListToWebView(
         webView: WebView,
         kind: String,
-        pointListObj: Any,
+        rawPoints: List<TouchPoint>,
     ) {
         val density =
             webView.resources.displayMetrics.density
                 .coerceAtLeast(1.0f)
-        val rawPoints = invokeInstanceReturn(pointListObj, "getPoints", emptyArray(), emptyArray()) as? Iterable<*> ?: return
+        val maxPressure = maxTouchPressure.takeIf { it > 0f } ?: 4096f
         val pointsJson = JSONArray()
         for (pt in rawPoints) {
-            if (pt == null) continue
-            val x = readFloatFieldOrGetter(pt, "x") / density
-            val y = readFloatFieldOrGetter(pt, "y") / density
-            val pressure = readFloatFieldOrGetter(pt, "pressure", 0.5f)
-            val size = readFloatFieldOrGetter(pt, "size", 1.0f)
-            val timestamp = readLongFieldOrGetter(pt, "timestamp", System.currentTimeMillis())
+            val x = pt.x / density
+            val y = pt.y / density
+            val rawPressure = pt.pressure
+            val pressure =
+                if (rawPressure > 0f) {
+                    (rawPressure / maxPressure).coerceIn(0.05f, 1.0f)
+                } else {
+                    0.5f
+                }
+            val size = pt.size.takeIf { it > 0f } ?: 1.0f
+            val timestamp = pt.timestamp.takeIf { it > 0L } ?: System.currentTimeMillis()
             pointsJson.put(
                 JSONObject()
                     .put("x", x.toDouble())
@@ -686,32 +714,30 @@ class OnyxSdkBridge(
     private fun buildScribbleStatusJson(): String =
         JSONObject()
             .put("enabled", windowState.scribbleState.enabled)
-            .put("active", windowState.canEnableRawDrawing())
+            .put("active", isBooxHardware() && windowState.canEnableRawDrawing() && touchHelperInstance != null)
+            .put("nativeHelperReady", touchHelperInstance != null)
             .put("suspendedByModal", windowState.scribbleState.suspendedByModal)
             .put("strokeStyle", windowState.scribbleState.strokeStyle)
             .put("strokeWidth", windowState.scribbleState.strokeWidth.toDouble())
             .toString()
 
     // =========================================================================
-    // 4. DeviceUtils / DeviceEnvironment & Reflection Helpers
+    // 4. Device Model & System Property Helpers
     // =========================================================================
 
     private fun resolveDeviceModel(): String {
-        val fromUtils = invokeStaticReturn(deviceUtilsClass, "getDeviceModel", emptyArray(), emptyArray()) as? String
-        if (!fromUtils.isNullOrBlank()) return fromUtils
-        val fromEnv = invokeStaticReturn(deviceEnvClass, "getDeviceModel", emptyArray(), emptyArray()) as? String
-        if (!fromEnv.isNullOrBlank()) return fromEnv
         val propModel = readSystemProperty("ro.onyx.model")
         if (propModel.isNotBlank()) return propModel
         return Build.MODEL ?: "BOOX"
     }
 
-    private fun readSystemProperty(key: String): String {
-        val sysProp = findClass("android.os.SystemProperties") ?: return ""
-        return (invokeStaticReturn(sysProp, "get", arrayOf(String::class.java, String::class.java), arrayOf(key, "")) as? String)
-            ?.trim()
-            .orEmpty()
-    }
+    private fun readSystemProperty(key: String): String =
+        runCatching {
+            val sysProp = Class.forName("android.os.SystemProperties")
+            val getter = sysProp.getDeclaredMethod("get", String::class.java, String::class.java)
+            getter.isAccessible = true
+            (getter.invoke(null, key, "") as? String)?.trim().orEmpty()
+        }.getOrDefault("")
 
     private fun parseCssRect(raw: String?): OnyxRectCss? {
         if (raw.isNullOrBlank()) return null
@@ -757,88 +783,6 @@ class OnyxSdkBridge(
             kotlin.math.round(css.bottom * density).toInt(),
         )
 
-    private fun findClass(name: String): Class<*>? = runCatching { Class.forName(name) }.getOrNull()
-
-    private fun invokeStatic(
-        cls: Class<*>?,
-        methodName: String,
-        paramTypes: Array<Class<*>>,
-        args: Array<Any?>,
-    ): Boolean {
-        if (cls == null) return false
-        return runCatching {
-            val m: Method = cls.getDeclaredMethod(methodName, *paramTypes)
-            m.isAccessible = true
-            m.invoke(null, *args)
-            true
-        }.getOrDefault(false)
-    }
-
-    private fun invokeStaticReturn(
-        cls: Class<*>?,
-        methodName: String,
-        paramTypes: Array<Class<*>>,
-        args: Array<Any?>,
-    ): Any? {
-        if (cls == null) return null
-        return runCatching {
-            val m: Method = cls.getDeclaredMethod(methodName, *paramTypes)
-            m.isAccessible = true
-            m.invoke(null, *args)
-        }.getOrNull()
-    }
-
-    private fun invokeInstance(
-        target: Any,
-        methodName: String,
-        paramTypes: Array<Class<*>>,
-        args: Array<Any?>,
-    ): Boolean =
-        runCatching {
-            val m: Method = target.javaClass.getMethod(methodName, *paramTypes)
-            m.isAccessible = true
-            m.invoke(target, *args)
-            true
-        }.getOrDefault(false)
-
-    private fun invokeInstanceReturn(
-        target: Any,
-        methodName: String,
-        paramTypes: Array<Class<*>>,
-        args: Array<Any?>,
-    ): Any? =
-        runCatching {
-            val m: Method = target.javaClass.getMethod(methodName, *paramTypes)
-            m.isAccessible = true
-            m.invoke(target, *args)
-        }.getOrNull()
-
-    private fun readFloatFieldOrGetter(
-        target: Any,
-        name: String,
-        fallback: Float = 0.0f,
-    ): Float {
-        runCatching {
-            val f = target.javaClass.getField(name)
-            return (f.get(target) as? Number)?.toFloat() ?: fallback
-        }
-        val getter = "get" + name.replaceFirstChar { it.uppercase(Locale.ROOT) }
-        return (invokeInstanceReturn(target, getter, emptyArray(), emptyArray()) as? Number)?.toFloat() ?: fallback
-    }
-
-    private fun readLongFieldOrGetter(
-        target: Any,
-        name: String,
-        fallback: Long = 0L,
-    ): Long {
-        runCatching {
-            val f = target.javaClass.getField(name)
-            return (f.get(target) as? Number)?.toLong() ?: fallback
-        }
-        val getter = "get" + name.replaceFirstChar { it.uppercase(Locale.ROOT) }
-        return (invokeInstanceReturn(target, getter, emptyArray(), emptyArray()) as? Number)?.toLong() ?: fallback
-    }
-
     // =========================================================================
     // 5. Stage 1: Hardware Page-Turn Keys & Cover-Sleep Reading Checkpoint
     // =========================================================================
@@ -865,7 +809,6 @@ class OnyxSdkBridge(
         if (!decision.intercept) return false
         val direction = decision.direction
         if (direction != null && webView != null) {
-            notifyPageTurn(webView)
             webView.post {
                 webView.evaluateJavascript("window.__pagewiseHardwarePageTurn?.('$direction')", null)
             }
@@ -967,21 +910,32 @@ class OnyxSdkBridge(
             @Suppress("DEPRECATION")
             val streamUri = intent.getParcelableExtra<Uri>(Intent.EXTRA_STREAM)
             if (streamUri != null) uris.add(streamUri)
+        } else if (action == Intent.ACTION_SEND_MULTIPLE) {
+            @Suppress("DEPRECATION")
+            val list = intent.getParcelableArrayListExtra<Uri>(Intent.EXTRA_STREAM)
+            if (list != null) uris.addAll(list.filterNotNull())
         }
-        if (uris.isEmpty()) return
+        if (uris.isEmpty() || ioExecutor.isShutdown) return
 
-        var added = false
-        synchronized(externalOpenQueue) {
-            for (uri in uris) {
-                val staged = stageExternalUriToCache(uri) ?: continue
-                externalOpenQueue.add(staged)
-                added = true
+        try {
+            ioExecutor.execute {
+                val batch = ArrayList<JSONObject>()
+                for (uri in uris) {
+                    val staged = stageExternalUriToCache(uri) ?: continue
+                    batch.add(staged)
+                }
+                if (batch.isEmpty()) return@execute
+                synchronized(externalOpenQueue) {
+                    externalOpenQueue.addAll(batch)
+                }
+                if (webView != null) {
+                    webView.post {
+                        webView.evaluateJavascript("window.__pagewiseNativeExternalOpen?.()", null)
+                    }
+                }
             }
-        }
-        if (added && webView != null) {
-            webView.post {
-                webView.evaluateJavascript("window.__pagewiseNativeExternalOpen?.()", null)
-            }
+        } catch (_: java.util.concurrent.RejectedExecutionException) {
+            return
         }
     }
 
@@ -1250,8 +1204,12 @@ class OnyxSdkBridge(
                 }
             val pm = context.packageManager
             if (intent.resolveActivity(pm) != null) {
-                context.startActivity(intent)
-                return true
+                try {
+                    context.startActivity(intent)
+                    return true
+                } catch (_: ActivityNotFoundException) {
+                    // Fall through to search intent
+                }
             }
             val searchIntent =
                 Intent(Intent.ACTION_SEARCH).apply {
@@ -1259,8 +1217,12 @@ class OnyxSdkBridge(
                     addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
                 }
             if (searchIntent.resolveActivity(pm) != null) {
-                context.startActivity(searchIntent)
-                return true
+                try {
+                    context.startActivity(searchIntent)
+                    return true
+                } catch (_: ActivityNotFoundException) {
+                    return false
+                }
             }
             false
         }.getOrDefault(false)
@@ -1286,6 +1248,21 @@ class OnyxSdkBridge(
         if (Build.VERSION.SDK_INT < Build.VERSION_CODES.Q) return
         runCatching {
             val resolver = context.contentResolver
+            val prefs = context.getSharedPreferences("pagewise_onyx_prefs", Context.MODE_PRIVATE)
+            val existingUriStr = prefs.getString("sleep_cover_uri", null)
+            if (!existingUriStr.isNullOrBlank()) {
+                val overwritten =
+                    runCatching {
+                        val existingUri = Uri.parse(existingUriStr)
+                        resolver.openOutputStream(existingUri, "wt")?.use { out ->
+                            if (!bmp.compress(Bitmap.CompressFormat.PNG, 100, out)) {
+                                throw IllegalStateException("PNG compression failed")
+                            }
+                        } ?: throw IllegalStateException("Unable to open saved MediaStore URI")
+                        true
+                    }.getOrDefault(false)
+                if (overwritten) return
+            }
             val collection = MediaStore.Images.Media.EXTERNAL_CONTENT_URI
             val relPath = "Pictures/Screensaver"
             runCatching {
@@ -1313,6 +1290,7 @@ class OnyxSdkBridge(
                 values.clear()
                 values.put(MediaStore.MediaColumns.IS_PENDING, 0)
                 resolver.update(uri, values, null, null)
+                prefs.edit().putString("sleep_cover_uri", uri.toString()).apply()
                 committed = true
             } finally {
                 if (!committed) runCatching { resolver.delete(uri, null, null) }
@@ -1329,96 +1307,102 @@ class OnyxSdkBridge(
         val cleanTitle = title.trim().ifEmpty { "Pagewise" }
         val cleanAuthor = author.trim()
         val pct = progressPercent.coerceIn(0, 100)
-        return runCatching {
-            val metrics = context.resources.displayMetrics
-            val w = metrics.widthPixels.takeIf { it >= 320 } ?: 1404
-            val h = metrics.heightPixels.takeIf { it >= 320 } ?: 1872
-            val sx = w / 1404f
-            val sy = h / 1872f
-            val sMin = minOf(sx, sy)
-            val bmp = Bitmap.createBitmap(w, h, Bitmap.Config.ARGB_8888)
-            try {
-                val canvas = Canvas(bmp)
-                canvas.drawColor(Color.WHITE)
-                val inkPaint = android.graphics.Paint(android.graphics.Paint.ANTI_ALIAS_FLAG).apply { color = Color.BLACK }
-                val subPaint =
-                    android.graphics.Paint(android.graphics.Paint.ANTI_ALIAS_FLAG).apply {
-                        color = Color.parseColor("#444444")
-                        textAlign = android.graphics.Paint.Align.CENTER
+        if (ioExecutor.isShutdown) return ""
+        val outDir = File(context.dataDir, "exports").apply { mkdirs() }
+        val outFile = File(outDir, "pagewise_sleep_cover.png")
+        try {
+            ioExecutor.execute {
+                runCatching {
+                    val metrics = context.resources.displayMetrics
+                    val w = metrics.widthPixels.takeIf { it >= 320 } ?: 1404
+                    val h = metrics.heightPixels.takeIf { it >= 320 } ?: 1872
+                    val sx = w / 1404f
+                    val sy = h / 1872f
+                    val sMin = minOf(sx, sy)
+                    val bmp = Bitmap.createBitmap(w, h, Bitmap.Config.ARGB_8888)
+                    try {
+                        val canvas = Canvas(bmp)
+                        canvas.drawColor(Color.WHITE)
+                        val inkPaint = android.graphics.Paint(android.graphics.Paint.ANTI_ALIAS_FLAG).apply { color = Color.BLACK }
+                        val subPaint =
+                            android.graphics.Paint(android.graphics.Paint.ANTI_ALIAS_FLAG).apply {
+                                color = Color.parseColor("#444444")
+                                textAlign = android.graphics.Paint.Align.CENTER
+                            }
+                        val rulePaint =
+                            android.graphics.Paint().apply {
+                                color = Color.BLACK
+                                style = android.graphics.Paint.Style.STROKE
+                                strokeWidth = 6f * sMin
+                            }
+                        canvas.drawRect(72f * sx, 72f * sy, w - 72f * sx, h - 72f * sy, rulePaint)
+                        rulePaint.strokeWidth = 2f * sMin
+                        rulePaint.color = Color.parseColor("#BBBBBB")
+                        canvas.drawRect(88f * sx, 88f * sy, w - 88f * sx, h - 88f * sy, rulePaint)
+
+                        subPaint.textSize = 28f * sMin
+                        subPaint.typeface = android.graphics.Typeface.MONOSPACE
+                        canvas.drawText("EX LIBRIS · PAGEWISE", w / 2f, 180f * sy, subPaint)
+
+                        val boxW = 640f * sMin
+                        val boxH = 880f * sMin
+                        val coverFile = if (coverRelPath.isNotBlank()) resolveSafeBookFile(coverRelPath) else null
+                        val coverBmp = coverFile?.let { decodeScaledCoverBitmap(it, boxW.toInt().coerceAtLeast(120), boxH.toInt().coerceAtLeast(160)) }
+                        if (coverBmp != null) {
+                            val cw = coverBmp.width.coerceAtLeast(1).toFloat()
+                            val ch = coverBmp.height.coerceAtLeast(1).toFloat()
+                            val fitScale = minOf(boxW / cw, boxH / ch)
+                            val dw = cw * fitScale
+                            val dh = ch * fitScale
+                            val left = (w - dw) / 2f
+                            val top = 260f * sy + (boxH - dh) / 2f
+                            val dest = android.graphics.RectF(left, top, left + dw, top + dh)
+                            canvas.drawBitmap(coverBmp, null, dest, null)
+                            rulePaint.color = Color.BLACK
+                            rulePaint.strokeWidth = 4f * sMin
+                            canvas.drawRect(dest, rulePaint)
+                            coverBmp.recycle()
+                        }
+
+                        inkPaint.textAlign = android.graphics.Paint.Align.CENTER
+                        inkPaint.textSize = 54f * sMin
+                        inkPaint.typeface = android.graphics.Typeface.create(android.graphics.Typeface.SERIF, android.graphics.Typeface.BOLD)
+                        canvas.drawText(cleanTitle.take(28), w / 2f, 1280f * sy, inkPaint)
+
+                        if (cleanAuthor.isNotEmpty()) {
+                            subPaint.textSize = 36f * sMin
+                            subPaint.typeface = android.graphics.Typeface.SERIF
+                            canvas.drawText(cleanAuthor.take(40), w / 2f, 1355f * sy, subPaint)
+                        }
+
+                        val barLeft = 280f * sx
+                        val barRight = w - 280f * sx
+                        val barTop = 1460f * sy
+                        val barBottom = 1484f * sy
+                        rulePaint.color = Color.BLACK
+                        rulePaint.strokeWidth = 3f * sMin
+                        canvas.drawRect(barLeft, barTop, barRight, barBottom, rulePaint)
+                        if (pct > 0) {
+                            inkPaint.style = android.graphics.Paint.Style.FILL
+                            canvas.drawRect(barLeft, barTop, barLeft + (barRight - barLeft) * (pct / 100f), barBottom, inkPaint)
+                        }
+                        subPaint.textSize = 28f * sMin
+                        subPaint.typeface = android.graphics.Typeface.MONOSPACE
+                        canvas.drawText("READING PROGRESS · $pct%", w / 2f, 1545f * sy, subPaint)
+
+                        FileOutputStream(outFile).use { out ->
+                            bmp.compress(Bitmap.CompressFormat.PNG, 100, out)
+                            out.fd.sync()
+                        }
+                        exportSleepCoverToMediaStore(bmp)
+                    } finally {
+                        bmp.recycle()
                     }
-                val rulePaint =
-                    android.graphics.Paint().apply {
-                        color = Color.BLACK
-                        style = android.graphics.Paint.Style.STROKE
-                        strokeWidth = 6f * sMin
-                    }
-                canvas.drawRect(72f * sx, 72f * sy, w - 72f * sx, h - 72f * sy, rulePaint)
-                rulePaint.strokeWidth = 2f * sMin
-                rulePaint.color = Color.parseColor("#BBBBBB")
-                canvas.drawRect(88f * sx, 88f * sy, w - 88f * sx, h - 88f * sy, rulePaint)
-
-                subPaint.textSize = 28f * sMin
-                subPaint.typeface = android.graphics.Typeface.MONOSPACE
-                canvas.drawText("EX LIBRIS · PAGEWISE", w / 2f, 180f * sy, subPaint)
-
-                val boxW = 640f * sMin
-                val boxH = 880f * sMin
-                val coverFile = if (coverRelPath.isNotBlank()) resolveSafeBookFile(coverRelPath) else null
-                val coverBmp = coverFile?.let { decodeScaledCoverBitmap(it, boxW.toInt().coerceAtLeast(120), boxH.toInt().coerceAtLeast(160)) }
-                if (coverBmp != null) {
-                    val cw = coverBmp.width.coerceAtLeast(1).toFloat()
-                    val ch = coverBmp.height.coerceAtLeast(1).toFloat()
-                    val fitScale = minOf(boxW / cw, boxH / ch)
-                    val dw = cw * fitScale
-                    val dh = ch * fitScale
-                    val left = (w - dw) / 2f
-                    val top = 260f * sy + (boxH - dh) / 2f
-                    val dest = android.graphics.RectF(left, top, left + dw, top + dh)
-                    canvas.drawBitmap(coverBmp, null, dest, null)
-                    rulePaint.color = Color.BLACK
-                    rulePaint.strokeWidth = 4f * sMin
-                    canvas.drawRect(dest, rulePaint)
-                    coverBmp.recycle()
                 }
-
-                inkPaint.textAlign = android.graphics.Paint.Align.CENTER
-                inkPaint.textSize = 54f * sMin
-                inkPaint.typeface = android.graphics.Typeface.create(android.graphics.Typeface.SERIF, android.graphics.Typeface.BOLD)
-                canvas.drawText(cleanTitle.take(28), w / 2f, 1280f * sy, inkPaint)
-
-                if (cleanAuthor.isNotEmpty()) {
-                    subPaint.textSize = 36f * sMin
-                    subPaint.typeface = android.graphics.Typeface.SERIF
-                    canvas.drawText(cleanAuthor.take(40), w / 2f, 1355f * sy, subPaint)
-                }
-
-                // Fore-edge progress gauge
-                val barLeft = 280f * sx
-                val barRight = w - 280f * sx
-                val barTop = 1460f * sy
-                val barBottom = 1484f * sy
-                rulePaint.color = Color.BLACK
-                rulePaint.strokeWidth = 3f * sMin
-                canvas.drawRect(barLeft, barTop, barRight, barBottom, rulePaint)
-                if (pct > 0) {
-                    inkPaint.style = android.graphics.Paint.Style.FILL
-                    canvas.drawRect(barLeft, barTop, barLeft + (barRight - barLeft) * (pct / 100f), barBottom, inkPaint)
-                }
-                subPaint.textSize = 28f * sMin
-                subPaint.typeface = android.graphics.Typeface.MONOSPACE
-                canvas.drawText("READING PROGRESS · $pct%", w / 2f, 1545f * sy, subPaint)
-
-                val outDir = File(context.dataDir, "exports").apply { mkdirs() }
-                val outFile = File(outDir, "pagewise_sleep_cover.png")
-                FileOutputStream(outFile).use { out ->
-                    bmp.compress(Bitmap.CompressFormat.PNG, 100, out)
-                    out.fd.sync()
-                }
-                exportSleepCoverToMediaStore(bmp)
-                outFile.absolutePath
-            } finally {
-                bmp.recycle()
             }
-        }.getOrDefault("")
+        } catch (_: java.util.concurrent.RejectedExecutionException) {
+            return ""
+        }
+        return outFile.absolutePath
     }
 }

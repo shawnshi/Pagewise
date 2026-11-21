@@ -113,6 +113,15 @@ internal class NativeLibraryRepository(
                     JSONObject().put("book", book(id(payload)))
                 }
 
+                "booksByIds" -> {
+                    val arr = payload.optJSONArray("ids") ?: JSONArray()
+                    val reqIds = (0 until arr.length()).mapNotNull { idx -> arr.optString(idx).takeIf { it.isNotBlank() } }
+                    val map = booksByIds(reqIds)
+                    val outObj = JSONObject()
+                    for ((k, v) in map) outObj.put(k, v)
+                    JSONObject().put("books", outObj)
+                }
+
                 "annotations" -> {
                     annotations(payload)
                 }
@@ -212,6 +221,22 @@ internal class NativeLibraryRepository(
     }
 
     private fun book(id: String) = bookDto(rows("SELECT * FROM books WHERE id=?", listOf(id)).singleOrNull() ?: fail("book_not_found"))
+
+    fun booksByIds(ids: Collection<String>): Map<String, JSONObject> {
+        requireReady()
+        val unique = ids.asSequence().map { it.trim() }.filter { it.isNotEmpty() }.distinct().toList()
+        if (unique.isEmpty()) return emptyMap()
+        val out = linkedMapOf<String, JSONObject>()
+        for (chunk in unique.chunked(450)) {
+            val placeholders = chunk.joinToString(",") { "?" }
+            for (row in rows("SELECT * FROM books WHERE id IN ($placeholders)", chunk)) {
+                val dto = bookDto(row)
+                val id = dto.optString("id")
+                if (id.isNotEmpty()) out[id] = dto
+            }
+        }
+        return out
+    }
 
     private fun bookDto(row: Map<String, String?>): JSONObject {
         val result = JSONObject()

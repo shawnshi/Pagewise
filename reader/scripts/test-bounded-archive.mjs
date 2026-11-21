@@ -275,3 +275,60 @@ test('truncated archive and unsafe ZIP paths reject before writes', async () => 
     assert.deepEqual(s.writes, [])
   }
 })
+test('malformed ink-strokes.json rejects cleanly before library writes', async () => {
+  const invalidPayloads = [
+    [{ bookId: 'old-0', pageKey: 'pdf:1', strokes: [{ id: 's1', tool: 'fountain', width: -1, points: [{ x: 0.1, y: 0.2, p: 0.5 }], createdAt: 1 }] }],
+    [{ bookId: 'old-0', pageKey: 'pdf:1', strokes: [{ id: 's2', tool: 'highlighter', width: 2, points: [{ x: 0.1, y: 0.2, p: 0.5 }], createdAt: 1 }] }],
+    [{ bookId: 'old-0', pageKey: 'pdf:1', strokes: [{ id: 's3', tool: 'pencil', width: 2, points: [], createdAt: 1 }] }],
+  ]
+  for (const entries of invalidPayloads) {
+    const badStrokes = { format: 'org.pagewise.ink-strokes', version: 1, entries }
+    const bytes = archive(['new bytes'], { 'ink-strokes.json': fflate.strToU8(JSON.stringify(badStrokes)) })
+    const s = store(); const api = await loadBackup(s)
+    await assert.rejects(api.importBackup(file(bytes)), /ink-strokes\.json entry 0 invalid/)
+    assert.deepEqual(s.writes, [])
+  }
+})
+test('real exportBackup and importBackup preserve OnyxInkStroke payloads across remapped book IDs', async () => {
+  const origStorage = globalThis.localStorage
+  const origIdb = globalThis.indexedDB
+  const ls = new Map()
+  globalThis.localStorage = {
+    get length() { return ls.size },
+    key: i => [...ls.keys()][i] ?? null,
+    getItem: k => ls.get(k) ?? null,
+    setItem: (k, v) => ls.set(k, String(v)),
+    removeItem: k => ls.delete(k),
+  }
+  delete globalThis.indexedDB
+  const realStroke = {
+    id: 'ink-rt-1',
+    tool: 'fountain',
+    width: 2.8,
+    points: [{ x: 0.1, y: 0.2, p: 0.5 }, { x: 0.6, y: 0.7, p: 0.8 }],
+    createdAt: 1730000000000,
+  }
+  try {
+    ls.set('pagewise-onyx-ink:v1:source-1:pdf:1', JSON.stringify([realStroke]))
+    const srcStore = store([['source-1', 'ink book bytes']])
+    const exporter = await loadBackup(srcStore)
+    const exportedBlob = await exporter.exportBackup()
+    const exportedBytes = new Uint8Array(await exportedBlob.arrayBuffer())
+    const zipEntries = fflate.unzipSync(exportedBytes)
+    assert.ok(zipEntries['ink-strokes.json'], 'exportBackup must embed ink-strokes.json')
+
+    ls.clear()
+    const dstStore = store([])
+    const importer = await loadBackup(dstStore)
+    const res = await importer.importBackup(new File([exportedBytes], 'roundtrip.okf.zip'))
+    assert.equal(res.books, 1)
+    assert.equal(ls.get('pagewise-onyx-ink:v1:source-1:pdf:1'), undefined)
+    const restoredRaw = ls.get('pagewise-onyx-ink:v1:new-0:pdf:1')
+    assert.ok(restoredRaw, 'remapped book ID must receive exported ink strokes')
+    assert.deepEqual(JSON.parse(restoredRaw), [realStroke])
+  } finally {
+    if (origStorage === undefined) delete globalThis.localStorage
+    else globalThis.localStorage = origStorage
+    if (origIdb !== undefined) globalThis.indexedDB = origIdb
+  }
+})

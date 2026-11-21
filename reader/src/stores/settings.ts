@@ -165,6 +165,7 @@ export function getDefaultTypographyForLanguage(language = 'zh', opts: {
   dpr?: number
   textScale?: number
   viewportWidth?: number
+  einkDevice?: boolean
 } = {}): TypographySettings {
   return { ...profileDefaults(opts.profile ?? defaultTypographyProfile(normalizeLanguageTag(language)), opts), ...globalTypographyOverrides(opts.base ?? {}) }
 }
@@ -181,6 +182,7 @@ export function resolveEffectiveTypography(opts: {
   protectedLayout?: boolean
   viewportWidth?: number
   textScale?: number
+  einkDevice?: boolean
 }): ResolvedTypography {
   const normLang = normalizeLanguageTag(opts.language)
   const lang = normLang === 'und' ? {} : validateTypographySettings(opts.languagesMap?.[normLang])
@@ -194,7 +196,7 @@ export function resolveEffectiveTypography(opts: {
   const merged: TypographySettings = {
     theme: base.theme, flow: base.flow, continuousScroll: base.continuousScroll,
     maxColumnCount: base.maxColumnCount, portraitScroll: base.portraitScroll, progressDisplay: base.progressDisplay,
-    ...getDefaultTypographyForLanguage(normLang, { profile, base, calibration: opts.calibration, dpr: opts.dpr, viewportWidth: opts.viewportWidth, textScale: opts.textScale }),
+    ...getDefaultTypographyForLanguage(normLang, { profile, base, calibration: opts.calibration, dpr: opts.dpr, viewportWidth: opts.viewportWidth, textScale: opts.textScale, einkDevice: opts.einkDevice }),
     ...lang, ...book,
   }
   // Saved text preferences are retained, but unsupported publication layouts are never normalized.
@@ -364,7 +366,15 @@ export interface ReadingModePrefs {
   /** 大字: 预设开关; custom 为在大字模式里手动调过的值 (下次开启沿用) */
   largeText: { enabled: boolean; size: 'large' | 'xlarge'; custom: Record<string, unknown> }
   /** 墨水屏: 纯黑白高对比、字重 +100、无动画、GC 全刷消残影页数间隔 (0 为仅系统控制); suggestDismissed 为「识别到墨水屏设备」提示已处理 */
-  eink: { enabled: boolean; suggestDismissed: boolean; gcIntervalPages: number; volumeKeysEnabled?: boolean; oneHandedTapZones?: boolean }
+  eink: {
+    enabled: boolean
+    suggestDismissed: boolean
+    gcIntervalPages: number
+    volumeKeysEnabled?: boolean
+    oneHandedTapZones?: boolean
+    tapZoneLayout?: 'standard' | 'left' | 'right'
+    sleepCover?: boolean
+  }
   /** 沉浸: 隐藏页眉页脚文字 / 工具栏只在轻点时出现; hideFooter 连页码也隐藏 */
   immersive: { enabled: boolean; hideFooter: boolean }
   /** 护眼: 暖色主题 + 应用内调暗 (0–60%) + 休息提醒 (分钟) */
@@ -529,7 +539,15 @@ const defaults: SettingsState = {
     },
     wordGuide: { enabled: false, style: 'auto', strength: 'normal', intensity: 0.7, color: 'rose', mark: BASIC_MARK_DEFAULT },
     largeText: { enabled: false, size: 'large', custom: {} },
-    eink: { enabled: false, suggestDismissed: false, gcIntervalPages: 10, volumeKeysEnabled: true, oneHandedTapZones: false },
+    eink: {
+      enabled: false,
+      suggestDismissed: false,
+      gcIntervalPages: 10,
+      volumeKeysEnabled: true,
+      oneHandedTapZones: false,
+      tapZoneLayout: 'standard',
+      sleepCover: false,
+    },
     immersive: { enabled: false, hideFooter: false },
     eyeCare: { theme: 'sepia', dim: 0, reminder: true, intervalMin: 20 },
     night: { schedule: false, from: '22:00', to: '07:00' },
@@ -552,11 +570,22 @@ function mergeReadingMode(saved: unknown): ReadingModePrefs {
   const s = saved as Partial<Record<keyof ReadingModePrefs, unknown>>
   const part = <T extends object>(base: T, v: unknown): T =>
     v && typeof v === 'object' && !Array.isArray(v) ? { ...base, ...(v as Partial<T>) } : base
+  const rawEink = (s.eink && typeof s.eink === 'object' && !Array.isArray(s.eink))
+    ? (s.eink as Partial<ReadingModePrefs['eink']>)
+    : {}
+  const eink = part(d.eink, s.eink)
+  const validLayout = rawEink.tapZoneLayout === 'standard' || rawEink.tapZoneLayout === 'left' || rawEink.tapZoneLayout === 'right'
+  if (!validLayout) {
+    eink.tapZoneLayout = rawEink.oneHandedTapZones ? 'right' : 'standard'
+  }
+  eink.oneHandedTapZones = rawEink.oneHandedTapZones !== undefined && !validLayout
+    ? Boolean(rawEink.oneHandedTapZones)
+    : eink.tapZoneLayout !== 'standard'
   return {
     typewriter: part(d.typewriter, s.typewriter),
     wordGuide: part(d.wordGuide, s.wordGuide),
     largeText: part(d.largeText, s.largeText),
-    eink: part(d.eink, s.eink),
+    eink,
     immersive: part(d.immersive, s.immersive),
     eyeCare: part(d.eyeCare, s.eyeCare),
     night: part(d.night, s.night),

@@ -374,13 +374,21 @@ watch(() => library.books.map(book => book.id), ids => {
   ]
 }, { flush: 'sync' })
 
-const hasActiveChips = computed(() => {
+const hasOrphanCategoryFilter = computed(() =>
+  !!categoryFilter.value && !availableCategories.value.some(c => c.id === categoryFilter.value),
+)
+
+const hasNonCategoryFilters = computed(() => {
   return !!keyword.value.trim() || !!tagFilter.value.length || !!formatFilter.value || !!languageFilter.value || !!statusFilter.value || !!availabilityFilter.value
-    || !!categoryFilter.value || !!classificationStatusFilter.value || !!audienceFilter.value || !!textbookFilter.value || !!ancientTextFilter.value || !!workCountryFilter.value || !!workPeriodFilter.value
+    || !!classificationStatusFilter.value || !!audienceFilter.value || !!textbookFilter.value || !!ancientTextFilter.value || !!workCountryFilter.value || !!workPeriodFilter.value
 })
 
+const hasActiveFilters = computed(() => hasNonCategoryFilters.value || !!categoryFilter.value)
+
+const hasActiveChips = computed(() => hasNonCategoryFilters.value || hasOrphanCategoryFilter.value)
+
 const lastReadingBook = computed(() =>
-  hasActiveChips.value ? undefined : [...allBooks.value].filter(book => !!book.lastReadAt).sort((a, b) => (b.lastReadAt ?? 0) - (a.lastReadAt ?? 0))[0])
+  hasActiveFilters.value ? undefined : [...allBooks.value].filter(book => !!book.lastReadAt).sort((a, b) => (b.lastReadAt ?? 0) - (a.lastReadAt ?? 0))[0])
 
 const topicTags = computed(() => [...new Set(allBooks.value.flatMap(book => book.classification?.topics.map(tag => tag.value) ?? []))].sort())
 const secondaryTags = computed(() => allTags.value.filter(tag => !topicTags.value.includes(tag)))
@@ -798,7 +806,7 @@ async function clearSelectedTags() {
     </section>
 
     <div v-if="allBooks.length" class="category-toolbar">
-      <button type="button" class="btn open-filter" :aria-expanded="!!filterDraft" aria-controls="library-filters" @click="openAdvancedFilter">{{ t('library.filters') }}{{ hasActiveChips ? ' · ' + query.total : '' }}</button>
+      <button type="button" class="btn open-filter" :aria-expanded="!!filterDraft" aria-controls="library-filters" @click="openAdvancedFilter">{{ t('library.filters') }}{{ hasActiveFilters ? ' · ' + query.total : '' }}</button>
       <nav ref="categoryNav" class="category-tabs" :aria-label="t('library.categoryNavigation')">
         <button v-for="category in categoryTabs" :key="category.id" type="button"
           class="btn category-tab" :class="{ 'category-active': categoryFilter === category.id }"
@@ -880,7 +888,7 @@ async function clearSelectedTags() {
         {{ t("uiV02.copy.状态:") }} {{ t('uiV02.status.' + statusFilter) }}
         <button type="button" class="chip-remove" :aria-label="t('uiV02.copy.清除状态筛选')" @click="statusFilter = ''">×</button>
       </span>
-      <span v-if="categoryFilter" class="chip">
+      <span v-if="hasOrphanCategoryFilter" class="chip">
         {{ t('classification.category') }}: {{ categoryLabel(categoryFilter) }}
         <button type="button" class="chip-remove" aria-label="清除类别筛选" @click="categoryFilter = ''">×</button>
       </span>

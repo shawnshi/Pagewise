@@ -12,7 +12,7 @@ import { compile, emit, groovy, jsonAdapter, runJvm } from './native-import-test
 const root = fileURLToPath(new URL('../', import.meta.url))
 const read = rel => readFileSync(join(root, rel), 'utf8')
 
-test('EinkStreamAggregator batches deltas at >=18 chars, flushes <18 chars after 650ms, and settles with Regal', async () => {
+test('EinkStreamAggregator batches deltas at >=48 chars or sentence boundary (>=24), flushes tail after maxWaitMs, and settles with Regal', async () => {
   onyxEpd.resetForTest()
   const epdCalls = []
   const origEnter = onyxEpd.enterFastMode.bind(onyxEpd)
@@ -27,25 +27,31 @@ test('EinkStreamAggregator batches deltas at >=18 chars, flushes <18 chars after
     let completed = 0
     const agg = new EinkStreamAggregator({
       einkEnabled: true,
+      maxWaitMs: 120,
       onFlush: chunk => flushed.push(chunk),
       onComplete: () => { completed++ },
     })
 
-    // Below 18 chars: buffered without premature E-Ink repaint
-    agg.push('12345')
-    agg.push('67890')
+    // Below 24 chars without sentence boundary: buffered without premature E-Ink repaint
+    agg.push('1234567890')
+    agg.push('abcdefghij')
     assert.deepEqual(flushed, [])
 
-    // Crossing 18 chars flushes in a single coarse batch & enters A2 once
-    agg.push('abcdefghij')
-    assert.deepEqual(flushed, ['1234567890abcdefghij'])
-    assert.deepEqual(epdCalls.filter(c => c[0] === 'enter'), [['enter', 'stream', 'a2']])
+    // Crossing >=24 chars with sentence boundary flushes cleanly & enters DU once
+    agg.push('klmno.')
+    assert.deepEqual(flushed, ['1234567890abcdefghijklmno.'])
+    assert.deepEqual(epdCalls.filter(c => c[0] === 'enter'), [['enter', 'stream', 'du']])
 
-    // Short tail (<18 chars) flushes automatically after 650ms window
+    // >=48 chars without punctuation also flushes cleanly
+    const longToken = 'a'.repeat(48)
+    agg.push(longToken)
+    assert.equal(flushed.length, 2)
+
+    // Short tail flushes automatically after wait window
     agg.push('tail')
-    assert.equal(flushed.length, 1)
-    await new Promise(resolve => setTimeout(resolve, 720))
-    assert.deepEqual(flushed, ['1234567890abcdefghij', 'tail'])
+    assert.equal(flushed.length, 2)
+    await new Promise(resolve => setTimeout(resolve, 180))
+    assert.deepEqual(flushed, ['1234567890abcdefghijklmno.', longToken, 'tail'])
 
     agg.complete()
     assert.equal(completed, 1)
@@ -76,12 +82,12 @@ test('EinkStreamAggregator handles AbortSignal cancellation, empty streams, and 
       signal: controller.signal,
       onFlush: chunk => abortedChunks.push(chunk),
     })
-    aggAbort.push('123456789012345678') // enters fast mode once
+    aggAbort.push('123456789012345678901234567890123456789012345678') // enters fast mode once at 48 chars
     aggAbort.push('queued')
     controller.abort()
     aggAbort.push('after-abort')
     await new Promise(resolve => setTimeout(resolve, 90))
-    assert.deepEqual(abortedChunks, ['123456789012345678'])
+    assert.deepEqual(abortedChunks, ['123456789012345678901234567890123456789012345678'])
     assert.ok(epdCalls.some(c => c[0] === 'exit'))
     assert.ok(epdCalls.some(c => c[0] === 'repaint' && c[1] === 'regal'))
 
@@ -116,9 +122,9 @@ test('Android hardware bridge, storage root, speech, and manual source contracts
   assert.doesNotMatch(bridge.slice(bridge.indexOf('fun resolveUpdateModeEnum'), bridge.indexOf('private fun buildEpdStatusJson')), /constants\.firstOrNull\(\)/)
   assert.doesNotMatch(bridge.slice(bridge.indexOf('fun isBooxHardware'), bridge.indexOf('fun buildHardwareProfileJson')), /deviceClass != null/)
   assert.doesNotMatch(bridge.slice(bridge.indexOf('private fun readFrontLightSnapshot'), bridge.indexOf('private fun queryHasFrontLight')), /\|\|\s*isBooxHardware\(\)/)
-  assert.match(bridge, /WebView::class\.java, Boolean::class\.javaPrimitiveType/)
-  assert.match(bridge, /setColdLightConfigValue/)
-  assert.match(bridge, /setWarmLightConfigValue/)
+  assert.match(bridge, /EpdController\.setWebViewContrastOptimize/)
+  assert.match(bridge, /FrontLightController\.setColdLightDeviceValue/)
+  assert.match(bridge, /FrontLightController\.setWarmLightDeviceValue/)
   assert.match(bridge, /MediaStore\.Images\.Media\.EXTERNAL_CONTENT_URI/)
   assert.match(externalOpen, /BaseDirectory\.AppData/)
   assert.doesNotMatch(externalOpen, /BaseDirectory\.AppLocalData/)

@@ -25,7 +25,13 @@ internal class NativeNoteEditor(
     private val onClosed: () -> Unit = {},
     private val foreground: Int = android.graphics.Color.BLACK,
     private val background: Int = android.graphics.Color.WHITE,
+    private val english: Boolean = false,
 ) {
+    private fun tr(
+        zh: String,
+        en: String,
+    ) = if (english) en else zh
+
     private val fg = foreground
     private val bg = background
     private val before = JSONObject(note.toString())
@@ -70,7 +76,10 @@ internal class NativeNoteEditor(
             }
         form.addView(
             TextView(activity).apply {
-                text = "只编辑笔记正文；选区原文、书籍 ID 和阅读位置保持不变。"
+                text = tr(
+                    "只编辑笔记正文；选区原文、书籍 ID 和阅读位置保持不变。",
+                    "Edit note body only; quoted text, book ID and reading location remain unchanged.",
+                )
                 textSize = 14f
                 setTextColor(NativeUi.secondary(bg))
                 setPadding(0, 0, 0, NativeUi.dp(activity, 8))
@@ -106,18 +115,22 @@ internal class NativeNoteEditor(
         }
         form.addView(editor)
         form.addView(status)
-        status.text = if (recovery.optString("code") == "draft_recovered") "已恢复本机草稿，尚未写入批注。" else "输入后自动保留本机草稿。"
+        status.text = if (recovery.optString("code") == "draft_recovered") {
+            tr("已恢复本机草稿，尚未写入批注。", "Recovered local draft; annotation not yet saved.")
+        } else {
+            tr("输入后自动保留本机草稿。", "Local draft saves automatically while typing.")
+        }
         val window =
             NativeEinkDialog(
                 activity,
-                "编辑笔记",
+                tr("编辑笔记", "Edit note"),
                 form,
                 foreground,
                 background,
                 listOf(
-                    AlertDialog.BUTTON_POSITIVE to "保存批注",
-                    AlertDialog.BUTTON_NEGATIVE to "保留草稿并关闭",
-                    AlertDialog.BUTTON_NEUTRAL to "放弃本次输入",
+                    AlertDialog.BUTTON_POSITIVE to tr("保存批注", "Save annotation"),
+                    AlertDialog.BUTTON_NEGATIVE to tr("保留草稿并关闭", "Keep draft & close"),
+                    AlertDialog.BUTTON_NEUTRAL to tr("放弃本次输入", "Discard input"),
                 ),
                 cancelableOutside = false,
                 onDismissed = {
@@ -151,7 +164,10 @@ internal class NativeNoteEditor(
             window.getButton(AlertDialog.BUTTON_NEUTRAL)?.setOnClickListener {
                 val msg =
                     TextView(activity).apply {
-                        text = "不会删除已存在的本机草稿，也不回滚已发送的保存。批注正文不会因此改变。"
+                        text = tr(
+                            "不会删除已存在的本机草稿，也不回滚已发送的保存。批注正文不会因此改变。",
+                            "Does not delete saved local drafts or roll back submitted saves. Existing annotation text stays intact.",
+                        )
                         textSize = 15f
                         setTextColor(fg)
                         setLineSpacing(0f, 1.4f)
@@ -159,13 +175,13 @@ internal class NativeNoteEditor(
                 val confirmAbandon =
                     NativeEinkDialog(
                         activity,
-                        "放弃本次输入？",
+                        tr("放弃本次输入？", "Discard current input?"),
                         msg,
                         foreground,
                         background,
                         listOf(
-                            AlertDialog.BUTTON_POSITIVE to "放弃并关闭",
-                            AlertDialog.BUTTON_NEGATIVE to "返回编辑",
+                            AlertDialog.BUTTON_POSITIVE to tr("放弃并关闭", "Discard & close"),
+                            AlertDialog.BUTTON_NEGATIVE to tr("返回编辑", "Resume editing"),
                         ),
                     )
                 confirmAbandon.setOnShowListener {
@@ -201,9 +217,12 @@ internal class NativeNoteEditor(
                     main.removeCallbacks(delayed)
                     if (status.tag != "dirty") {
                         status.tag = "dirty"
-                        status.text = "草稿尚未确认保存，请勿强制关闭。"
+                        status.text = tr(
+                            "草稿尚未确认保存，请勿强制关闭。",
+                            "Draft not yet saved locally; avoid force-closing.",
+                        )
                     }
-                    main.postDelayed(delayed, 450)
+                    main.postDelayed(delayed, 2000)
                 }
             },
         )
@@ -243,7 +262,10 @@ internal class NativeNoteEditor(
             val failure = error ?: if (closeConfirmed()) null else "draft_unconfirmed"
             if (failure != null && live()) {
                 editor.isEnabled = true
-                status.text = "草稿保存未确认；当前输入仍在，请复制或核对后重试。"
+                status.text = tr(
+                    "草稿保存未确认；当前输入仍在，请复制或核对后重试。",
+                    "Draft save unconfirmed; current text is retained. Copy or retry.",
+                )
                 if (reply == null) onError(failure)
             }
             reply?.invoke(failure)
@@ -255,11 +277,20 @@ internal class NativeNoteEditor(
             status.tag = if (error != null || draft.desired != draft.confirmed) "dirty" else "clean"
             status.text =
                 if (error != null) {
-                    "草稿保存未确认；当前输入仍在，请复制或核对后重试。"
+                    tr(
+                        "草稿保存未确认；当前输入仍在，请复制或核对后重试。",
+                        "Draft save unconfirmed; current text is retained. Copy or retry.",
+                    )
                 } else if (draft.desired != draft.confirmed) {
-                    "先前草稿已确认，最新输入仍在等待。"
+                    tr(
+                        "先前草稿已确认，最新输入仍在等待。",
+                        "Previous draft confirmed; latest edits pending.",
+                    )
                 } else {
-                    "本机草稿已确认；批注正文尚未提交。"
+                    tr(
+                        "本机草稿已确认；批注正文尚未提交。",
+                        "Local draft saved; annotation not yet submitted.",
+                    )
                 }
         }
     }
@@ -295,7 +326,10 @@ internal class NativeNoteEditor(
             if (error != null) {
                 annotationBusy = false
                 editor.isEnabled = true
-                status.text = "草稿保存未确认；当前输入仍在。"
+                status.text = tr(
+                    "草稿保存未确认；当前输入仍在。",
+                    "Draft save unconfirmed; current input is preserved.",
+                )
                 onError(error)
             } else {
                 commitAnnotation(draft.confirmed)
@@ -318,7 +352,7 @@ internal class NativeNoteEditor(
 
     private fun commitAnnotation(text: String) {
         annotationBusy = true
-        status.text = "正在提交批注…"
+        status.text = tr("正在提交批注…", "Saving annotation…")
         request(
             "library.annotationPatch",
             JSONObject().put("id", id).put("before", before).put("patch", JSONObject().put("note", text)),
@@ -330,7 +364,10 @@ internal class NativeNoteEditor(
                 ) {
                     annotationBusy = false
                     editor.isEnabled = true
-                    status.text = "批注提交未确认，草稿已保留；不要假定未提交。"
+                    status.text = tr(
+                        "批注提交未确认，草稿已保留；不要假定未提交。",
+                        "Submission unconfirmed and draft retained; do not assume it failed.",
+                    )
                     onError(error ?: "invalid_response")
                     return@runOnUiThread
                 }

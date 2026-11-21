@@ -3,6 +3,7 @@ package io.pagewise.reader
 import android.app.Activity
 import android.app.AlertDialog
 import android.content.Context
+import android.graphics.Bitmap
 import android.graphics.Canvas
 import android.graphics.Color
 import android.graphics.ColorFilter
@@ -11,10 +12,13 @@ import android.graphics.drawable.Drawable
 import android.graphics.drawable.GradientDrawable
 import android.graphics.drawable.StateListDrawable
 import android.text.TextUtils
+import android.util.LruCache
 import android.view.Gravity
+import android.view.KeyEvent
 import android.view.View
 import android.view.ViewGroup
 import android.widget.Button
+import android.widget.HorizontalScrollView
 import android.widget.ImageButton
 import android.widget.ImageView
 import android.widget.LinearLayout
@@ -23,6 +27,59 @@ import android.widget.TextView
 
 /** Monochrome UI primitives; business state and persistence remain with their existing owners. */
 internal object NativeUi {
+    internal var isSpeechActive: () -> Boolean = { false }
+    internal var onDialogDismissRepaint: () -> Unit = {}
+
+    private val coverBitmapCache =
+        object : LruCache<String, Bitmap>(16 * 1024 * 1024) {
+            override fun sizeOf(
+                key: String,
+                value: Bitmap,
+            ): Int = value.allocationByteCount.coerceAtLeast(1)
+        }
+
+    fun cachedCoverBitmap(path: String): Bitmap? =
+        if (path.isBlank()) null else coverBitmapCache.get(path)?.takeIf { !it.isRecycled }
+
+    fun putCachedCoverBitmap(
+        path: String,
+        bitmap: Bitmap,
+    ) {
+        if (path.isNotBlank() && !bitmap.isRecycled) {
+            coverBitmapCache.put(path, bitmap)
+        }
+    }
+
+    fun configureEinkScroll(scroll: ScrollView): ScrollView =
+        scroll.apply {
+            overScrollMode = View.OVER_SCROLL_NEVER
+            isVerticalFadingEdgeEnabled = false
+            isSmoothScrollingEnabled = false
+        }
+
+    fun configureEinkHorizontalScroll(scroll: HorizontalScrollView): HorizontalScrollView =
+        scroll.apply {
+            overScrollMode = View.OVER_SCROLL_NEVER
+            isHorizontalFadingEdgeEnabled = false
+            isSmoothScrollingEnabled = false
+        }
+
+    fun stepScroll(
+        scroll: ScrollView,
+        direction: Int,
+    ): Boolean {
+        val dir = if (direction == View.FOCUS_UP || direction < 0) -1 else 1
+        val child = scroll.getChildAt(0) ?: return false
+        val viewportH = (scroll.height - scroll.paddingTop - scroll.paddingBottom).coerceAtLeast(0)
+        val maxY = (child.height - viewportH).coerceAtLeast(0)
+        val curY = scroll.scrollY
+        if ((dir > 0 && curY >= maxY) || (dir < 0 && curY <= 0)) return false
+        val overlap = dp(scroll.context, 48)
+        val step = (viewportH - overlap).coerceAtLeast(dp(scroll.context, 120))
+        scroll.scrollBy(0, dir * step)
+        return true
+    }
+
     fun dp(
         context: Context,
         value: Int,
@@ -1474,22 +1531,24 @@ internal class NativeEinkDialog(
                 if (android.os.Build.VERSION.SDK_INT >= 28) isAccessibilityHeading = true
             }
         scrollView =
-            ScrollView(activity).apply {
-                isFillViewport = false
-                addView(
-                    LinearLayout(activity).apply {
-                        orientation = LinearLayout.VERTICAL
-                        setPadding(
-                            NativeUi.dp(activity, 18),
-                            NativeUi.dp(activity, 14),
-                            NativeUi.dp(activity, 18),
-                            NativeUi.dp(activity, 10),
-                        )
-                        addView(heading)
-                        addView(innerContent)
-                    },
-                )
-            }
+            NativeUi.configureEinkScroll(
+                ScrollView(activity).apply {
+                    isFillViewport = false
+                    addView(
+                        LinearLayout(activity).apply {
+                            orientation = LinearLayout.VERTICAL
+                            setPadding(
+                                NativeUi.dp(activity, 18),
+                                NativeUi.dp(activity, 14),
+                                NativeUi.dp(activity, 18),
+                                NativeUi.dp(activity, 10),
+                            )
+                            addView(heading)
+                            addView(innerContent)
+                        },
+                    )
+                },
+            )
         actions =
             captions.associate { (which, caption) ->
                 val btn =
@@ -1520,7 +1579,10 @@ internal class NativeEinkDialog(
             }
         setView(BoundedContent(activity, scrollView, footer))
         setCanceledOnTouchOutside(cancelableOutside)
-        super.setOnDismissListener { dismissHooks.toList().forEach { it() } }
+        super.setOnDismissListener {
+            dismissHooks.toList().forEach { it() }
+            NativeUi.onDialogDismissRepaint()
+        }
     }
 
     fun addOnDismiss(hook: () -> Unit) {
@@ -1539,9 +1601,32 @@ internal class NativeEinkDialog(
         walk(scrollView)
     }
 
+    private fun isVolumePagingAllowed(): Boolean =
+        context.getSharedPreferences("pagewise_native_ui", Context.MODE_PRIVATE).getBoolean("volume_keys_paging", true)
+
     fun pageScroll(direction: Int): Boolean {
         if (currentFocus is android.widget.EditText) return false
-        return scrollView.pageScroll(direction)
+        return NativeUi.stepScroll(scrollView, direction)
+    }
+
+    override fun dispatchKeyEvent(event: KeyEvent): Boolean {
+        if (currentFocus is android.widget.EditText) return super.dispatchKeyEvent(event)
+        val audioActive =
+            NativeUi.isSpeechActive() ||
+                ((context.getSystemService(Context.AUDIO_SERVICE) as? android.media.AudioManager)?.isMusicActive == true)
+        val volAllowed = !audioActive && isVolumePagingAllowed()
+        val direction =
+            when (event.keyCode) {
+                KeyEvent.KEYCODE_PAGE_DOWN -> View.FOCUS_DOWN
+                KeyEvent.KEYCODE_PAGE_UP -> View.FOCUS_UP
+                KeyEvent.KEYCODE_VOLUME_DOWN -> if (volAllowed) View.FOCUS_DOWN else return super.dispatchKeyEvent(event)
+                KeyEvent.KEYCODE_VOLUME_UP -> if (volAllowed) View.FOCUS_UP else return super.dispatchKeyEvent(event)
+                else -> return super.dispatchKeyEvent(event)
+            }
+        if (event.action == KeyEvent.ACTION_DOWN) {
+            NativeUi.stepScroll(scrollView, direction)
+        }
+        return true
     }
 
     override fun onStart() {

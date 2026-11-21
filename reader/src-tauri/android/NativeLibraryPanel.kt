@@ -230,10 +230,12 @@ internal class NativeLibraryPanel(
             )
         }
         parent.addView(
-            android.widget.HorizontalScrollView(activity).apply {
-                isHorizontalScrollBarEnabled = false
-                addView(row)
-            },
+            NativeUi.configureEinkHorizontalScroll(
+                android.widget.HorizontalScrollView(activity).apply {
+                    isHorizontalScrollBarEnabled = false
+                    addView(row)
+                },
+            ),
         )
     }
 
@@ -793,6 +795,7 @@ internal class NativeLibraryPanel(
                     if (count < 0) throw org.json.JSONException("invalid_category_count")
                     count > 0
                 }
+            val visibleCategoryValues = categories.map { it.getString("value") }.toSet()
             if (categories.isNotEmpty()) {
                 val bg = if (ink == android.graphics.Color.BLACK) android.graphics.Color.WHITE else android.graphics.Color.BLACK
                 root.addView(
@@ -884,7 +887,7 @@ internal class NativeLibraryPanel(
             }
             root.addView(viewStrip)
 
-            val activeChips = collectActiveFilterChips()
+            val activeChips = collectActiveFilterChips(visibleCategoryValues)
             if (activeChips.isNotEmpty()) {
                 val chipFlow =
                     NativeActionFlow(activity).apply {
@@ -988,8 +991,6 @@ internal class NativeLibraryPanel(
             }
             root.addView(emptyCard)
         }
-        val metadataQueue = java.util.ArrayDeque<() -> Unit>()
-        val advance: () -> Unit = { if (!closed && token == epoch && metadataQueue.isNotEmpty()) metadataQueue.removeFirst().invoke() }
         val useGridContainer = !reading && state.viewMode in listOf("grid", "two-col")
         val itemHost: ViewGroup =
             if (useGridContainer) {
@@ -1004,9 +1005,13 @@ internal class NativeLibraryPanel(
             }
         val cardBuilder: (JSONObject, () -> Unit, () -> Unit) -> View =
             if (!reading && state.viewMode == "grid" && makeGridCard != null) makeGridCard else makeCard
+        val idArray = JSONArray()
+        data class PendingCard(val id: String, val wrapper: LinearLayout, val placeholder: View, val view: JSONObject, val check: CheckBox)
+        val pendingCards = ArrayList<PendingCard>(items.length())
         for (i in 0 until items.length()) {
             val view = items.getJSONObject(i)
             val id = view.getString("id")
+            idArray.put(id)
             val wrapper = column()
             val check =
                 CheckBox(activity).apply {
@@ -1037,52 +1042,51 @@ internal class NativeLibraryPanel(
                 }, { if (state.manage) check.isChecked = !check.isChecked else remember(id) { openDetails(view) } })
             wrapper.addView(placeholder)
             itemHost.addView(wrapper)
-            metadataQueue.add {
-                ask("library.book", JSONObject().put("id", id)) { metadata, error ->
-                    if (token != epoch) return@ask
-                    if (error != null ||
-                        metadata == null
-                    ) {
-                        wrapper.removeView(placeholder)
-                        wrapper.addView(text(view.getString("title") + " · " + (error ?: "metadata_unavailable")))
-                        main.post { advance() }
-                        return@ask
+            pendingCards.add(PendingCard(id, wrapper, placeholder, view, check))
+        }
+        if (pendingCards.isNotEmpty()) {
+            ask("library.booksByIds", JSONObject().put("ids", idArray)) { batchRes, err ->
+                if (token != epoch) return@ask
+                val booksObj = batchRes?.optJSONObject("books")
+                var returnCard: View? = null
+                for (entry in pendingCards) {
+                    val rawBook = booksObj?.optJSONObject(entry.id)
+                    if (err != null || rawBook == null) {
+                        if (err != null) {
+                            entry.wrapper.removeView(entry.placeholder)
+                            entry.wrapper.addView(text(entry.view.getString("title") + " · " + err))
+                        }
+                        continue
                     }
                     val book =
-                        metadata
-                            .getJSONObject(
-                                "book",
-                            ).put("effectiveReadingStatus", view.getString("effectiveReadingStatus"))
-                            .put("supported", view.getBoolean("supported"))
+                        JSONObject(rawBook.toString())
+                            .put("effectiveReadingStatus", entry.view.getString("effectiveReadingStatus"))
+                            .put("supported", entry.view.getBoolean("supported"))
                     val card =
                         cardBuilder(book, {
                             if (!book.getBoolean("supported")) {
                                 status.text =
                                     tr("此旧格式已停止阅读支持；元数据保留。", "This legacy format is no longer readable; metadata is retained.")
                             } else {
-                                remember(id) { openReader(book) }
+                                remember(entry.id) { openReader(book) }
                             }
-                        }, { if (state.manage) check.isChecked = !check.isChecked else remember(id) { openDetails(book) } })
-                    wrapper.removeView(placeholder)
-                    wrapper.addView(card)
-                    if (state.returnToId ==
-                        id
-                    ) {
-                        card.post {
-                            if (!closed && token == epoch &&
-                                card.isAttachedToWindow
-                            ) {
-                                card.requestRectangleOnScreen(Rect(0, 0, card.width, card.height), true)
-                                state.returnToId =
-                                    ""
-                            }
+                        }, { if (state.manage) entry.check.isChecked = !entry.check.isChecked else remember(entry.id) { openDetails(book) } })
+                    entry.wrapper.removeView(entry.placeholder)
+                    entry.wrapper.addView(card)
+                    if (state.returnToId == entry.id) returnCard = card
+                }
+                if (returnCard != null) {
+                    val target = returnCard
+                    target.post {
+                        if (!closed && token == epoch && target.isAttachedToWindow) {
+                            target.requestRectangleOnScreen(Rect(0, 0, target.width, target.height), true)
+                            state.returnToId = ""
                         }
                     }
-                    main.post { advance() }
                 }
+                repaint()
             }
         }
-        main.post { advance() }
         val page = result.getInt("page")
         val pages = result.getInt("totalPages")
         val panelBg = surfaceBg()
@@ -1155,7 +1159,8 @@ internal class NativeLibraryPanel(
         load(persist = true)
     }
 
-    private fun collectActiveFilterChips(): List<Pair<String, () -> Unit>> {
+    // Row-1 category tabs already highlight and reset visible categories; keep chips only for hidden/orphan filters.
+    private fun collectActiveFilterChips(visibleCategoryValues: Set<String> = emptySet()): List<Pair<String, () -> Unit>> {
         val chips = mutableListOf<Pair<String, () -> Unit>>()
         val kw = session.optString("keyword")
         if (kw.isNotBlank()) {
@@ -1166,7 +1171,7 @@ internal class NativeLibraryPanel(
             })
         }
         val cat = session.optString("categoryFilter")
-        if (cat.isNotBlank()) {
+        if (cat.isNotBlank() && cat !in visibleCategoryValues) {
             val catLabel =
                 if (cat == "__unclassified__") {
                     tr("未分类", "Unclassified")

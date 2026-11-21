@@ -1,8 +1,32 @@
+<script lang="ts">
+const geometrySubscribers = new Set<() => void>()
+function dispatchGeometrySubscribers() {
+  for (const fn of geometrySubscribers) fn()
+}
+function registerGeometryListener(fn: () => void) {
+  if (typeof window === 'undefined') return
+  if (geometrySubscribers.size === 0) {
+    window.addEventListener('scroll', dispatchGeometrySubscribers, { capture: true, passive: true })
+    window.addEventListener('resize', dispatchGeometrySubscribers, { passive: true })
+  }
+  geometrySubscribers.add(fn)
+}
+function unregisterGeometryListener(fn: () => void) {
+  geometrySubscribers.delete(fn)
+  if (typeof window !== 'undefined' && geometrySubscribers.size === 0) {
+    window.removeEventListener('scroll', dispatchGeometrySubscribers, true)
+    window.removeEventListener('resize', dispatchGeometrySubscribers)
+  }
+}
+</script>
+
 <script setup lang="ts">
 import { computed, nextTick, onBeforeUnmount, onMounted, ref, watch } from 'vue'
 import { t } from '../i18n'
 import { onyxEpd } from '../services/onyxEpd'
+import { toast } from '../services/toast'
 import {
+  decimateStrokePoints,
   eraseIntersectingStrokes,
   findIntersectingStrokeIds,
   normalizePointsToRect,
@@ -47,14 +71,18 @@ const strokeWidth = ref(sharedBrushState.width)
 const strokes = ref<OnyxInkStroke[]>([])
 const activePoints = ref<OnyxTouchPointCss[]>([])
 const drawingPointerId = ref<number | null>(null)
+const undoStack = ref<OnyxInkStroke[][]>([])
+const confirmClear = ref(false)
 const erasingIds = ref<Set<string>>(new Set())
 const penDetected = ref(false)
 const barrelErasing = ref(false)
+let webFastModeActive = false
 let regalTimer: ReturnType<typeof setTimeout> | undefined
 let geometryRaf = 0
+let loadSeq = 0
 let containerObserver: ResizeObserver | undefined
 
-const HOST_EXCLUDE_SELECTORS = '.bar.top, .bar.bottom, .pdf-header, .pdf-toolbar, .pdf-bottom-bar, .pdf-ai-dock, .companion-dock, .tts-mini'
+const HOST_EXCLUDE_SELECTORS = '.bar.top, .bar.bottom, .paper-header, .pdf-header, .pdf-toolbar, .pdf-bottom-bar, .pdf-ai-dock, .companion-dock, .tts-mini, .hl-bar, .hl-pop, .dialog, .modal, .sheet, [role="dialog"]'
 
 function pointInRect(pt: OnyxTouchPointCss, rect: OnyxCssRect | null): boolean {
   return !!rect && pt.x >= rect.left - 2 && pt.x <= rect.right + 2 && pt.y >= rect.top - 2 && pt.y <= rect.bottom + 2
@@ -86,16 +114,41 @@ function scheduleRegalRepaint() {
 }
 
 function loadCurrentStrokes() {
+  undoStack.value = []
+  confirmClear.value = false
   const loaded = onyxScribble.loadPageStrokes(props.bookId, props.pageKey)
   if (!loaded.length && props.legacyPageKey && props.legacyPageKey !== props.pageKey) {
     strokes.value = onyxScribble.loadPageStrokes(props.bookId, props.legacyPageKey)
   } else {
     strokes.value = loaded
   }
+  const seq = ++loadSeq
+  const bookId = props.bookId
+  const pageKey = props.pageKey
+  const legacy = props.legacyPageKey
+  void onyxScribble.loadPageStrokesAsync(bookId, pageKey).then(async asyncStrokes => {
+    if (seq !== loadSeq || props.bookId !== bookId || props.pageKey !== pageKey) return
+    if (asyncStrokes.length) {
+      strokes.value = asyncStrokes
+    } else if (legacy && legacy !== pageKey) {
+      const legacyAsync = await onyxScribble.loadPageStrokesAsync(bookId, legacy)
+      if (seq === loadSeq && props.bookId === bookId && props.pageKey === pageKey && legacyAsync.length) {
+        strokes.value = legacyAsync
+      }
+    }
+  })
+}
+
+function pushUndoSnapshot(prev: OnyxInkStroke[]) {
+  const nextStack = [...undoStack.value, prev.map(s => ({ ...s, points: [...s.points] }))]
+  if (nextStack.length > 30) nextStack.shift()
+  undoStack.value = nextStack
 }
 
 function persistCurrentStrokes() {
-  onyxScribble.savePageStrokes(props.bookId, props.pageKey, strokes.value)
+  void onyxScribble.savePageStrokesAsync(props.bookId, props.pageKey, strokes.value).then(res => {
+    if (!res.ok) toast(t('reader.scribbleSaveFailed'), 'error')
+  })
 }
 
 function currentLimitRect(): OnyxCssRect | null {
@@ -158,9 +211,12 @@ function commitPoints(rawPoints: OnyxTouchPointCss[], kind: 'stroke' | 'erase', 
   const normPoints = normalizePointsToRect(rawPoints, rect)
   if (!normPoints.length) return
 
+  confirmClear.value = false
+
   if (kind === 'erase' || tool.value === 'eraser') {
     const { remaining, removedIds } = eraseIntersectingStrokes(strokes.value, normPoints)
     if (removedIds.length > 0) {
+      pushUndoSnapshot(strokes.value)
       strokes.value = remaining
       persistCurrentStrokes()
       onyxEpd.repaint('regal')
@@ -168,30 +224,49 @@ function commitPoints(rawPoints: OnyxTouchPointCss[], kind: 'stroke' | 'erase', 
     return
   }
 
+  const decimatedPoints = decimateStrokePoints(normPoints, 0.0015)
   const baseWidth = widthOverride ?? strokeWidth.value
-  const meanP = normPoints.reduce((acc, p) => acc + p.p, 0) / normPoints.length
+  const meanP = decimatedPoints.reduce((acc, p) => acc + p.p, 0) / decimatedPoints.length
   const effectiveWidth = Math.round(baseWidth * (0.65 + 0.7 * meanP) * 100) / 100
 
   const nextStroke: OnyxInkStroke = {
     id: `ink-${Date.now()}-${Math.random().toString(36).slice(2, 7)}`,
     tool: tool.value,
     width: effectiveWidth,
-    points: normPoints,
+    points: decimatedPoints,
     createdAt: Date.now(),
   }
+  pushUndoSnapshot(strokes.value)
   strokes.value = [...strokes.value, nextStroke]
   persistCurrentStrokes()
   scheduleRegalRepaint()
 }
 
+function undoLastInk() {
+  if (!undoStack.value.length) return
+  confirmClear.value = false
+  const prev = undoStack.value[undoStack.value.length - 1]
+  undoStack.value = undoStack.value.slice(0, -1)
+  strokes.value = prev
+  persistCurrentStrokes()
+  onyxEpd.repaint('regal')
+}
+
 function clearPageInk() {
   if (!strokes.value.length) return
+  if (!confirmClear.value) {
+    confirmClear.value = true
+    return
+  }
+  confirmClear.value = false
+  pushUndoSnapshot(strokes.value)
   strokes.value = []
   persistCurrentStrokes()
   onyxEpd.repaint('gc')
 }
 
 function selectTool(nextTool: OnyxBrushTool) {
+  confirmClear.value = false
   tool.value = nextTool
   if (nextTool === 'marker') strokeWidth.value = 10
   else if (nextTool === 'pencil') strokeWidth.value = 2
@@ -213,16 +288,23 @@ function onSharedToolSync(event: Event) {
 
 function onPointerDown(e: PointerEvent) {
   if (!props.enabled || props.modalOpen) return
+  confirmClear.value = false
   if (e.pointerType === 'pen') penDetected.value = true
-  // 电磁笔已激活期间拒斥单指误触 (Palm Rejection)
-  if (e.pointerType === 'touch' && penDetected.value) return
+  // 开启手写模式后严格屏蔽单指触控落墨，防止手指误触产生杂线或穿透翻页
+  if (e.pointerType === 'touch') return
+  const isBarrelErase = e.pointerType === 'eraser' || e.button === 5 || (e.buttons & 2) !== 0 || (e.buttons & 32) !== 0
+  if (e.pointerType === 'pen' && onyxScribble.isNativeActive() && tool.value !== 'eraser' && !isBarrelErase) {
+    return
+  }
   clearTimeout(regalTimer)
   regalTimer = undefined
-  const isBarrelErase = e.button === 5 || (e.buttons & 32) !== 0
-  barrelErasing.value = isBarrelErase
-  if (tool.value === 'eraser' || isBarrelErase) {
-    onyxEpd.enterFastMode('scribble-erase', 'a2')
+  if (webFastModeActive) {
+    webFastModeActive = false
+    onyxEpd.exitFastModeNow()
   }
+  barrelErasing.value = isBarrelErase
+  webFastModeActive = true
+  onyxEpd.enterFastMode(tool.value === 'eraser' || isBarrelErase ? 'scribble-erase' : 'ink', 'a2')
   drawingPointerId.value = e.pointerId
   activePoints.value = [{ x: e.clientX, y: e.clientY, p: e.pressure || 0.5, t: Date.now() }]
   ;(e.currentTarget as HTMLElement | null)?.setPointerCapture?.(e.pointerId)
@@ -247,7 +329,10 @@ function onPointerUp(e: PointerEvent) {
   barrelErasing.value = false
   activePoints.value = []
   erasingIds.value = new Set()
-  if (eraseGesture) onyxEpd.exitFastModeNow()
+  if (webFastModeActive) {
+    webFastModeActive = false
+    onyxEpd.exitFastModeNow()
+  }
   commitPoints(pts, eraseGesture ? 'erase' : 'stroke')
 }
 
@@ -301,8 +386,7 @@ onMounted(() => {
   })
   if (typeof window !== 'undefined') {
     window.addEventListener('pagewise:scribble-tool', onSharedToolSync)
-    window.addEventListener('scroll', scheduleGeometrySync, { capture: true, passive: true })
-    window.addEventListener('resize', scheduleGeometrySync, { passive: true })
+    registerGeometryListener(scheduleGeometrySync)
   }
   if (typeof ResizeObserver !== 'undefined' && containerRef.value) {
     containerObserver = new ResizeObserver(() => scheduleGeometrySync())
@@ -314,6 +398,10 @@ onMounted(() => {
 onBeforeUnmount(() => {
   clearTimeout(regalTimer)
   regalTimer = undefined
+  if (webFastModeActive) {
+    webFastModeActive = false
+    onyxEpd.exitFastModeNow()
+  }
   if (geometryRaf && typeof cancelAnimationFrame === 'function') {
     cancelAnimationFrame(geometryRaf)
     geometryRaf = 0
@@ -322,8 +410,7 @@ onBeforeUnmount(() => {
   containerObserver = undefined
   if (typeof window !== 'undefined') {
     window.removeEventListener('pagewise:scribble-tool', onSharedToolSync)
-    window.removeEventListener('scroll', scheduleGeometrySync, true)
-    window.removeEventListener('resize', scheduleGeometrySync)
+    unregisterGeometryListener(scheduleGeometrySync)
   }
   unsubscribeNative?.()
   if (props.active) {
@@ -337,10 +424,11 @@ onBeforeUnmount(() => {
     ref="containerRef"
     class="onyx-ink-layer"
     :class="{ 'is-active': enabled && !modalOpen }"
-    @pointerdown="onPointerDown"
+    @pointerdown.stop="onPointerDown"
     @pointermove="onPointerMove"
     @pointerup="onPointerUp"
     @pointercancel="onPointerUp"
+    @click.stop
   >
     <svg
       v-if="strokes.length || activeDraftStroke"
@@ -356,6 +444,7 @@ onBeforeUnmount(() => {
         :stroke-width="s.width * 1.4"
         :stroke-opacity="erasingIds.has(s.id) ? 0.42 : (s.tool === 'marker' ? 0.38 : 1)"
         :stroke-dasharray="erasingIds.has(s.id) ? '4 4' : (s.tool === 'pencil' ? '2 1' : undefined)"
+        vector-effect="non-scaling-stroke"
         fill="none"
         stroke="currentColor"
         stroke-linecap="round"
@@ -365,6 +454,7 @@ onBeforeUnmount(() => {
         v-if="activeDraftStroke"
         :d="strokeToSvgPath(activeDraftStroke, 1000, 1000)"
         :stroke-width="activeDraftStroke.width * 1.4"
+        vector-effect="non-scaling-stroke"
         fill="none"
         stroke="currentColor"
         stroke-linecap="round"
@@ -421,13 +511,23 @@ onBeforeUnmount(() => {
         {{ t('reader.scribbleEraser') }}
       </button>
       <button
+        v-if="undoStack.length"
+        type="button"
+        class="onyx-ink-btn"
+        :aria-label="t('reader.scribbleUndo')"
+        @click="undoLastInk"
+      >
+        {{ t('reader.scribbleUndo') }}
+      </button>
+      <button
         v-if="strokes.length"
         type="button"
         class="onyx-ink-btn"
-        :aria-label="t('reader.scribbleClear')"
+        :class="{ active: confirmClear }"
+        :aria-label="confirmClear ? t('reader.scribbleClearConfirm') : t('reader.scribbleClear')"
         @click="clearPageInk"
       >
-        {{ t('reader.scribbleClear') }}
+        {{ confirmClear ? t('reader.scribbleClearConfirm') : t('reader.scribbleClear') }}
       </button>
       <button
         type="button"

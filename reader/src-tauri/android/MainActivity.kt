@@ -8,7 +8,9 @@ package io.pagewise.reader
 
 import android.app.ActivityManager
 import android.content.Intent
+import android.content.res.Configuration
 import android.graphics.Color
+import android.net.Uri
 import android.os.Build
 import android.os.Bundle
 import android.util.Log
@@ -19,10 +21,12 @@ import android.webkit.WebView
 import androidx.activity.OnBackPressedCallback
 import androidx.activity.SystemBarStyle
 import androidx.activity.enableEdgeToEdge
+import androidx.activity.result.contract.ActivityResultContracts
 import androidx.core.view.ViewCompat
 import androidx.core.view.WindowCompat
 import androidx.core.view.WindowInsetsCompat
 import androidx.core.view.WindowInsetsControllerCompat
+import org.lsposed.hiddenapibypass.HiddenApiBypass
 import java.util.Locale
 import java.util.concurrent.atomic.AtomicInteger
 
@@ -36,6 +40,22 @@ class MainActivity : TauriActivity() {
 
     internal fun repaintManagementNow(mode: String = "gc") {
         onyxBridge?.repaintScreen(nativeBackView, mode)
+    }
+
+    private var pendingCreateDocCallback: ((Uri?) -> Unit)? = null
+    private val createMarkdownDocLauncher =
+        registerForActivityResult(ActivityResultContracts.CreateDocument("text/markdown")) { uri ->
+            val cb = pendingCreateDocCallback
+            pendingCreateDocCallback = null
+            cb?.invoke(uri)
+        }
+
+    internal fun launchCreateMarkdownDocument(
+        suggestedName: String,
+        onResult: (Uri?) -> Unit,
+    ) {
+        pendingCreateDocCallback = onResult
+        createMarkdownDocLauncher.launch(suggestedName)
     }
 
     internal fun attachManagementSurface(surface: NativeManagementSurface) {
@@ -85,6 +105,7 @@ class MainActivity : TauriActivity() {
     private val readerWindow = ReaderWindowState()
     private var onyxBridge: OnyxSdkBridge? = null
     private var onyxHardwareProfileJson = "{}"
+    private var wasPaused = false
 
     @Volatile
     private var performanceProbe = false
@@ -94,6 +115,9 @@ class MainActivity : TauriActivity() {
         performanceProbe = intent?.getBooleanExtra("io.pagewise.reader.PERF_PROBE", false) ?: false
         enableEdgeToEdge()
         super.onCreate(savedInstanceState)
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.P) {
+            runCatching { HiddenApiBypass.addHiddenApiExemptions("") }
+        }
         val memory = getSystemService(ACTIVITY_SERVICE) as ActivityManager
         val bridge = OnyxSdkBridge(this, readerWindow)
         onyxBridge = bridge
@@ -132,12 +156,22 @@ class MainActivity : TauriActivity() {
         super.onResume()
         readerWindow.resume()
         applyReaderWindowState()
+        if (wasPaused) {
+            wasPaused = false
+            onyxBridge?.scheduleOverlayRepaint(nativeBackView, "gc", 120)
+        }
     }
 
     override fun onPause() {
         readerWindow.pause()
         applyKeepScreenOn(false)
         super.onPause()
+        wasPaused = true
+    }
+
+    override fun onConfigurationChanged(newConfig: Configuration) {
+        super.onConfigurationChanged(newConfig)
+        onyxBridge?.scheduleOverlayRepaint(nativeBackView, "gc", 120)
     }
 
     override fun onWindowFocusChanged(hasFocus: Boolean) {
@@ -150,8 +184,8 @@ class MainActivity : TauriActivity() {
         nativeManagementSurface = null
         synchronized(performanceRecords) { performanceProbe = false }
         readerWindow.destroy()
+        window.clearFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON)
         onyxBridge?.onLifecycleDestroy(nativeBackView)
-        applyKeepScreenOn(false)
         super.onDestroy()
     }
 

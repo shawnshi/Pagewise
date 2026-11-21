@@ -498,69 +498,66 @@ internal class NativeStatsPanel(
             )
         }
         weekCard.addView(weekStrip)
-        controls(
-            trendCard,
-            listOf(
-                tr("周", "Week") to {
-                    state.changePeriod("week")
-                    load()
-                },
-                tr("月", "Month") to {
-                    state.changePeriod("month")
-                    load()
-                },
-                tr("年", "Year") to {
-                    state.changePeriod("year")
-                    load()
-                },
-                tr("全部", "All") to {
-                    state.changePeriod("all")
-                    load()
-                },
-                tr("日期范围", "Date range") to { range() },
-            ),
-        )
-        controls(
-            trendCard,
-            listOf(
-                tr("上一期", "Previous") to { shift(-1) },
-                tr("当前期", "Current") to
-                    {
-                        state.changePeriod(
-                            if (state.period in
-                                listOf("week", "month", "year")
-                            ) {
-                                state.period
-                            } else {
-                                "month"
-                            },
-                            today,
-                        )
-                        ; load()
-                    },
-                tr("下一期", "Next") to { shift(1) },
-                tr("类型", "Kind") to
-                    {
-                        choose(
-                            listOf("all", "book", "paper"),
-                            listOf(tr("全部类型", "All kinds"), tr("图书", "Books"), tr("论文记录", "Paper records")),
-                        ) {
-                            state.kind = it
-                            state.offset = 0
-                            state.bookOffset = 0
+        val periodRow = NativeActionFlow(activity)
+        listOf(
+            "week" to tr("周", "Week"),
+            "month" to tr("月", "Month"),
+            "year" to tr("年", "Year"),
+            "all" to tr("全部", "All"),
+            "range" to tr("日期范围", "Date range"),
+        ).forEach { (id, label) ->
+            periodRow.addView(
+                ui.button(label, state.period == id) {
+                    if (!closed && !saving) {
+                        if (id == "range") {
+                            range()
+                        } else {
+                            state.changePeriod(id)
                             load()
                         }
-                    },
-                tr("选择年份", "Choose year") to
-                    {
-                        val years = period.getJSONArray("years")
-                        choose((0 until years.length()).map { years.getInt(it).toString() }) {
-                            state.changePeriod("year", "$it-01-01")
-                            load()
-                        }
-                    },
-            ),
+                    }
+                },
+            )
+        }
+        trendCard.addView(periodRow)
+        val canShiftPeriod = state.period in listOf("week", "month", "year")
+        val canNextPeriod = canShiftPeriod && state.anchor < today
+        val navRow = NativeActionFlow(activity)
+        navRow.addView(
+            button(tr("上一期", "Previous")) { shift(-1) }.apply { isEnabled = canShiftPeriod },
         )
+        navRow.addView(
+            button(tr("当前期", "Current")) {
+                state.changePeriod(if (canShiftPeriod) state.period else "month", today)
+                load()
+            },
+        )
+        navRow.addView(
+            button(tr("下一期", "Next")) { shift(1) }.apply { isEnabled = canNextPeriod },
+        )
+        navRow.addView(
+            button(tr("类型", "Kind")) {
+                choose(
+                    listOf("all", "book", "paper"),
+                    listOf(tr("全部类型", "All kinds"), tr("图书", "Books"), tr("论文记录", "Paper records")),
+                ) {
+                    state.kind = it
+                    state.offset = 0
+                    state.bookOffset = 0
+                    load()
+                }
+            },
+        )
+        navRow.addView(
+            button(tr("选择年份", "Choose year")) {
+                val years = period.getJSONArray("years")
+                choose((0 until years.length()).map { years.getInt(it).toString() }) {
+                    state.changePeriod("year", "$it-01-01")
+                    load()
+                }
+            },
+        )
+        trendCard.addView(navRow)
         trendCard.addView(
             text(
                 period.getString("from") + " — " + period.getString("to") + " · " +
@@ -686,18 +683,29 @@ internal class NativeStatsPanel(
                 gravity = android.view.Gravity.END or android.view.Gravity.CENTER_VERTICAL
                 setPadding(0, 0, 0, dp(8))
             }
+        val hasGoal = current.optInt("goalMinutes", 0) > 0
         legendRow.addView(
             ui.note(tr("少 ", "Less ")).apply {
                 textSize = 12f
                 setPadding(0, 0, dp(6), 0)
             },
         )
-        for ((fill, stroke) in listOf(
-            ui.paper to ui.secondary,
-            ui.selectedSurface to ui.hairline,
-            ui.secondary to ui.secondary,
-            ui.primary to ui.primary,
-        )) {
+        val swatches =
+            if (hasGoal) {
+                listOf(
+                    ui.paper to ui.secondary,
+                    ui.selectedSurface to ui.hairline,
+                    ui.secondary to ui.secondary,
+                    ui.primary to ui.primary,
+                )
+            } else {
+                listOf(
+                    ui.paper to ui.secondary,
+                    ui.selectedSurface to ui.hairline,
+                    ui.secondary to ui.secondary,
+                )
+            }
+        for ((fill, stroke) in swatches) {
             legendRow.addView(
                 View(activity).apply {
                     setBackground(ui.shape(fill, stroke, 1))
@@ -706,7 +714,7 @@ internal class NativeStatsPanel(
             )
         }
         legendRow.addView(
-            ui.note(tr(" 达标", " Goal")).apply {
+            ui.note(if (hasGoal) tr(" 达标", " Goal") else tr(" 多", " More")).apply {
                 textSize = 12f
                 setPadding(dp(4), 0, 0, 0)
             },
@@ -728,10 +736,22 @@ internal class NativeStatsPanel(
                     LinearLayout(activity).apply {
                         orientation = LinearLayout.HORIZONTAL
                         layoutParams = LinearLayout.LayoutParams(-1, -2).apply { topMargin = dp(8) }
-                        val bestDaySec = marks.optJSONObject("bestDay")?.getDouble("seconds") ?: 0.0
-                        val bestDayDate = marks.optJSONObject("bestDay")?.getString("day") ?: "—"
+                        val bestDayObj = marks.optJSONObject("bestDay")
+                        val bestDaySec = bestDayObj?.getDouble("seconds") ?: 0.0
+                        val bestDayDate = bestDayObj?.getString("day") ?: "—"
                         val f3 = ui.factBox(tr("最长连续", "Longest streak"), "${marks.getInt("longestStreak")} " + tr("天", "days"), tr("打卡记录", "Streak record"))
-                        val f4 = ui.factBox(tr("单日最长", "Best day"), if (bestDaySec > 0) duration(bestDaySec) else "—", bestDayDate)
+                        val f4 =
+                            ui.factBox(
+                                tr("单日最长", "Best day"),
+                                if (bestDaySec > 0) duration(bestDaySec) else "—",
+                                if (bestDaySec > 0) "$bestDayDate ↗" else bestDayDate,
+                            ).apply {
+                                if (bestDaySec > 0 && bestDayDate != "—") {
+                                    isClickable = true
+                                    isFocusable = true
+                                    setOnClickListener { load(bestDayDate) }
+                                }
+                            }
                         addView(f3, LinearLayout.LayoutParams(0, -2, 1f).apply { marginEnd = dp(8) })
                         addView(f4, LinearLayout.LayoutParams(0, -2, 1f))
                     }
@@ -739,21 +759,6 @@ internal class NativeStatsPanel(
                 addView(row2)
             }
         marksCard.addView(grid)
-        marks.optJSONObject("bestDay")?.let {
-            marksCard.addView(
-                button(
-                    tr("单日最长", "Best day") + ": ${it.getString("day")} · ${duration(it.getDouble("seconds"))}",
-                ) { load(it.getString("day")) }.apply {
-                    typeface = NativeUi.monoTypeface(false)
-                    fontFeatureSettings = "tnum"
-                    layoutParams =
-                        LinearLayout.LayoutParams(ViewGroup.LayoutParams.WRAP_CONTENT, ViewGroup.LayoutParams.WRAP_CONTENT).apply {
-                            topMargin = dp(4)
-                            bottomMargin = dp(6)
-                        }
-                },
-            )
-        }
         marks.optJSONObject("topBook")?.let { addBook(marksCard, it, tr("读得最久", "Top book") + ": ") }
         val books = result.getJSONObject("books")
         val items = books.getJSONArray("items")
@@ -989,22 +994,65 @@ internal class NativeStatsPanel(
             }
     }
 
+    private fun createStyledDatePicker(
+        title: String,
+        year: Int,
+        month: Int,
+        day: Int,
+        onDate: (Int, Int, Int) -> Unit,
+    ): DatePickerDialog {
+        val listener = DatePickerDialog.OnDateSetListener { _, y, m, d -> onDate(y, m, d) }
+        @Suppress("DEPRECATION")
+        val picker =
+            runCatching {
+                DatePickerDialog(activity, android.R.style.Theme_Holo_Light_Dialog_NoActionBar, listener, year, month, day)
+            }.getOrElse {
+                DatePickerDialog(activity, listener, year, month, day)
+            }
+        picker.setTitle(title)
+        runCatching {
+            @Suppress("DEPRECATION")
+            picker.datePicker.calendarViewShown = false
+            @Suppress("DEPRECATION")
+            picker.datePicker.spinnersShown = true
+        }
+        picker.setCanceledOnTouchOutside(false)
+        picker.setOnDismissListener { NativeUi.onDialogDismissRepaint() }
+        picker.setOnShowListener {
+            picker.window?.apply {
+                setWindowAnimations(0)
+                setDimAmount(0f)
+            }
+        }
+        return picker
+    }
+
     private fun range() {
         val c = date(state.anchor)
         val first =
-            DatePickerDialog(activity, { _, y, m, d ->
+            createStyledDatePicker(
+                tr("选择开始日期", "Select start date"),
+                c.get(Calendar.YEAR),
+                c.get(Calendar.MONTH),
+                c.get(Calendar.DAY_OF_MONTH),
+            ) { y, m, d ->
                 val from = String.format(Locale.ROOT, "%04d-%02d-%02d", y, m + 1, d)
                 val second =
-                    DatePickerDialog(activity, { _, ey, em, ed ->
+                    createStyledDatePicker(
+                        tr("选择结束日期", "Select end date"),
+                        y,
+                        m,
+                        d,
+                    ) { ey, em, ed ->
                         val to = String.format(Locale.ROOT, "%04d-%02d-%02d", ey, em + 1, ed)
                         state.from = minOf(from, to)
                         state.to = maxOf(from, to)
                         state.changePeriod("range")
                         load()
-                    }, y, m, d)
+                    }
                 dialog = second
                 second.show()
-            }, c.get(Calendar.YEAR), c.get(Calendar.MONTH), c.get(Calendar.DAY_OF_MONTH))
+            }
         dialog = first
         first.show()
     }
@@ -1012,13 +1060,14 @@ internal class NativeStatsPanel(
     private fun pickDay() {
         val c = date(state.anchor)
         val picker =
-            DatePickerDialog(
-                activity,
-                { _, y, m, d -> load(String.format(Locale.ROOT, "%04d-%02d-%02d", y, m + 1, d)) },
+            createStyledDatePicker(
+                tr("选择日期", "Select date"),
                 c.get(Calendar.YEAR),
                 c.get(Calendar.MONTH),
                 c.get(Calendar.DAY_OF_MONTH),
-            )
+            ) { y, m, d ->
+                load(String.format(Locale.ROOT, "%04d-%02d-%02d", y, m + 1, d))
+            }
         dialog = picker
         picker.show()
     }
@@ -1124,32 +1173,46 @@ internal class NativeStatsPanel(
                             monthSample = dayVal.substring(5, 7)
                         }
                         val seconds = obj.getDouble("seconds")
-                        paint.color =
+                        val goalSec = current.optInt("goalMinutes", 0).coerceAtLeast(0) * 60.0
+                        val level =
                             when {
-                                seconds <= 0 -> ui.paper
-                                seconds < 60 -> ui.selectedSurface
-                                seconds < current.getInt("goalMinutes") * 60 -> ui.secondary
+                                seconds <= 0.0 -> 0
+                                goalSec > 0.0 ->
+                                    when {
+                                        seconds < maxOf(60.0, goalSec * 0.5) -> 1
+                                        seconds < goalSec -> 2
+                                        else -> 3
+                                    }
+                                seconds < 900.0 -> 1
+                                else -> 2
+                            }
+                        paint.color =
+                            when (level) {
+                                0 -> ui.paper
+                                1 -> ui.selectedSurface
+                                2 -> ui.secondary
                                 else -> ui.primary
                             }
+                        val left = drawX * cell + inset
+                        val top = topBand + y * cell + inset
+                        val right = (drawX + 1) * cell - inset
+                        val bottom = topBand + (y + 1) * cell - inset
                         paint.style = Paint.Style.FILL
-                        canvas.drawRect(
-                            drawX * cell + inset,
-                            topBand + y * cell + inset,
-                            (drawX + 1) * cell - inset,
-                            topBand + (y + 1) * cell - inset,
-                            paint,
-                        )
-                        if (seconds <= 0) {
+                        canvas.drawRect(left, top, right, bottom, paint)
+                        if (level == 1) {
+                            paint.color = ui.primary
+                            canvas.drawCircle((left + right) / 2f, (top + bottom) / 2f, maxOf(1.5f, cell * 0.14f), paint)
+                        } else if (level == 2) {
+                            paint.color = ui.paper
+                            paint.style = Paint.Style.STROKE
+                            paint.strokeWidth = maxOf(1.2f, inset)
+                            canvas.drawLine(left + inset, bottom - inset, right - inset, top + inset, paint)
+                        }
+                        if (level < 3) {
                             paint.color = ui.secondary
                             paint.style = Paint.Style.STROKE
                             paint.strokeWidth = inset
-                            canvas.drawRect(
-                                drawX * cell + inset,
-                                topBand + y * cell + inset,
-                                (drawX + 1) * cell - inset,
-                                topBand + (y + 1) * cell - inset,
-                                paint,
-                            )
+                            canvas.drawRect(left, top, right, bottom, paint)
                         }
                     }
                 }
@@ -1157,7 +1220,7 @@ internal class NativeStatsPanel(
                 if (monthSample.isNotEmpty() && monthSample != lastMonth && labelX - lastLabelX >= minLabelGap) {
                     paint.style = Paint.Style.FILL
                     paint.color = ui.secondary
-                    canvas.drawText("${monthSample}月", labelX, dp(12).toFloat(), paint)
+                    canvas.drawText(if (english) monthSample else "${monthSample}月", labelX, dp(12).toFloat(), paint)
                     lastMonth = monthSample
                     lastLabelX = labelX
                 }

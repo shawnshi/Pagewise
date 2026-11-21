@@ -76,16 +76,27 @@ enum class OnyxWaveformMode(
 }
 
 class OnyxEpdState {
+    @Volatile
     var defaultMode: OnyxWaveformMode = OnyxWaveformMode.REGAL
         private set
+
+    @Volatile
     var currentMode: OnyxWaveformMode = OnyxWaveformMode.REGAL
         private set
+
+    @Volatile
     var fastModeActive: Boolean = false
         private set
+
+    @Volatile
     var fastScene: String = ""
         private set
+
+    @Volatile
     var pageTurnCount: Int = 0
         private set
+
+    @Volatile
     var gcIntervalPages: Int = 10
         private set
 

@@ -245,10 +245,69 @@ export function useReadingModes(opts: UseReadingModesOptions) {
   // ---- 夜间 (手动开为预设 night, 定时开为 nightAuto: 离开时间段时只关定时开的那个, 重启后也认得) ----
   const theme = computed(() => settings.reader.theme as ThemeName)
   const nightOn = computed(() => isNightTheme(theme.value, appDark()))
+  const FRONTLIGHT_SNAPSHOT_KEY = 'pagewise:frontlight-pre-preset'
+  let frontLightPrePresetSnapshot: { enabled: boolean; cold: number; warm: number } | null = null
+
+  function readStoredFrontLightSnapshot(): { enabled: boolean; cold: number; warm: number } | null {
+    if (frontLightPrePresetSnapshot) return frontLightPrePresetSnapshot
+    try {
+      if (typeof localStorage === 'undefined') return null
+      const raw = localStorage.getItem(FRONTLIGHT_SNAPSHOT_KEY)
+      if (!raw) return null
+      const parsed = JSON.parse(raw) as Partial<{ enabled: unknown; cold: unknown; warm: unknown }>
+      if (
+        typeof parsed?.enabled === 'boolean'
+        && typeof parsed?.cold === 'number'
+        && Number.isFinite(parsed.cold)
+        && typeof parsed?.warm === 'number'
+        && Number.isFinite(parsed.warm)
+      ) {
+        return { enabled: parsed.enabled, cold: parsed.cold, warm: parsed.warm }
+      }
+    } catch { /* ignore */ }
+    return null
+  }
+
+  function clearStoredFrontLightSnapshot() {
+    frontLightPrePresetSnapshot = null
+    try {
+      if (typeof localStorage !== 'undefined') localStorage.removeItem(FRONTLIGHT_SNAPSHOT_KEY)
+    } catch { /* ignore */ }
+  }
+
+  function captureFrontLightForPreset() {
+    if (!frontLightState.value.supported || readStoredFrontLightSnapshot()) return
+    const snap = onyxFrontLight.refresh()
+    frontLightPrePresetSnapshot = { enabled: snap.enabled, cold: snap.cold, warm: snap.warm }
+    try {
+      if (typeof localStorage !== 'undefined') {
+        localStorage.setItem(FRONTLIGHT_SNAPSHOT_KEY, JSON.stringify(frontLightPrePresetSnapshot))
+      }
+    } catch { /* ignore */ }
+  }
+
+  function restoreFrontLightAfterPresetRelease() {
+    if (!frontLightState.value.supported) return
+    if (nightOn.value) {
+      applyFrontLightPreset('night')
+      return
+    }
+    if (eyeCareOn.value) {
+      applyFrontLightPreset('eyecare')
+      return
+    }
+    const snap = readStoredFrontLightSnapshot()
+    clearStoredFrontLightSnapshot()
+    if (!snap) return
+    frontLightState.value = onyxFrontLight.setCold(snap.cold)
+    frontLightState.value = onyxFrontLight.setWarm(snap.warm)
+    frontLightState.value = onyxFrontLight.setEnabled(snap.enabled)
+  }
 
   function setNight(on: boolean, by: 'user' | 'schedule' = 'user') {
     if (on === nightOn.value) return
     if (on) {
+      captureFrontLightForPreset()
       engage(by === 'schedule' ? 'nightAuto' : 'night', { 'reader.theme': 'dark' })
       if (frontLightState.value.supported) applyFrontLightPreset('night')
       return
@@ -257,7 +316,7 @@ export function useReadingModes(opts: UseReadingModesOptions) {
       if (settings.readingMode.presets[id] && theme.value === 'dark') release(id)
     }
     if (isNightTheme(theme.value, appDark())) settings.reader.theme = themeAfterRelease(theme.value, 'night', appDark())
-    if (frontLightState.value.supported) applyFrontLightPreset(eyeCareOn.value ? 'eyecare' : 'daylight')
+    restoreFrontLightAfterPresetRelease()
   }
   function toggleNight() { setNight(!nightOn.value) }
 
@@ -266,6 +325,7 @@ export function useReadingModes(opts: UseReadingModesOptions) {
   function setEyeCare(on: boolean) {
     if (on === eyeCareOn.value) return
     if (on) {
+      captureFrontLightForPreset()
       engage('eyeCare', { 'reader.theme': settings.readingMode.eyeCare.theme })
       breakTimer = newBreakTimer(Date.now())
       if (frontLightState.value.supported) applyFrontLightPreset('eyecare')
@@ -274,7 +334,7 @@ export function useReadingModes(opts: UseReadingModesOptions) {
     if (settings.readingMode.presets.eyeCare && isEyeCareTheme(theme.value)) release('eyeCare')
     if (isEyeCareTheme(theme.value)) settings.reader.theme = themeAfterRelease(theme.value, 'eyeCare', appDark())
     reminderDue.value = false
-    if (frontLightState.value.supported) applyFrontLightPreset(nightOn.value ? 'night' : 'daylight')
+    restoreFrontLightAfterPresetRelease()
   }
   function toggleEyeCare() { setEyeCare(!eyeCareOn.value) }
   function setEyeCareTheme(v: 'sepia' | 'green') {
@@ -347,7 +407,7 @@ export function useReadingModes(opts: UseReadingModesOptions) {
   const isReaderDark = computed(() => settings.reader.theme === 'dark' || (settings.reader.theme === 'auto' && Boolean(opts.appDark?.())))
   const einkGcInterval = computed(() => {
     const base = clampGcIntervalPages(settings.readingMode.eink.gcIntervalPages ?? 10, 10)
-    return einkActive.value && isReaderDark.value ? (base > 0 ? Math.min(base, 8) : 8) : base
+    return einkActive.value && isReaderDark.value ? (base > 0 ? Math.min(base, 8) : 0) : base
   })
   function setEinkGcInterval(pages: number) {
     const clamped = clampGcIntervalPages(pages, 10)
@@ -1053,7 +1113,7 @@ export function useReadingModes(opts: UseReadingModesOptions) {
         onyxEpd.enterFastMode('scroll', 'du')
         onyxEpd.scheduleExitFastMode(180)
       }
-    } else if (einkActive.value || einkDevice) {
+    } else if ((einkActive.value || einkDevice) && detail?.reason === 'page') {
       onyxEpd.notifyPageTurn()
     }
     controller.value?.onRelocate(detail?.range ?? null)
@@ -1194,6 +1254,7 @@ export function useReadingModes(opts: UseReadingModesOptions) {
     setEyeCareTheme,
     dimLevel,
     dimOverlayStyle,
+    einkDevice,
     einkActive,
     toggleEink,
     setEink,

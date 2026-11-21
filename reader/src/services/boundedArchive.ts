@@ -43,7 +43,7 @@ export class StoredArchiveBudget {
 }
 
 const isTextMetadataCandidate = (name: string) => /\.(json|md)$/i.test(name)
-const isControlMetadata = (name: string) => ['index.md', 'manifest.json', 'reading-log.json', 'booklists.json'].includes(name)
+const isControlMetadata = (name: string) => ['index.md', 'manifest.json', 'reading-log.json', 'booklists.json', 'ink-strokes.json'].includes(name)
 export type ArchiveAssetResolver = (boundedMetadata: Record<string, Uint8Array>) => ReadonlySet<string>
 
 export function checkArchiveAbort(signal?: AbortSignal): void {

@@ -241,7 +241,9 @@ internal class NativeManagementHost(
         main.removeCallbacks(item.timeout)
         item.reply?.invoke(result, error)
         // Late completion can refresh canonical views, but never retroactively claims an expired callback succeeded.
-        repaint()
+        if (item.action !in SILENT_BACKGROUND_ACTIONS) {
+            repaint()
+        }
         return JSONObject().put("accepted", true)
     }
 
@@ -267,6 +269,23 @@ internal class NativeManagementHost(
 
     companion object {
         private val UUID_PATTERN = Regex("[a-f0-9-]{36}")
+        private val SILENT_BACKGROUND_ACTIONS =
+            setOf(
+                "fileJobStatus",
+                "noteDraftList",
+                "noteDraftGet",
+                "noteDraftSave",
+                "classificationGet",
+                "recommendationsGet",
+                "settingsRecoveryInspect",
+                "settingsSchema",
+                "statisticsGet",
+                "librarySessionGet",
+                "libraryPage",
+                "libraryBookInfo",
+                "bookToc",
+                "librarySelectionPage",
+            )
         private val ERROR_PATTERN = Regex("[a-zA-Z0-9_-]{1,80}")
         private val REQUIRED_ACTIONS =
             setOf(

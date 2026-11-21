@@ -12,6 +12,7 @@ import android.text.SpannableString
 import android.text.Spanned
 import android.text.style.RelativeSizeSpan
 import android.view.Gravity
+import android.view.KeyEvent
 import android.view.View
 import android.view.ViewGroup
 import android.widget.Button
@@ -329,8 +330,10 @@ internal class NativeSettingsPageLayout(
         addView(content)
     }
 
-    fun scrollActive(direction: Int): Boolean =
-        ((if (directory && !wide) navigation else content) as? ScrollView)?.pageScroll(direction) == true
+    fun scrollActive(direction: Int): Boolean {
+        val activeScroll = (if (directory && !wide) navigation else content) as? ScrollView ?: return false
+        return NativeUi.stepScroll(activeScroll, direction)
+    }
 
     override fun onMeasure(
         widthMeasureSpec: Int,
@@ -396,6 +399,9 @@ internal class NativeStatsSettingsDialog(
     private val paper = ui.paper
     private val borderInk = ui.primary
     private val borderWidthPx = ui.dp(2)
+    private val bodyScroll: ScrollView
+    private val dismissHooks = mutableListOf<() -> Unit>()
+    private var externalDismissListener: android.content.DialogInterface.OnDismissListener? = null
     private val actions =
         captions.associate { (which, caption) ->
             which to
@@ -410,24 +416,61 @@ internal class NativeStatsSettingsDialog(
         }
 
     init {
-        val body =
-            ScrollView(activity).apply {
-                isFillViewport = false
-                addView(
-                    ui.column().apply {
-                        setPadding(ui.dp(16), ui.dp(8), ui.dp(16), ui.dp(8))
-                        addView(ui.heading(title))
-                        addView(content)
-                    },
-                )
-            }
+        bodyScroll =
+            NativeUi.configureEinkScroll(
+                ScrollView(activity).apply {
+                    isFillViewport = false
+                    addView(
+                        ui.column().apply {
+                            setPadding(ui.dp(16), ui.dp(8), ui.dp(16), ui.dp(8))
+                            addView(ui.heading(title))
+                            addView(content)
+                        },
+                    )
+                },
+            )
         val footer =
             NativeActionFlow(activity).apply {
                 setPadding(ui.dp(12), ui.dp(8), ui.dp(12), ui.dp(8))
                 actions.values.forEach { addView(it) }
             }
-        setView(BoundedDialogContent(activity, body, footer))
+        setView(BoundedDialogContent(activity, bodyScroll, footer))
         setCanceledOnTouchOutside(false)
+        super.setOnDismissListener {
+            externalDismissListener?.onDismiss(this)
+            dismissHooks.toList().forEach { it() }
+            NativeUi.onDialogDismissRepaint()
+        }
+    }
+
+    override fun setOnDismissListener(listener: android.content.DialogInterface.OnDismissListener?) {
+        externalDismissListener = listener
+    }
+
+    fun addOnDismiss(hook: () -> Unit) {
+        dismissHooks.add(hook)
+    }
+
+    override fun dispatchKeyEvent(event: KeyEvent): Boolean {
+        if (currentFocus is android.widget.EditText) return super.dispatchKeyEvent(event)
+        val volPref =
+            context.getSharedPreferences("pagewise_native_ui", Context.MODE_PRIVATE).getBoolean("volume_keys_paging", true)
+        val audioActive =
+            NativeUi.isSpeechActive() ||
+                ((context.getSystemService(Context.AUDIO_SERVICE) as? android.media.AudioManager)?.isMusicActive == true)
+        val volAllowed = !audioActive && volPref
+        val direction =
+            when (event.keyCode) {
+                KeyEvent.KEYCODE_PAGE_DOWN -> View.FOCUS_DOWN
+                KeyEvent.KEYCODE_PAGE_UP -> View.FOCUS_UP
+                KeyEvent.KEYCODE_VOLUME_DOWN -> if (volAllowed) View.FOCUS_DOWN else return super.dispatchKeyEvent(event)
+                KeyEvent.KEYCODE_VOLUME_UP -> if (volAllowed) View.FOCUS_UP else return super.dispatchKeyEvent(event)
+                else -> return super.dispatchKeyEvent(event)
+            }
+        if (event.action == KeyEvent.ACTION_DOWN) {
+            NativeUi.stepScroll(bodyScroll, direction)
+        }
+        return true
     }
 
     override fun getButton(whichButton: Int): Button? = actions[whichButton] ?: super.getButton(whichButton)

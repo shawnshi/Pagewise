@@ -13,6 +13,8 @@ import android.view.View
 import android.widget.HorizontalScrollView
 import android.widget.LinearLayout
 import android.widget.ScrollView
+import android.widget.TableLayout
+import android.widget.TableRow
 import android.widget.TextView
 import org.commonmark.node.BlockQuote
 import org.commonmark.node.FencedCodeBlock
@@ -132,15 +134,71 @@ internal class NativeManualRenderer(
         val divider = NativeUi.divider(background)
         val headerBg = NativeUi.mutedSurface(background)
         val cellBg = NativeUi.surface(background)
+        val borderColor = NativeUi.border(this@NativeManualRenderer.background)
         val colCount = headers.size.coerceAtLeast(1)
-        val colMinPx = dp(if (colCount <= 2) 140 else if (colCount == 3) 115 else 96)
+        if (colCount <= 4) {
+            val tableLayout =
+                TableLayout(context).apply {
+                    isStretchAllColumns = true
+                    isShrinkAllColumns = true
+                    background =
+                        GradientDrawable().apply {
+                            setColor(cellBg)
+                            setStroke(dp(1), borderColor)
+                            cornerRadius = 0f
+                        }
+                    setPadding(0, dp(2), 0, dp(2))
+                }
+            fun buildWrapRow(cells: List<String>, isHeader: Boolean): TableRow {
+                val row =
+                    TableRow(context).apply {
+                        if (isHeader) setBackgroundColor(headerBg)
+                    }
+                cells.forEachIndexed { idx, cellText ->
+                    val cellBgDrawable =
+                        GradientDrawable().apply {
+                            setColor(if (isHeader) headerBg else cellBg)
+                            if (idx > 0) setStroke(dp(1), divider)
+                        }
+                    val tv =
+                        TextView(context).apply {
+                            text = safeInline(cellText)
+                            textSize = if (compact) 13.5f else 14.5f
+                            setTextColor(this@NativeManualRenderer.foreground)
+                            setLinkTextColor(this@NativeManualRenderer.foreground)
+                            movementMethod = LinkMovementMethod.getInstance()
+                            fontFeatureSettings = "tnum"
+                            setLineSpacing(dp(2).toFloat(), 1.35f)
+                            setPadding(dp(8), dp(8), dp(8), dp(8))
+                            background = cellBgDrawable
+                            if (isHeader) setTypeface(null, Typeface.BOLD)
+                        }
+                    row.addView(tv, TableRow.LayoutParams(0, TableRow.LayoutParams.MATCH_PARENT, 1f))
+                }
+                return row
+            }
+            tableLayout.addView(buildWrapRow(headers, isHeader = true))
+            rows.forEach { rowCells ->
+                tableLayout.addView(
+                    View(context).apply { setBackgroundColor(borderColor) },
+                    TableLayout.LayoutParams(TableLayout.LayoutParams.MATCH_PARENT, dp(1)),
+                )
+                tableLayout.addView(buildWrapRow(rowCells, isHeader = false))
+            }
+            return LinearLayout(context).apply {
+                orientation = LinearLayout.VERTICAL
+                setPadding(0, dp(6), 0, dp(8))
+                addView(tableLayout, LinearLayout.LayoutParams(LinearLayout.LayoutParams.MATCH_PARENT, LinearLayout.LayoutParams.WRAP_CONTENT))
+            }
+        }
+        val colMinPx = dp(96)
         val table =
             LinearLayout(context).apply {
                 orientation = LinearLayout.VERTICAL
                 background =
                     GradientDrawable().apply {
                         setColor(cellBg)
-                        setStroke(dp(1), NativeUi.border(this@NativeManualRenderer.background))
+                        setStroke(dp(1), borderColor)
                         cornerRadius = 0f
                     }
             }
@@ -179,16 +237,18 @@ internal class NativeManualRenderer(
         table.addView(buildRow(headers, isHeader = true))
         rows.forEach { rowCells ->
             table.addView(
-                View(context).apply { setBackgroundColor(NativeUi.border(this@NativeManualRenderer.background)) },
+                View(context).apply { setBackgroundColor(borderColor) },
                 LinearLayout.LayoutParams(LinearLayout.LayoutParams.MATCH_PARENT, dp(1)),
             )
             table.addView(buildRow(rowCells, isHeader = false))
         }
-        return HorizontalScrollView(context).apply {
-            isHorizontalScrollBarEnabled = true
-            setPadding(0, dp(6), 0, dp(8))
-            addView(table, LinearLayout.LayoutParams(LinearLayout.LayoutParams.WRAP_CONTENT, LinearLayout.LayoutParams.WRAP_CONTENT))
-        }
+        return NativeUi.configureEinkHorizontalScroll(
+            HorizontalScrollView(context).apply {
+                isHorizontalScrollBarEnabled = true
+                setPadding(0, dp(6), 0, dp(8))
+                addView(table, LinearLayout.LayoutParams(LinearLayout.LayoutParams.WRAP_CONTENT, LinearLayout.LayoutParams.WRAP_CONTENT))
+            },
+        )
     }
 
     fun render(markdown: String): View {

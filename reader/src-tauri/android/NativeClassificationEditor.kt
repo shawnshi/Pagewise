@@ -22,7 +22,13 @@ internal class NativeClassificationEditor(
     private val onError: (String) -> Unit,
     private val foreground: Int = android.graphics.Color.BLACK,
     private val background: Int = android.graphics.Color.WHITE,
+    private val english: Boolean = false,
 ) {
+    private fun tr(
+        zh: String,
+        en: String,
+    ) = if (english) en else zh
+
     private val fg = foreground
     private val bg = background
     private var context = JSONObject(initial.toString())
@@ -38,10 +44,10 @@ internal class NativeClassificationEditor(
         }
     private val topicLockHost = LinearLayout(activity).apply { orientation = LinearLayout.VERTICAL }
     private val category = Spinner(activity).apply { minimumHeight = NativeUi.dp(activity, 48) }
-    private val categoryLock = styledCheck("锁定类别")
+    private val categoryLock = styledCheck(tr("锁定类别", "Lock category"))
     private val topics =
         EditText(activity).apply {
-            hint = "主题（每行一个）"
+            hint = tr("主题（每行一个）", "Topics (one per line)")
             minLines = 3
             minimumHeight = NativeUi.dp(activity, 48)
             setTextColor(fg)
@@ -53,7 +59,7 @@ internal class NativeClassificationEditor(
         }
     private val feature =
         EditText(activity).apply {
-            hint = "特征（可留空）"
+            hint = tr("特征（可留空）", "Feature (optional)")
             isSingleLine = true
             minimumHeight = NativeUi.dp(activity, 48)
             setTextColor(fg)
@@ -61,8 +67,8 @@ internal class NativeClassificationEditor(
             setBackground(NativeUi.shape(activity, bg))
             setPadding(NativeUi.dp(activity, 10), NativeUi.dp(activity, 8), NativeUi.dp(activity, 10), NativeUi.dp(activity, 8))
         }
-    private val featureLock = styledCheck("锁定特征")
-    private val lockedChanges = styledCheck("明确允许修改/移除现有锁定项")
+    private val featureLock = styledCheck(tr("锁定特征", "Lock feature"))
+    private val lockedChanges = styledCheck(tr("明确允许修改/移除现有锁定项", "Allow changing/removing existing locked fields"))
     private val topicLocks = mutableMapOf<String, CheckBox>()
     private val state =
         TextView(activity).apply {
@@ -84,7 +90,10 @@ internal class NativeClassificationEditor(
     fun show(autoGenerate: Boolean = false): AlertDialog {
         form.addView(
             TextView(activity).apply {
-                text = "类别、主题、特征分别编辑。生成只填草稿；保存才写入书库。"
+                text = tr(
+                    "类别、主题、特征分别编辑。生成只填草稿；保存才写入书库。",
+                    "Edit category, topics and feature separately. Generate fills draft only; Save commits to library.",
+                )
                 textSize = 15f
                 setTextColor(fg)
                 setPadding(0, 0, 0, NativeUi.dp(activity, 8))
@@ -102,14 +111,14 @@ internal class NativeClassificationEditor(
         val window =
             NativeEinkDialog(
                 activity,
-                "分类与标签",
+                tr("分类与标签", "Classification & Tags"),
                 form,
                 foreground,
                 background,
                 listOf(
-                    AlertDialog.BUTTON_POSITIVE to "保存",
-                    AlertDialog.BUTTON_NEUTRAL to "AI 补全草稿",
-                    AlertDialog.BUTTON_NEGATIVE to "关闭",
+                    AlertDialog.BUTTON_POSITIVE to tr("保存", "Save"),
+                    AlertDialog.BUTTON_NEUTRAL to tr("AI 补全草稿", "AI fill draft"),
+                    AlertDialog.BUTTON_NEGATIVE to tr("关闭", "Close"),
                 ),
                 cancelableOutside = false,
                 onDismissed = { closed = true },
@@ -127,7 +136,7 @@ internal class NativeClassificationEditor(
     private fun populate() {
         val draft = context.getJSONObject("classification")
         categories = context.getJSONArray("categories")
-        val labels = mutableListOf("不设置类别")
+        val labels = mutableListOf(tr("不设置类别", "No category"))
         for (i in 0 until categories.length()) labels.add(categories.getJSONObject(i).getString("label"))
         category.adapter =
             object : ArrayAdapter<String>(activity, android.R.layout.simple_spinner_dropdown_item, labels) {
@@ -172,7 +181,7 @@ internal class NativeClassificationEditor(
             val tag = tags.getJSONObject(i)
             val value = tag.getString("value")
             val control =
-                styledCheck("锁定主题：$value").apply {
+                styledCheck(tr("锁定主题：", "Lock topic: ") + value).apply {
                     isChecked = tag.getBoolean("locked")
                 }
             topicLocks[value] = control
@@ -181,7 +190,7 @@ internal class NativeClassificationEditor(
         val single = draft.optJSONObject("feature")
         feature.setText(single?.optString("value").orEmpty())
         featureLock.isChecked = single?.optBoolean("locked") == true
-        state.text = "${context.optString("code")} · 尚未保存"
+        state.text = context.optString("code") + tr(" · 尚未保存", " · Unsaved")
     }
 
     private fun collect(): JSONObject {
@@ -237,7 +246,7 @@ internal class NativeClassificationEditor(
         if (busy || closed) return
         busy = true
         setEditable(false)
-        state.text = "正在处理；关闭界面不表示已取消已发送的请求。"
+        state.text = tr("正在处理；关闭界面不表示已取消已发送的请求。", "Processing; closing the dialog does not cancel submitted requests.")
         dialog?.getButton(AlertDialog.BUTTON_POSITIVE)?.isEnabled = false
         dialog?.getButton(AlertDialog.BUTTON_NEUTRAL)?.isEnabled = false
         request("action.$action", payload) { result, error ->
@@ -254,6 +263,7 @@ internal class NativeClassificationEditor(
                             action == "classificationSave",
                             result?.optString("outcome").orEmpty(),
                             result?.optString("code").orEmpty(),
+                            english,
                         )
                     onError(error ?: result?.optString("code") ?: "invalid_response")
                 } else {

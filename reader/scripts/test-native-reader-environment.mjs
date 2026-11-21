@@ -83,18 +83,9 @@ test('SAF never chooses Base64 based on provider-declared size and still checks 
   assert.match(read, /discard\(result\)/)
 })
 
-test('Onyx hardware profile parses DeviceUtils/FrontLightController/EpdController capabilities and derives NoteX3Pro fallback', () => {
-  const fallback = readOnyxHardwareProfile(host(environment({ memoryClassMb: 256 })))
-  assert.equal(fallback.status, 'available')
-  if (fallback.status === 'available') {
-    assert.equal(fallback.value.boox, true)
-    assert.equal(fallback.value.physicalWidthPx, 1860)
-    assert.equal(fallback.value.physicalHeightPx, 2480)
-    assert.equal(fallback.value.epdController, true)
-    assert.equal(fallback.value.frontLight, true)
-    assert.equal(fallback.value.ctmLight, true)
-    assert.equal(fallback.value.stylus, true)
-  }
+test('Onyx hardware profile parses DeviceUtils/FrontLightController/EpdController capabilities without spoofing missing bridges', () => {
+  const missingProfile = readOnyxHardwareProfile(host(environment({ memoryClassMb: 256 })))
+  assert.equal(missingProfile.status, 'unavailable')
 
   const explicit = readOnyxHardwareProfile({
     LightReadInsets: {

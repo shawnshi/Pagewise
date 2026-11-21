@@ -152,6 +152,36 @@ export function prepareAndroidProject(base = root, { replace = renameSync, resto
       nextManifest = nextManifest.replace(/<\/application>/, '    <service android:name=".NativeFileJobService" android:foregroundServiceType="dataSync" android:exported="false" />\n  </application>')
     }
   }
+  if (nativeFolderTemplates.some(template => template.path.endsWith('OnyxSdkBridge.kt'))) {
+    if (!/\bxmlns:tools=/.test(nextManifest)) {
+      nextManifest = nextManifest.replace(/<manifest\b/, '<manifest xmlns:tools="http://schemas.android.com/tools"')
+    }
+    const strippedOnyxPermissions = [
+      'android.permission.SYSTEM_ALERT_WINDOW',
+      'android.permission.WRITE_EXTERNAL_STORAGE',
+      'android.permission.READ_EXTERNAL_STORAGE',
+      'android.permission.DUMP',
+      'android.permission.BLUETOOTH',
+      'android.permission.ACCESS_WIFI_STATE',
+      'android.permission.CHANGE_WIFI_STATE',
+    ]
+    for (const permission of strippedOnyxPermissions) {
+      if (!nextManifest.includes(`android:name="${permission}"`)) {
+        nextManifest = nextManifest.replace(/<application\b/, `<uses-permission android:name="${permission}" tools:node="remove" />\n    <application`)
+      }
+    }
+    if (!nextManifest.includes('<queries>')) {
+      nextManifest = nextManifest.replace(
+        /<application\b/,
+        '<queries>\n        <intent>\n            <action android:name="android.intent.action.PROCESS_TEXT" />\n            <data android:mimeType="text/plain" />\n        </intent>\n        <intent>\n            <action android:name="android.intent.action.SEARCH" />\n        </intent>\n    </queries>\n    <application',
+      )
+    }
+    nextManifest = nextManifest.replace(/<intent-filter\b[^>]*>[\s\S]*?<\/intent-filter>/g, block =>
+      block.includes('android:mimeType="text/plain"')
+        ? block.replace(/^[ \t]*<action android:name="android\.intent\.action\.(?:SEND|SEND_MULTIPLE)" \/>\r?\n/gm, '')
+        : block,
+    )
+  }
   validateXml(values, 'resources')
   validateXml(nextManifest, 'manifest')
   const icons = iconFiles(join(base, 'src-tauri/icons/android'), resources)
@@ -161,9 +191,12 @@ export function prepareAndroidProject(base = root, { replace = renameSync, resto
     const version = regularFile(join(base, 'src-tauri/android/kotlin-version.txt')).toString('utf8').trim()
     if (version !== '2.4.20') throw new Error('Expected project-local Kotlin 2.4.20')
     const rootBuildPath = join(project, 'build.gradle.kts')
-    const rootBuild = regularFile(rootBuildPath).toString('utf8')
+    let rootBuild = regularFile(rootBuildPath).toString('utf8')
     const matches = [...rootBuild.matchAll(/org\.jetbrains\.kotlin:kotlin-gradle-plugin:([0-9.]+)/g)]
     if (matches.length !== 1 || !['1.9.25', '2.4.0', version].includes(matches[0][1])) throw new Error('Unsupported existing Kotlin build configuration')
+    if (!rootBuild.includes('repo.boox.com/repository/maven-public/')) {
+      rootBuild = rootBuild.replace(/allprojects\s*\{\s*repositories\s*\{/, match => `${match}\n    maven { url = uri("https://repo.boox.com/repository/maven-public/") }`)
+    }
     const appBuildPath = join(project, 'app/build.gradle.kts')
     let appBuild = regularFile(appBuildPath).toString('utf8')
     const kotlinOptions = /    kotlinOptions\s*\{\s*jvmTarget = "1\.8"\s*\}/

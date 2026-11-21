@@ -376,27 +376,29 @@ internal class NativeBookRecommendationsPanel(
                 }
             }
         ;root.addView(filter)
+        val confirmBox =
+            LinearLayout(activity).apply {
+                orientation = LinearLayout.VERTICAL
+                visibility = if (confirmClear) View.VISIBLE else View.GONE
+            }
+        confirmBox.addView(text(tr("只清空推荐负反馈，不修改书籍、进度或其他设置。", "Clears only recommendation feedback, not books, progress or other settings.")))
+        actions(
+            confirmBox,
+            button("确认清空", "Confirm clear", true) { clearFeedback() }.also { preferenceControls.add(it) },
+            button("取消", "Cancel") {
+                confirmClear = false
+                confirmBox.visibility = View.GONE
+            },
+        )
         actions(
             root,
             button("刷新推荐", "Refresh recommendations") { load(true) },
             button("清空推荐负反馈", "Clear recommendation feedback", true) {
-                confirmClear =
-                    !confirmClear
-                ;paint()
+                confirmClear = !confirmClear
+                confirmBox.visibility = if (confirmClear) View.VISIBLE else View.GONE
             }.also { preferenceControls.add(it) },
         )
-        if (confirmClear) {
-            root.addView(text(tr("只清空推荐负反馈，不修改书籍、进度或其他设置。", "Clears only recommendation feedback, not books, progress or other settings.")))
-            actions(
-                root,
-                button("确认清空", "Confirm clear", true) { clearFeedback() }.also { preferenceControls.add(it) },
-                button("取消", "Cancel") {
-                    confirmClear =
-                        false
-                    ;paint()
-                },
-            )
-        }
+        root.addView(confirmBox)
         if (loading) root.addView(text(tr("正在读取馆藏元数据并计算本地推荐…", "Reading metadata and computing local recommendations…")))
         if (error.isNotEmpty()) root.addView(text(error).apply { accessibilityLiveRegion = View.ACCESSIBILITY_LIVE_REGION_POLITE })
         if (notice.isNotEmpty()) root.addView(text(notice).apply { accessibilityLiveRegion = View.ACCESSIBILITY_LIVE_REGION_POLITE })

@@ -5,13 +5,18 @@ internal fun nativeClassificationFailureStatus(
     saving: Boolean,
     outcome: String,
     code: String,
+    english: Boolean = false,
 ): String =
     if (!saving) {
-        "分类生成未完成，当前输入仍保留。"
+        if (english) "Classification did not finish. Your input stays in place." else "分类生成未完成，当前输入仍保留。"
     } else if (outcome == "not_committed" || code == "conflict") {
-        "提交被拒绝，当前输入仍保留。"
+        if (english) "Submission was rejected. Your input stays in place." else "提交被拒绝，当前输入仍保留。"
     } else {
-        "提交结果未确认，当前输入仍保留。请核对结果，不要将无回执视为未保存或重试依据。"
+        if (english) {
+            "Commit outcome unconfirmed; your input stays in place. Verify before retrying."
+        } else {
+            "提交结果未确认，当前输入仍保留。请核对结果，不要将无回执视为未保存或重试依据。"
+        }
     }
 
 /** Main-thread UI ordering only; no book/settings/draft persistence is owned here. */

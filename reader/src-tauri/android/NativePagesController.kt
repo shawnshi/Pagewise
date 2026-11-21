@@ -72,17 +72,19 @@ internal class NativePagesController(
     private val shell = LinearLayout(activity).apply { orientation = LinearLayout.VERTICAL }
     private val body = NativeContentColumn(activity)
     private val scroll =
-        ScrollView(activity).apply {
-            isFillViewport = true
-            addView(
-                body,
-                FrameLayout.LayoutParams(
-                    ViewGroup.LayoutParams.MATCH_PARENT,
-                    ViewGroup.LayoutParams.WRAP_CONTENT,
-                    Gravity.TOP or Gravity.CENTER_HORIZONTAL,
-                ),
-            )
-        }
+        NativeUi.configureEinkScroll(
+            ScrollView(activity).apply {
+                isFillViewport = true
+                addView(
+                    body,
+                    FrameLayout.LayoutParams(
+                        ViewGroup.LayoutParams.MATCH_PARENT,
+                        ViewGroup.LayoutParams.WRAP_CONTENT,
+                        Gravity.TOP or Gravity.CENTER_HORIZONTAL,
+                    ),
+                )
+            },
+        )
     private var mounted = false
     private var disposed = false
     private var generation = 0L
@@ -91,14 +93,22 @@ internal class NativePagesController(
     private var page = "library"
     private var params = JSONObject()
     private var preferences = JSONObject()
+    private var preferencesStale = true
     private var foreground = Color.BLACK
     private var background = Color.WHITE
     private var query = ""
     private var offset = 0
+    private var pageTotal = 0
+    private var pageShown = 0
+    private var showTransitionCount = 0
     private var sort = "recent"
     private var statusFilter = ""
     private var kindFilter = ""
     private var noteFilter = "all"
+    private var exportBusy = false
+    private val savedQueries = mutableMapOf<String, String>()
+    private val savedNoteFilters = mutableMapOf<String, String>()
+    private val savedOffsets = mutableMapOf<String, Int>()
     private val draftPager = NativeDraftPager()
     private var manual = "README.md"
     private var manualAnchor = ""
@@ -123,8 +133,26 @@ internal class NativePagesController(
     private var sectionNavHost: NativeContentColumn? = null
     private var bottomNavBar: LinearLayout? = null
     private var activeManualRenderer: NativeManualRenderer? = null
+    private val exportExecutor = java.util.concurrent.Executors.newSingleThreadExecutor()
 
     private fun dp(n: Int) = (n * activity.resources.displayMetrics.density).toInt()
+
+    private fun isEnglish(): Boolean = preferences.optString("language") == "en"
+
+    private fun tr(
+        zh: String,
+        en: String,
+    ): String = if (isEnglish()) en else zh
+
+    private fun routeStateKey(
+        pageName: String,
+        p: JSONObject,
+    ): String =
+        if ((pageName == "annotations" || pageName == "notes") && p.optString("bookId").isNotEmpty()) {
+            "annotations:${p.optString("bookId")}"
+        } else {
+            pageName
+        }
 
     private fun label(zh: String): String {
         if (preferences.optString("language") != "en") return zh
@@ -269,6 +297,50 @@ internal class NativePagesController(
             "分类与标签" to "Classification and tags",
             "页面加载失败，未将读取错误当作空数据。" to "This page could not be loaded. A read error is not an empty result.",
             "目录加载失败，请重试或返回阅读器。" to "The table of contents could not be loaded. Retry or return to the reader.",
+            "在阅读器内跳转章节" to "Jump to chapter in reader",
+            "导出读书笔记" to "Export notes",
+            "跨书对比预览" to "Cross-book matrix",
+            "全部笔记" to "All notes",
+            "搜索选区原文、想法或书名" to "Search quotes, thoughts or title",
+            "前情提要" to "Catch-up",
+            "正在导出…" to "Exporting…",
+            "保存为 Markdown 文件" to "Save as Markdown file",
+            "已保存到所选文件" to "Saved to selected file",
+            "操作未完成" to "Operation incomplete",
+            "状态" to "State",
+            "文件夹状态" to "Folder status",
+            "重新关联" to "Relink book",
+            "打开网页" to "Open link",
+            "恢复默认排版" to "Reset reader typography",
+            "清除显示校准" to "Clear display calibration",
+            "导出书库备份" to "Export library backup",
+            "导入书库备份" to "Import library backup",
+            "校验并导入" to "Verify and import",
+            "检查任务" to "Check task",
+            "来源" to "Source",
+            "文件状态" to "File status",
+            "最近阅读" to "Last read",
+            "添加想法" to "Add thought",
+            "上一页草稿" to "Previous drafts",
+            "下一页草稿" to "Next drafts",
+            "查看完整草稿" to "View full draft",
+            "本机草稿（保存状态需核对）" to "Local draft (verify save state)",
+            "恢复编辑" to "Resume editing",
+            "明确放弃此草稿" to "Discard this draft",
+            "搜索书名、作者、笔记" to "Search title, author, or notes",
+            "清除搜索" to "Clear search",
+            "空白" to "Empty",
+            "已有" to "Set",
+            "正在检查监控文件夹状态…" to "Checking monitored folder status…",
+            "点击下方按钮发起公开书目并发检索或 AI 推理补全。" to "Search public catalogs or infer metadata with AI below.",
+            "检索公开书目 (第一级)" to "Search public catalogs (Tier 1)",
+            "正在检索 OpenLibrary / Google Books / 豆瓣…" to "Searching OpenLibrary / Google Books / Douban…",
+            "公开书目库未检索到匹配项，可尝试第二级 AI 推理。" to "No catalog match found; try Tier 2 AI inference.",
+            "AI 智能推理 (第二级)" to "AI Metadata Inference (Tier 2)",
+            "AI 正在推理著录信息…请稍候。" to "Inferring metadata with AI…",
+            "AI 推理未成功，请检查 AI 配置后重试。" to "AI inference failed; check AI settings and retry.",
+            "AI 未能推断出更多有效著录字段。" to "AI did not infer additional metadata fields.",
+            "AI 著录推理完成，已填入表单，核对后点击保存。" to "AI inference populated fields; review and save.",
         )[zh]
             ?: zh
     }
@@ -521,22 +593,67 @@ internal class NativePagesController(
     }
 
     private fun showError(code: String) {
+        val cleanCode = code.take(80).replace(Regex("[^a-zA-Z0-9_-]"), "")
         val detail =
             when (code) {
-                "settings_conflict", "book_conflict", "annotation_conflict", "conflict" -> "数据已被其他操作修改；请刷新后核对，不会覆盖较新的内容。"
-                "source_linked_book" -> "此条目关联监控文件夹，不能单独移除；否则重新扫描会恢复条目并丢失关联。源文件和笔记未删除。"
-                "commit_outcome_unknown", "unavailable" -> "未能确认提交结果。请刷新核对；不要将它视为未提交或重新累加。"
-                "annotation_saved_draft_pending" -> "批注已保存，但旧草稿清理未确认；不要将它视为批注保存失败或重复提交。"
-                "partial_restore" -> "恢复未全部完成，部分记录可能已经提交；请保留备份并核对，不能假定已完全回滚或自动重放。"
-                "partial_import" -> "部分文件已入库，另有输入未完成；请核对批次回执，不要假定全部失败。"
+                "settings_conflict", "book_conflict", "annotation_conflict", "conflict" ->
+                    tr(
+                        "数据已被其他操作修改；请刷新后核对，不会覆盖较新的内容。",
+                        "Data changed elsewhere. Refresh and inspect before retrying; newer content will not be overwritten.",
+                    )
+                "source_linked_book" ->
+                    tr(
+                        "此条目关联监控文件夹，不能单独移除；否则重新扫描会恢复条目并丢失关联。源文件和笔记未删除。",
+                        "This item is linked to a monitored folder and cannot be removed alone. Source files and notes remain intact.",
+                    )
+                "commit_outcome_unknown", "unavailable" ->
+                    tr(
+                        "未能确认提交结果。请刷新核对；不要将它视为未提交或重新累加。",
+                        "Commit outcome could not be confirmed. Refresh to verify before retrying.",
+                    )
+                "annotation_saved_draft_pending" ->
+                    tr(
+                        "批注已保存，但旧草稿清理未确认；不要将它视为批注保存失败或重复提交。",
+                        "Annotation saved, but old draft cleanup was not confirmed; do not resubmit.",
+                    )
+                "partial_restore" ->
+                    tr(
+                        "恢复未全部完成，部分记录可能已经提交；请保留备份并核对，不能假定已完全回滚或自动重放。",
+                        "Restore ended partially; keep the backup and verify committed records before retrying.",
+                    )
+                "partial_import" ->
+                    tr(
+                        "部分文件已入库，另有输入未完成；请核对批次回执，不要假定全部失败。",
+                        "Some files were imported while others remained unfinished; review batch receipts.",
+                    )
                 "native_settings_unsaved" -> {
                     recoveryNeeded = true
                     recoveryToolbarButton?.visibility = View.VISIBLE
-                    "仍有未保存的本地设置或排版草稿；请保持应用开启并核对，不能自动丢弃。"
+                    tr(
+                        "仍有未保存的本地设置或排版草稿；请保持应用开启并核对，不能自动丢弃。",
+                        "Unsaved local settings or typography drafts remain; inspect recovery before leaving.",
+                    )
                 }
-                "permission_denied", "permission-denied" -> "没有文件访问权限，请在设置中重新授权。"
-                "ai_not_configured", "not_configured" -> "请先在设置中配置自己的 AI 服务、API Key 和模型。"
-                else -> "操作未完成（${code.take(80).replace(Regex("[^a-zA-Z0-9_-]"), "")}）。已有数据不会被当成空数据替换。"
+                "permission_denied", "permission-denied" ->
+                    tr(
+                        "没有文件访问权限，请在设置中重新授权。",
+                        "File access permission denied; reauthorize the folder in Settings.",
+                    )
+                "ai_not_configured", "not_configured" ->
+                    tr(
+                        "请先在设置中配置自己的 AI 服务、API Key 和模型。",
+                        "Configure your own AI provider, API Key and model in Settings first.",
+                    )
+                "share_unavailable" ->
+                    tr(
+                        "当前系统没有可用的分享目标，请改用保存文件或复制。",
+                        "No share target app found on device; save to file or copy instead.",
+                    )
+                else ->
+                    tr(
+                        "操作未完成（$cleanCode）。已有数据不会被当成空数据替换。",
+                        "Operation incomplete ($cleanCode). Existing data has not been discarded.",
+                    )
             }
         // Do not dismiss an editor on a failed/unknown commit: its unsaved text must survive.
         val detailView =
@@ -557,10 +674,27 @@ internal class NativePagesController(
     }
 
     fun invalidatePreferences() {
-        preferences = JSONObject()
+        preferencesStale = true
     }
 
     private fun applyPreferencesTheme() {
+        NativeUi.isSpeechActive = { SystemTtsService.isActivelySpeaking() }
+        NativeUi.onDialogDismissRepaint = {
+            (activity as? MainActivity)?.onyxBridgeInstance()?.scheduleOverlayRepaint(
+                (activity as? MainActivity)?.managementWebView(),
+                "regal",
+                60,
+            )
+        }
+        val volumeKeysPaging =
+            preferences
+                .optJSONObject("readingMode")
+                ?.optJSONObject("eink")
+                ?.optBoolean("volumeKeysEnabled", true) ?: true
+        activity.getSharedPreferences("pagewise_native_ui", Activity.MODE_PRIVATE)
+            .edit()
+            .putBoolean("volume_keys_paging", volumeKeysPaging)
+            .apply()
         val eink = preferences.optJSONObject("readingMode")?.optJSONObject("eink")?.optBoolean("enabled") == true
         val appearance = preferences.optString("appearance")
         val dark =
@@ -583,11 +717,21 @@ internal class NativePagesController(
         require(page in pages || page == "book")
         closeEditorsAfterLeave()
         if (this.page != page || this.params.toString() != params.toString()) {
-            offset = 0
-            query = ""
-            noteFilter = "all"
+            val prevKey = routeStateKey(this.page, this.params)
+            savedQueries[prevKey] = query
+            savedNoteFilters[prevKey] = noteFilter
+            savedOffsets[prevKey] = offset
+            val nextKey = routeStateKey(page, params)
+            query = savedQueries[nextKey] ?: ""
+            noteFilter = savedNoteFilters[nextKey] ?: "all"
+            offset = savedOffsets[nextKey] ?: 0
             draftPager.reset()
             if (page == "settings") settingsUiState.requested = params.optString("section").takeIf { it.isNotEmpty() }
+            showTransitionCount += 1
+            if (showTransitionCount >= 10) {
+                showTransitionCount = 0
+                (activity as? MainActivity)?.repaintManagementNow("gc")
+            }
         }
         this.page = page
         this.params = JSONObject(params.toString())
@@ -703,37 +847,43 @@ internal class NativePagesController(
         ) {
             return false
         }
+        val audioActive =
+            SystemTtsService.isActivelySpeaking() ||
+                ((activity.getSystemService(android.content.Context.AUDIO_SERVICE) as? android.media.AudioManager)?.isMusicActive == true)
         val volumeKeysPaging =
-            preferences
-                .optJSONObject("readingMode")
-                ?.optJSONObject("eink")
-                ?.optBoolean("volumeKeysEnabled", true) ?: true
+            !audioActive &&
+                (
+                    preferences
+                        .optJSONObject("readingMode")
+                        ?.optJSONObject("eink")
+                        ?.optBoolean("volumeKeysEnabled", true) ?: true
+                )
         val direction =
             when (event.keyCode) {
-                KeyEvent.KEYCODE_PAGE_DOWN, KeyEvent.KEYCODE_DPAD_RIGHT, KeyEvent.KEYCODE_DPAD_DOWN -> View.FOCUS_DOWN
-                KeyEvent.KEYCODE_PAGE_UP, KeyEvent.KEYCODE_DPAD_LEFT, KeyEvent.KEYCODE_DPAD_UP -> View.FOCUS_UP
+                KeyEvent.KEYCODE_PAGE_DOWN -> View.FOCUS_DOWN
+                KeyEvent.KEYCODE_PAGE_UP -> View.FOCUS_UP
                 KeyEvent.KEYCODE_VOLUME_DOWN -> if (volumeKeysPaging) View.FOCUS_DOWN else return false
                 KeyEvent.KEYCODE_VOLUME_UP -> if (volumeKeysPaging) View.FOCUS_UP else return false
                 else -> return false
             }
-        val activeEinkDialog = (currentDialog as? NativeEinkDialog) ?: (errorDialog as? NativeEinkDialog)
-        if (currentDialog?.isShowing == true || errorDialog?.isShowing == true) {
-            val isDpad =
-                event.keyCode == KeyEvent.KEYCODE_DPAD_UP ||
-                    event.keyCode == KeyEvent.KEYCODE_DPAD_DOWN ||
-                    event.keyCode == KeyEvent.KEYCODE_DPAD_LEFT ||
-                    event.keyCode == KeyEvent.KEYCODE_DPAD_RIGHT
-            if (!isDpad && activeEinkDialog?.isShowing == true && activeEinkDialog.currentFocus !is EditText) {
-                if (event.action == KeyEvent.ACTION_DOWN) {
-                    activeEinkDialog.pageScroll(direction)
-                    repaint()
-                }
-                return true
-            }
-            return false
-        }
+        if (activity.currentFocus is EditText) return false
         if (event.action == KeyEvent.ACTION_DOWN) {
-            if (page == "settings") settingsPanel?.pageScroll(direction) else scroll.pageScroll(direction)
+            if (page == "settings") {
+                settingsPanel?.pageScroll(direction)
+            } else {
+                val scrolled = NativeUi.stepScroll(scroll, direction)
+                if (!scrolled && (page == "library" || page == "annotations")) {
+                    if (direction == View.FOCUS_DOWN && offset + pageShown < pageTotal) {
+                        offset += PAGE_SIZE
+                        scroll.scrollTo(0, 0)
+                        refresh()
+                    } else if (direction == View.FOCUS_UP && offset > 0) {
+                        offset = (offset - PAGE_SIZE).coerceAtLeast(0)
+                        scroll.scrollTo(0, 0)
+                        refresh()
+                    }
+                }
+            }
             repaint()
         }
         return true
@@ -742,6 +892,7 @@ internal class NativePagesController(
     fun dispose() {
         if (disposed) return
         disposed = true
+        exportExecutor.shutdownNow()
         introductionEditor?.dispose()
         hide(force = true)
         body.removeAllViews()
@@ -768,6 +919,8 @@ internal class NativePagesController(
         closeEditorsAfterLeave()
         dialogIntent++
         generation++
+        pageTotal = 0
+        pageShown = 0
         val renderContent = {
             frame()
             when (page) {
@@ -779,7 +932,7 @@ internal class NativePagesController(
                 "manual" -> manual()
             }
         }
-        if (preferences.length() > 0) {
+        if (preferences.length() > 0 && !preferencesStale) {
             applyPreferencesTheme()
             renderContent()
         } else {
@@ -789,6 +942,7 @@ internal class NativePagesController(
             shell.addView(text(label("正在加载…")))
             call("state.settingsGet") { state ->
                 preferences = JSONObject(state.getString("raw"))
+                preferencesStale = false
                 applyPreferencesTheme()
                 renderContent()
             }
@@ -1023,7 +1177,10 @@ internal class NativePagesController(
     private fun pageControls(
         total: Int,
         shown: Int,
+        target: LinearLayout = body,
     ) {
+        pageTotal = total
+        pageShown = shown
         val footer =
             LinearLayout(activity).apply {
                 orientation = LinearLayout.HORIZONTAL
@@ -1055,8 +1212,8 @@ internal class NativePagesController(
             }.apply { isEnabled = offset + shown < total },
         )
         footer.addView(row)
-        body.addView(footer)
-        body.addView(NativeUi.colophonTailpiece(activity, "END OF CATALOG · TOTAL $total", background))
+        target.addView(footer)
+        target.addView(NativeUi.colophonTailpiece(activity, "END OF CATALOG · TOTAL $total", background))
     }
 
     private fun userAction(
@@ -1072,7 +1229,10 @@ internal class NativePagesController(
                 replaceDialog {
                     val msgView =
                         text(
-                            "已选择 ${result.optLong("size") / 1024} KiB。此预览仅核对选择信息，尚未校验内容。确认后调用既有恢复服务；失败可能有部分已提交记录，不能假定完全回滚。",
+                            tr(
+                                "已选择 ${result.optLong("size") / 1024} KiB。此预览仅核对选择信息，尚未校验内容。确认后调用既有恢复服务；失败可能有部分已提交记录，不能假定完全回滚。",
+                                "Selected ${result.optLong("size") / 1024} KiB. Size preview only; archive contents have not been verified yet. If restore fails partially, full rollback cannot be assumed.",
+                            ),
                             15f,
                         ).apply {
                             typeface = NativeUi.monoTypeface(false)
@@ -1119,9 +1279,15 @@ internal class NativePagesController(
                     showError("no_relink_candidates")
                     return@call
                 }
-                choose("选择相同版本的原文件", (0 until files.length()).map { files.getJSONObject(it).getString("name") }) { index ->
+                choose(tr("选择相同版本的原文件", "Choose matching source file"), (0 until files.length()).map { files.getJSONObject(it).getString("name") }) { index ->
                     val selected = files.getJSONObject(index)
-                    confirm("重新关联", "只有确认属于相同版本才可继续；错误版本可能使原标注位置失效。保留原书籍 ID、笔记和进度。") {
+                    confirm(
+                        tr("重新关联", "Relink book"),
+                        tr(
+                            "只有确认属于相同版本才可继续；错误版本可能使原标注位置失效。保留原书籍 ID、笔记和进度。",
+                            "Confirm the selected file is the exact same edition so annotations remain aligned. Book ID, notes and progress are kept.",
+                        ),
+                    ) {
                         userAction(
                             "relinkBookCommit",
                             JSONObject()
@@ -1143,7 +1309,10 @@ internal class NativePagesController(
                 replaceDialog {
                     val statusView =
                         text(
-                            "状态：${status.optString("state")}\n${status.optString("message")}\n错误：${status.optString("error")}\n此为管理器当前快照，不是持久任务完成回执。",
+                            tr(
+                                "状态：${status.optString("state")}\n${status.optString("message")}\n错误：${status.optString("error")}\n此为管理器当前快照，不是持久任务完成回执。",
+                                "State: ${status.optString("state")}\n${status.optString("message")}\nError: ${status.optString("error")}\nCurrent manager snapshot only; not a durable job receipt.",
+                            ),
                             15f,
                         ).apply { setLineSpacing(0f, 1.4f) }
                     NativeEinkDialog(
@@ -1715,6 +1884,11 @@ internal class NativePagesController(
         path: String,
     ) {
         if (path.isEmpty()) return
+        val cached = NativeUi.cachedCoverBitmap(path)
+        if (cached != null) {
+            view.setImageBitmap(cached)
+            return
+        }
         val epoch = generation
         try {
             images.execute {
@@ -1733,14 +1907,13 @@ internal class NativePagesController(
                         }
                         inSampleSize = sample
                     }
-                val bitmap = BitmapFactory.decodeFile(path, options)
+                val bitmap = BitmapFactory.decodeFile(path, options) ?: return@execute
+                NativeUi.putCachedCoverBitmap(path, bitmap)
                 activity.runOnUiThread {
                     if (!disposed && epoch == generation &&
                         view.isAttachedToWindow
                     ) {
                         view.setImageBitmap(bitmap)
-                    } else {
-                        bitmap?.recycle()
                     }
                 }
             }
@@ -1868,7 +2041,7 @@ internal class NativePagesController(
     }
 
     private fun status(book: JSONObject) =
-        choose("阅读状态", statuses.values.toList(), statuses.keys.indexOf(book.optString("readingStatus"))) {
+        choose("阅读状态", statuses.values.map { label(it) }, statuses.keys.indexOf(book.optString("readingStatus"))) {
             patchBook(book, JSONObject().put("readingStatus", statuses.keys.toList()[it]))
         }
 
@@ -1879,7 +2052,13 @@ internal class NativePagesController(
             showError("source_linked_book")
             return
         }
-        confirm("删除", "移除《${book.optString("title")}》的书目及关联笔记；保留实际书籍文件和阅读统计。此操作不会删除监控文件夹源文件。") {
+        confirm(
+            "删除",
+            tr(
+                "移除《${book.optString("title")}》的书目及关联笔记；保留实际书籍文件和阅读统计。此操作不会删除监控文件夹源文件。",
+                "Remove \"${book.optString("title")}\" and its notes from the library? Book files on disk and reading stats remain intact.",
+            ),
+        ) {
             if (ownerGeneration != generation || libraryPanel?.canMutate() == false) return@confirm
             call("library.bookRemove", JSONObject().put("id", book.getString("id")).put("before", book)) {
                 if (page ==
@@ -1968,7 +2147,7 @@ internal class NativePagesController(
         val identity = column()
         identity.addView(
             TextView(activity).apply {
-                text = "EX LIBRIS · 馆藏著录卡"
+                text = tr("EX LIBRIS · 馆藏著录卡", "EX LIBRIS · CATALOG RECORD")
                 textSize = 12f
                 typeface = NativeUi.monoTypeface(true)
                 fontFeatureSettings = "tnum"
@@ -2097,7 +2276,7 @@ internal class NativePagesController(
                 NativeUi.exLibrisCard(
                     activity,
                     background,
-                    headerLabel = "ARCHIVAL RECORD · 馆藏档案",
+                    headerLabel = tr("ARCHIVAL RECORD · 馆藏档案", "ARCHIVAL RECORD"),
                     badgeLabel = book.optString("format").uppercase(),
                 ),
                 NativeUi.card(activity, background),
@@ -2453,7 +2632,14 @@ internal class NativePagesController(
                     }
                     form.removeAllViews()
                     if (!result.getBoolean("supported")) {
-                        form.addView(text("此格式不支持提取目录；不是读取失败或空书库。"))
+                        form.addView(
+                            text(
+                                tr(
+                                    "此格式不支持提取目录；不是读取失败或空书库。",
+                                    "Table of contents extraction is unsupported for this format.",
+                                ),
+                            ),
+                        )
                     } else {
                         context = result.getString("token")
                         val entries = result.getJSONArray("items")
@@ -2467,7 +2653,8 @@ internal class NativePagesController(
                         )
                         form.addView(
                             text(
-                                "目录快照 · ${if (total == 0) 0 else offset + 1}–${(offset + entries.length()).coerceAtMost(total)} / $total",
+                                tr("目录快照", "TOC snapshot") +
+                                    " · ${if (total == 0) 0 else offset + 1}–${(offset + entries.length()).coerceAtMost(total)} / $total",
                                 13f,
                             ).apply {
                                 typeface = NativeUi.monoTypeface(false)
@@ -2475,12 +2662,31 @@ internal class NativePagesController(
                                 setTextColor(NativeUi.secondary(this@NativePagesController.background))
                             },
                         )
-                        if (total == 0) form.addView(text("原文件没有可提取的目录。"))
+                        if (total == 0) {
+                            form.addView(
+                                text(
+                                    tr(
+                                        "原文件没有可提取的目录。",
+                                        "No extractable table of contents found in source file.",
+                                    ),
+                                ),
+                            )
+                        }
                         for (i in 0 until entries.length()) {
                             val entry = entries.getJSONObject(i)
+                            val entryLoc = entry.optString("href").ifBlank { entry.optString("cfi") }
                             form.addView(
                                 text(entry.getString("title")).apply {
+                                    minimumHeight = dp(48)
+                                    gravity = Gravity.CENTER_VERTICAL
                                     setPadding(dp(minOf(entry.getInt("depth"), 8) * 14 + 4), dp(8), dp(4), dp(8))
+                                    isClickable = true
+                                    isFocusable = true
+                                    setOnClickListener {
+                                        call("library.book", JSONObject().put("id", bookId)) {
+                                            openReader(it.getJSONObject("book"), entryLoc)
+                                        }
+                                    }
                                 },
                             )
                             form.addView(line())
@@ -2563,7 +2769,7 @@ internal class NativePagesController(
             val summaryLine =
                 buildString {
                     append("${label("阅读进度")}: $prog%")
-                    if (idleDays >= 0) append(" · 距上次阅读 ${idleDays} 天")
+                    if (idleDays >= 0) append(tr(" · 距上次阅读 $idleDays 天", " · $idleDays d since last read"))
                 }
             box.addView(
                 text(summaryLine, 14f).apply {
@@ -2578,7 +2784,7 @@ internal class NativePagesController(
                 box.addView(text(label("本书还没有笔记"), 14f))
             } else {
                 box.addView(
-                    text("最近留下的标注 (${items.length()})：", 14f, true).apply {
+                    text(tr("最近留下的标注 (${items.length()})：", "Recent annotations (${items.length()}):"), 14f, true).apply {
                         fontFeatureSettings = "tnum"
                     },
                 )
@@ -2606,8 +2812,11 @@ internal class NativePagesController(
 
     private fun collectAnnotationsForExport(
         bookId: String,
+        progressView: TextView? = null,
         done: (JSONArray) -> Unit,
     ) {
+        if (exportBusy) return
+        exportBusy = true
         val collected = JSONArray()
         val epoch = generation
 
@@ -2620,16 +2829,21 @@ internal class NativePagesController(
                     .put("limit", 100)
             if (bookId.isNotEmpty()) payload.put("bookId", bookId)
             call("library.annotations", payload) { response ->
-                if (generation != epoch) return@call
+                if (generation != epoch) {
+                    exportBusy = false
+                    return@call
+                }
                 val batch = response.optJSONArray("items") ?: JSONArray()
-                val total = response.optInt("total", collected.length() + batch.length()).coerceAtMost(500)
+                val total = response.optInt("total", collected.length() + batch.length())
                 for (i in 0 until batch.length()) {
-                    if (collected.length() >= 500) break
                     collected.put(batch.getJSONObject(i))
                 }
+                progressView?.text = "${label("正在导出…")} ${collected.length()} / $total"
                 if (batch.length() > 0 && collected.length() < total) {
                     nextPage(pageOffset + batch.length())
                 } else {
+                    exportBusy = false
+                    progressView?.text = ""
                     done(collected)
                 }
             }
@@ -2637,50 +2851,137 @@ internal class NativePagesController(
         nextPage(0)
     }
 
+    private fun writeNotesMarkdown(
+        bookId: String,
+        items: JSONArray,
+        writer: Appendable,
+    ) {
+        writer.append(tr("# 读书笔记与标注导出\n\n", "# Reading Notes & Highlights Export\n\n"))
+        if (bookId.isNotEmpty()) writer.append(tr("- 书籍 ID: `$bookId`\n", "- Book ID: `$bookId`\n"))
+        writer.append(tr("- 导出条数: ${items.length()}\n\n", "- Exported items: ${items.length()}\n\n"))
+        for (i in 0 until items.length()) {
+            val item = items.getJSONObject(i)
+            val bTitle = item.optString("bookTitle", tr("书籍", "Book"))
+            val kind = label(if (item.optString("kind") == "bookmark") "书签" else "标注")
+            val cfi = item.optString("cfi")
+            writer.append("## ${i + 1}. $bTitle [$kind]\n")
+            if (item.optString("text").isNotBlank()) {
+                writer.append("> ${item.optString("text").trim()}\n\n")
+            }
+            if (!item.isNull("note") && item.optString("note").isNotBlank()) {
+                writer.append("**${label("想法")}**: ${item.optString("note").trim()}\n\n")
+            }
+            if (cfi.isNotBlank()) {
+                writer.append("- ${tr("锚点", "Anchor")}: `$cfi`\n\n")
+            }
+        }
+    }
+
     private fun exportNotesMarkdownDialog(
         bookId: String,
         items: JSONArray,
     ) {
-        val sb = StringBuilder()
-        sb.append("# 读书笔记与标注导出\n\n")
-        if (bookId.isNotEmpty()) sb.append("- 书籍 ID: `$bookId`\n")
-        sb.append("- 导出条数: ${items.length()}\n\n")
-        for (i in 0 until items.length()) {
-            val item = items.getJSONObject(i)
-            val bTitle = item.optString("bookTitle", "书籍")
-            val kind = if (item.optString("kind") == "bookmark") "书签" else "划线"
-            val cfi = item.optString("cfi")
-            sb.append("## ${i + 1}. 《$bTitle》 [$kind]\n")
-            if (item.optString("text").isNotBlank()) {
-                sb.append("> ${item.optString("text").trim()}\n\n")
-            }
-            if (!item.isNull("note") && item.optString("note").isNotBlank()) {
-                sb.append("**想法**: ${item.optString("note").trim()}\n\n")
-            }
-            if (cfi.isNotBlank()) {
-                sb.append("- 锚点: `$cfi`\n\n")
-            }
-        }
-        val markdown = sb.toString()
+        val largeExport = items.length() > 500
+        val previewLimit = if (largeExport) 50 else items.length()
         val copyNotice =
             text("", 13f).apply {
                 visibility = View.GONE
                 setTextColor(NativeUi.secondary(this@NativePagesController.background))
             }
-        val mdBox =
-            column().apply {
-                addView(copyNotice)
-                addView(
-                    text(markdown, 13f).apply {
-                        setTextIsSelectable(true)
-                        typeface = NativeUi.monoTypeface(false)
-                        fontFeatureSettings = "tnum"
-                        setLineSpacing(0f, 1.35f)
-                        setPadding(dp(4), dp(4), dp(4), dp(4))
-                    },
-                )
+        val mdBox = column().apply { addView(copyNotice) }
+        val markdown =
+            if (largeExport) {
+                val preview = JSONArray()
+                for (i in 0 until previewLimit) preview.put(items.getJSONObject(i))
+                val noticeHeader =
+                    tr(
+                        "<!-- 以下仅预览前 50 / ${items.length()} 条，请点击上方「保存为 Markdown 文件」导出全部记录 -->\n\n",
+                        "<!-- Previewing first 50 / ${items.length()} items only. Use \"Save as Markdown file\" above for full export. -->\n\n",
+                    )
+                noticeHeader + StringBuilder().also { writeNotesMarkdown(bookId, preview, it) }.toString()
+            } else {
+                StringBuilder().also { writeNotesMarkdown(bookId, items, it) }.toString()
             }
+        lateinit var saveBtn: Button
+        val triggerSafSave = {
+            (activity as? MainActivity)?.launchCreateMarkdownDocument("pagewise-notes.md") { uri ->
+                if (uri == null || disposed) return@launchCreateMarkdownDocument
+                saveBtn.isEnabled = false
+                copyNotice.text = "${label("正在导出…")} 0 / ${items.length()}"
+                copyNotice.visibility = View.VISIBLE
+                runCatching {
+                    exportExecutor.execute {
+                        val ok =
+                            runCatching {
+                                activity.contentResolver.openOutputStream(uri)?.bufferedWriter(Charsets.UTF_8)?.use { out ->
+                                    writeNotesMarkdown(bookId, items, out)
+                                } != null
+                            }.getOrDefault(false)
+                        activity.runOnUiThread {
+                            if (!disposed) {
+                                saveBtn.isEnabled = true
+                                copyNotice.text = if (ok) label("已保存到所选文件") + " (${items.length()})" else tr("保存失败，请重试", "Save failed; please retry")
+                                copyNotice.visibility = View.VISIBLE
+                            }
+                        }
+                    }
+                }.onFailure {
+                    activity.runOnUiThread {
+                        if (!disposed) {
+                            saveBtn.isEnabled = true
+                            copyNotice.text = tr("导出队列不可用，请重试", "Export worker unavailable; please retry")
+                            copyNotice.visibility = View.VISIBLE
+                        }
+                    }
+                }
+            }
+        }
+        if (largeExport) {
+            mdBox.addView(
+                text(
+                    tr(
+                        "共 ${items.length()} 条记录（超出 500 条），请点击下方「保存为 Markdown 文件」完整流式写入磁盘。",
+                        "${items.length()} records (> 500). Use \"Save as Markdown file\" below to stream the full export directly to disk.",
+                    ),
+                    14f,
+                    true,
+                ).apply {
+                    fontFeatureSettings = "tnum"
+                    setPadding(dp(4), dp(4), dp(4), dp(8))
+                },
+            )
+            saveBtn =
+                NativeUi.primaryButton(activity, label("保存为 Markdown 文件"), foreground, background) {
+                    triggerSafSave()
+                }.apply { layoutParams = LinearLayout.LayoutParams(-2, -2).apply { bottomMargin = dp(8) } }
+            mdBox.addView(saveBtn)
+        } else {
+            saveBtn =
+                NativeUi.subtleButton(activity, label("保存为 Markdown 文件"), foreground, background) {
+                    triggerSafSave()
+                }.apply { layoutParams = LinearLayout.LayoutParams(-2, -2).apply { bottomMargin = dp(8) } }
+            mdBox.addView(saveBtn)
+        }
+        mdBox.addView(
+            text(markdown, 13f).apply {
+                setTextIsSelectable(true)
+                typeface = NativeUi.monoTypeface(false)
+                fontFeatureSettings = "tnum"
+                setLineSpacing(0f, 1.35f)
+                setPadding(dp(4), dp(4), dp(4), dp(4))
+            },
+        )
         replaceDialog {
+            val exportButtons =
+                if (largeExport) {
+                    listOf(AlertDialog.BUTTON_NEGATIVE to label("关闭"))
+                } else {
+                    listOf(
+                        AlertDialog.BUTTON_POSITIVE to label("系统分享"),
+                        AlertDialog.BUTTON_NEUTRAL to label("复制 Markdown"),
+                        AlertDialog.BUTTON_NEGATIVE to label("关闭"),
+                    )
+                }
             val exportDialog =
                 NativeEinkDialog(
                     activity,
@@ -2688,33 +2989,31 @@ internal class NativePagesController(
                     mdBox,
                     foreground,
                     background,
-                    listOf(
-                        AlertDialog.BUTTON_POSITIVE to label("系统分享"),
-                        AlertDialog.BUTTON_NEUTRAL to label("复制 Markdown"),
-                        AlertDialog.BUTTON_NEGATIVE to label("关闭"),
-                    ),
+                    exportButtons,
                     onDismissed = repaint,
                 )
-            exportDialog.setOnShowListener {
-                exportDialog.getButton(AlertDialog.BUTTON_POSITIVE)?.setOnClickListener {
-                    exportDialog.dismiss()
-                    val share =
-                        Intent(Intent.ACTION_SEND).apply {
-                            type = "text/plain"
-                            putExtra(Intent.EXTRA_SUBJECT, "Pagewise 读书笔记")
-                            putExtra(Intent.EXTRA_TEXT, markdown)
+            if (!largeExport) {
+                exportDialog.setOnShowListener {
+                    exportDialog.getButton(AlertDialog.BUTTON_POSITIVE)?.setOnClickListener {
+                        exportDialog.dismiss()
+                        val share =
+                            Intent(Intent.ACTION_SEND).apply {
+                                type = "text/plain"
+                                putExtra(Intent.EXTRA_SUBJECT, tr("Pagewise 读书笔记", "Pagewise Reading Notes"))
+                                putExtra(Intent.EXTRA_TEXT, markdown)
+                            }
+                        runCatching {
+                            activity.startActivity(Intent.createChooser(share, label("导出读书笔记")))
+                        }.onFailure {
+                            showError("share_unavailable")
                         }
-                    runCatching {
-                        activity.startActivity(Intent.createChooser(share, label("导出读书笔记")))
-                    }.onFailure {
-                        showError("share_unavailable")
                     }
-                }
-                exportDialog.getButton(AlertDialog.BUTTON_NEUTRAL)?.setOnClickListener {
-                    val cm = activity.getSystemService(android.content.Context.CLIPBOARD_SERVICE) as android.content.ClipboardManager
-                    cm.setPrimaryClip(android.content.ClipData.newPlainText("Pagewise Notes", markdown))
-                    copyNotice.text = label("已复制到剪贴板")
-                    copyNotice.visibility = View.VISIBLE
+                    exportDialog.getButton(AlertDialog.BUTTON_NEUTRAL)?.setOnClickListener {
+                        val cm = activity.getSystemService(android.content.Context.CLIPBOARD_SERVICE) as android.content.ClipboardManager
+                        cm.setPrimaryClip(android.content.ClipData.newPlainText("Pagewise Notes", markdown))
+                        copyNotice.text = label("已复制到剪贴板")
+                        copyNotice.visibility = View.VISIBLE
+                    }
                 }
             }
             exportDialog.show()
@@ -2731,7 +3030,11 @@ internal class NativePagesController(
         }
         val box = column().apply { setPadding(dp(4), dp(4), dp(4), dp(4)) }
         box.addView(
-            text("跨书观点与批注对照 (${grouped.size} 本书)", 16f, true).apply {
+            text(
+                tr("跨书观点与批注对照 (${grouped.size} 本书)", "Cross-book annotations (${grouped.size} books)"),
+                16f,
+                true,
+            ).apply {
                 fontFeatureSettings = "tnum"
             },
         )
@@ -2743,7 +3046,7 @@ internal class NativePagesController(
                     layoutParams = LinearLayout.LayoutParams(-1, -2).apply { bottomMargin = dp(8) }
                 }
             card.addView(
-                text("《$title》 (${list.size} 条标注)", 14f, true).apply {
+                text(tr("《$title》 (${list.size} 条标注)", "$title (${list.size} items)"), 14f, true).apply {
                     fontFeatureSettings = "tnum"
                 },
             )
@@ -2787,7 +3090,7 @@ internal class NativePagesController(
         val editors = linkedMapOf<String, EditText>()
         fields.forEach { (key, title) ->
             val origVal = if (book.isNull(key)) "" else book.optString(key)
-            form.addView(text("${label(title)} (${if (origVal.isEmpty()) "空白" else "已有"})", 14f))
+            form.addView(text("${label(title)} (${if (origVal.isEmpty()) tr("空白", "Empty") else tr("已有", "Set")})", 14f))
             val editor =
                 input(
                     origVal,
@@ -2804,7 +3107,7 @@ internal class NativePagesController(
                 val orig = if (book.isNull(key)) "" else book.optString(key)
                 val maxLen = limits[key] ?: 512
                 if (value.length > maxLen) {
-                    editor.error = "超出长度上限 ($maxLen)"
+                    editor.error = tr("超出长度上限 ($maxLen)", "Exceeds max length ($maxLen)")
                     return@dialog
                 }
                 if (fillEmptyOnly && orig.isNotBlank()) continue
@@ -2813,7 +3116,7 @@ internal class NativePagesController(
                 }
             }
             if (patch.has("title") && patch.getString("title").isBlank()) {
-                editors["title"]?.error = "书名不能为空"
+                editors["title"]?.error = tr("书名不能为空", "Title is required")
                 return@dialog
             }
             if (patch.length() == 0) currentDialog?.dismiss() else patchBook(book, patch)
@@ -2875,7 +3178,11 @@ internal class NativePagesController(
                     }
                 }
             }
-            statusText.text = label("已采纳补全项 ($appliedCount 处更新)，保存后生效。")
+            statusText.text =
+                tr(
+                    "已采纳补全项 ($appliedCount 处更新)，保存后生效。",
+                    "Applied $appliedCount updated field(s); click Save to persist.",
+                )
         }
 
         val searchBtn =
@@ -2898,7 +3205,11 @@ internal class NativePagesController(
                         if (candidates.length() == 0) {
                             statusText.text = label("公开书目库未检索到匹配项，可尝试第二级 AI 推理。")
                         } else {
-                            statusText.text = label("检索到 ${candidates.length()} 个候选，点击即可采纳：")
+                            statusText.text =
+                                tr(
+                                    "检索到 ${candidates.length()} 个候选，点击即可采纳：",
+                                    "Found ${candidates.length()} candidate(s); tap to apply:",
+                                )
                             for (i in 0 until candidates.length()) {
                                 val c = candidates.getJSONObject(i)
                                 val cTitle = c.optString("title")
@@ -2974,7 +3285,7 @@ internal class NativePagesController(
                 val orig = if (book.isNull(key)) "" else book.optString(key)
                 val maxLen = limits[key] ?: 512
                 if (value.length > maxLen) {
-                    editor.error = "超出长度上限 ($maxLen)"
+                    editor.error = tr("超出长度上限 ($maxLen)", "Exceeds max length ($maxLen)")
                     return@dialog
                 }
                 if (fillEmptyOnly && orig.isNotBlank()) continue
@@ -2983,7 +3294,7 @@ internal class NativePagesController(
                 }
             }
             if (patch.has("title") && patch.getString("title").isBlank()) {
-                editors["title"]?.error = "书名不能为空"
+                editors["title"]?.error = tr("书名不能为空", "Title is required")
                 return@dialog
             }
             if (patch.length() == 0) currentDialog?.dismiss() else patchBook(book, patch)
@@ -3010,6 +3321,7 @@ internal class NativePagesController(
                     ::showError,
                     foreground,
                     background,
+                    isEnglish(),
                 ).show(autoGenerate)
             }
         }
@@ -3033,9 +3345,6 @@ internal class NativePagesController(
                 },
             )
         }
-        val draftHost = column()
-        body.addView(draftHost)
-        showDrafts(draftHost)
         val filterRow = NativeActionFlow(activity)
         listOf("all" to "全部", "thoughts" to "想法", "highlights" to "标注", "bookmarks" to "书签").forEach { (id, title) ->
             filterRow.addView(
@@ -3055,6 +3364,17 @@ internal class NativePagesController(
         }
         body.addView(filterRow)
         search(hint = "搜索选区原文、想法或书名")
+        val exportProgressView =
+            text("", 13f).apply {
+                setTextColor(NativeUi.secondary(this@NativePagesController.background))
+                fontFeatureSettings = "tnum"
+            }
+        body.addView(exportProgressView)
+        val notesHost = column()
+        body.addView(notesHost)
+        val draftHost = column()
+        body.addView(draftHost)
+        showDrafts(draftHost)
         val payload =
             JSONObject()
                 .put("query", query)
@@ -3066,10 +3386,10 @@ internal class NativePagesController(
             val items = response.getJSONArray("items")
             if (items.length() > 0) {
                 actions(
-                    body,
+                    notesHost,
                     listOf(
-                        "导出读书笔记" to { collectAnnotationsForExport(bookId) { allItems -> exportNotesMarkdownDialog(bookId, allItems) } },
-                        "跨书对比预览" to { collectAnnotationsForExport(bookId) { allItems -> showCrossBookMatrixDialog(allItems) } },
+                        "导出读书笔记" to { collectAnnotationsForExport(bookId, exportProgressView) { allItems -> exportNotesMarkdownDialog(bookId, allItems) } },
+                        "跨书对比预览" to { collectAnnotationsForExport(bookId, exportProgressView) { allItems -> showCrossBookMatrixDialog(allItems) } },
                     ),
                 )
             }
@@ -3132,15 +3452,16 @@ internal class NativePagesController(
                         LinearLayout.LayoutParams(ViewGroup.LayoutParams.WRAP_CONTENT, ViewGroup.LayoutParams.WRAP_CONTENT),
                     )
                 }
-                body.addView(empty)
-                body.addView(NativeUi.colophonTailpiece(activity, "ANNOTATIONS LEDGER · NO DATA", background))
+                notesHost.addView(empty)
+                notesHost.addView(NativeUi.colophonTailpiece(activity, "ANNOTATIONS LEDGER · NO DATA", background))
             }
+            val batchContainer = column()
             if (bookId.isNotEmpty()) {
                 if (items.length() > 0) pageTitle?.text = items.getJSONObject(0).optString("bookTitle", label("全部笔记"))
-                for (i in 0 until items.length()) noteRow(items.getJSONObject(i))
+                for (i in 0 until items.length()) noteRow(items.getJSONObject(i), batchContainer)
             } else {
                 // Native backend pages annotation records, not all books. Never present a page-local count as a global count.
-                if (items.length() > 0) body.addView(text(label("本页按书籍分组，点击查看该书全部记录"), 12f))
+                if (items.length() > 0) batchContainer.addView(text(label("本页按书籍分组，点击查看该书全部记录"), 12f))
                 val groups = linkedMapOf<String, MutableList<JSONObject>>()
                 for (i in 0 until items.length()) {
                     val note = items.getJSONObject(i)
@@ -3148,7 +3469,7 @@ internal class NativePagesController(
                 }
                 for ((id, records) in groups) {
                     if (id.isEmpty()) {
-                        records.forEach(::noteRow)
+                        records.forEach { noteRow(it, batchContainer) }
                         continue
                     }
                     val card = NativeUi.card(activity, background, 16)
@@ -3243,19 +3564,23 @@ internal class NativePagesController(
                     card.isFocusable = true
                     card.contentDescription = records[0].optString("bookTitle") + ", " + label("查看记录")
                     card.setOnClickListener { open() }
-                    body.addView(card)
+                    batchContainer.addView(card)
                 }
             }
-            body.addView(
+            if (batchContainer.childCount > 0) notesHost.addView(batchContainer)
+            notesHost.addView(
                 text(label("标注记录总数") + ": " + response.getInt("total"), 12f).apply {
                     fontFeatureSettings = "tnum"
                 },
             )
-            if (response.getInt("total") > PAGE_SIZE || offset > 0) pageControls(response.getInt("total"), items.length())
+            if (response.getInt("total") > PAGE_SIZE || offset > 0) pageControls(response.getInt("total"), items.length(), target = notesHost)
         }
     }
 
-    private fun noteRow(note: JSONObject) {
+    private fun noteRow(
+        note: JSONObject,
+        target: LinearLayout = body,
+    ) {
         val card =
             column().apply {
                 setPadding(dp(16), dp(12), dp(16), dp(12))
@@ -3354,14 +3679,17 @@ internal class NativePagesController(
                 },
                 "编辑" to { editNote(note) },
                 "删除" to {
-                    confirm("删除", "仅删除这条笔记/标注，不修改原书内容。") {
+                    confirm(
+                        "删除",
+                        tr("仅删除这条笔记/标注，不修改原书内容。", "Remove this note or highlight only? Book content remains unchanged."),
+                    ) {
                         call("library.annotationRemove", JSONObject().put("id", note.getString("id")).put("before", note)) { refresh() }
                     }
                 },
             ),
         )
         card.addView(line())
-        body.addView(card)
+        target.addView(card)
     }
 
     private fun editNote(note: JSONObject) {
@@ -3385,6 +3713,7 @@ internal class NativePagesController(
                         },
                         foreground,
                         background,
+                        isEnglish(),
                     )
                 noteEditor = editor
                 editor.show()
@@ -3407,7 +3736,11 @@ internal class NativePagesController(
             val start = window.first
             val end = window.last + 1
             target.addView(
-                text("本机草稿：${start + 1}–$end / ${drafts.length()}", 18f, true).apply {
+                text(
+                    tr("本机草稿：${start + 1}–$end / ${drafts.length()}", "Local drafts: ${start + 1}–$end / ${drafts.length()}"),
+                    18f,
+                    true,
+                ).apply {
                     fontFeatureSettings = "tnum"
                 },
             )
@@ -3462,7 +3795,10 @@ internal class NativePagesController(
                             }
                         },
                         "明确放弃此草稿" to {
-                            confirm("删除", "只删除这一份本机草稿，不改动已保存的批注。") {
+                            confirm(
+                                "删除",
+                                tr("只删除这一份本机草稿，不改动已保存的批注。", "Discard this local draft only? Saved annotations remain unchanged."),
+                            ) {
                                 val contextId = draft.getString("contextId")
                                 val discardPayload = JSONObject().put("bookId", draft.getString("bookId"))
                                 if (contextId.startsWith("anno:")) {
@@ -3566,7 +3902,15 @@ internal class NativePagesController(
                 setTextColor(NativeUi.secondary(this@NativePagesController.background))
             }
         folder.addView(folderSummary)
-        folder.addView(text("选择或重新授权后扫描；原文件任务入口保留真实进度和错误。", 13f))
+        folder.addView(
+            text(
+                tr(
+                    "选择或重新授权后扫描；原文件任务入口保留真实进度和错误。",
+                    "Select or reauthorize a folder to scan; file jobs preserve real progress and errors.",
+                ),
+                13f,
+            ),
+        )
         request("action.fileJobStatus", JSONObject()) { result, error ->
             activity.runOnUiThread {
                 if (disposed || owner != generation || error != null || result == null) return@runOnUiThread
@@ -3576,8 +3920,8 @@ internal class NativePagesController(
                 folderSummary.text =
                     when {
                         msgText.isNotEmpty() -> msgText
-                        stateText.isNotEmpty() -> "状态：$stateText"
-                        else -> "未配置监控文件夹或当前无运行中任务。"
+                        stateText.isNotEmpty() -> tr("状态：$stateText", "State: $stateText")
+                        else -> tr("未配置监控文件夹或当前无运行中任务。", "No monitored folder configured or no active job.")
                     }
             }
         }
@@ -3596,7 +3940,15 @@ internal class NativePagesController(
             data,
             listOf(
                 "导出书库备份" to { userAction("backupExport") },
-                "导入书库备份" to { confirm("导入书库备份", "先选择备份；预览只显示文件大小。确认导入后再由恢复服务校验并合并数据。") { userAction("backupImport") } },
+                "导入书库备份" to {
+                    confirm(
+                        "导入书库备份",
+                        tr(
+                            "先选择备份；预览只显示文件大小。确认导入后再由恢复服务校验并合并数据。",
+                            "Choose a backup archive first; preview checks file size only before the restore service validates and merges data.",
+                        ),
+                    ) { userAction("backupImport") }
+                },
             ),
         )
         val about = column()
@@ -3606,13 +3958,21 @@ internal class NativePagesController(
                 val info = activity.packageManager.getPackageInfo(activity.packageName, 0)
                 val code = if (android.os.Build.VERSION.SDK_INT >= 28) info.longVersionCode else @Suppress("DEPRECATION") info.versionCode.toLong()
                 "v${info.versionName} ($code)"
-            }.getOrDefault("v2.5.0")
+            }.getOrDefault("v2.7.0")
         about.addView(
             text("Pagewise · Android · $pkgVersion", 16f, true).apply {
                 fontFeatureSettings = "tnum"
             },
         )
-        about.addView(text("设置由 Android 原生存储统一管理；旧副本仅供迁移前恢复，不再双写。", 13f))
+        about.addView(
+            text(
+                tr(
+                    "设置由 Android 原生存储统一管理；旧副本仅供迁移前恢复，不再双写。",
+                    "Settings are managed in native Android storage; legacy copies are retained only for pre-migration recovery.",
+                ),
+                13f,
+            ),
+        )
         actions(about, listOf("使用手册" to { navigate("/manual") }))
 
         val panel =
@@ -3627,6 +3987,10 @@ internal class NativePagesController(
                     refresh()
                 },
                 repaint,
+                onLocalChange = {
+                    applyPreferencesTheme()
+                    invalidatePreferences()
+                },
             )
         settingsPanel = panel
         val requested = settingsUiState.requested
@@ -3636,7 +4000,15 @@ internal class NativePagesController(
 
     private fun manual() {
         activeManualRenderer = null
-        body.addView(text("离线手册。历史实验功能以当前应用实际可用入口为准。", 12f))
+        body.addView(
+            text(
+                tr(
+                    "离线手册。历史实验功能以当前应用实际可用入口为准。",
+                    "Offline manual. Availability follows the active entry points in this build.",
+                ),
+                12f,
+            ),
+        )
         val pane = NativeReferencePane(activity)
         val rail = column()
         val article = NativeUi.card(activity, background, 20)
@@ -3745,7 +4117,13 @@ internal class NativePagesController(
             showError("blocked_link")
             return
         }
-        confirm("打开网页", "将在系统浏览器打开：${uri.host.orEmpty()}。离线手册本身不会联网。") {
+        confirm(
+            "打开网页",
+            tr(
+                "将在系统浏览器打开：${uri.host.orEmpty()}。离线手册本身不会联网。",
+                "Open ${uri.host.orEmpty()} in the system browser? The offline manual itself has no network access.",
+            ),
+        ) {
             try {
                 activity.startActivity(Intent(Intent.ACTION_VIEW, uri).addCategory(Intent.CATEGORY_BROWSABLE))
             } catch (
@@ -3773,14 +4151,12 @@ internal class NativePagesController(
 
     private fun duration(seconds: Double): String {
         val minutes = (seconds / 60).toLong()
-        return if (minutes >=
-            60
-        ) {
-            "${minutes / 60} 小时 ${minutes % 60} 分钟"
+        return if (minutes >= 60) {
+            tr("${minutes / 60} 小时 ${minutes % 60} 分钟", "${minutes / 60}h ${minutes % 60}m")
         } else if (minutes > 0) {
-            "$minutes 分钟"
+            tr("$minutes 分钟", "${minutes}m")
         } else {
-            "${seconds.toInt()} 秒"
+            tr("${seconds.toInt()} 秒", "${seconds.toInt()}s")
         }
     }
 

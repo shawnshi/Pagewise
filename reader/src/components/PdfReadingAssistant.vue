@@ -16,6 +16,7 @@ const messages = ref<Message[]>([])
 const contextText = ref(props.sourceText.slice(0, PDF_AI_CONTEXT_LIMIT))
 const question = ref('')
 const questionInput = ref<HTMLTextAreaElement | null>(null)
+const messagesEl = ref<HTMLElement | null>(null)
 const streaming = ref(false)
 const error = ref('')
 let generation = 0
@@ -65,7 +66,7 @@ watch(() => props.open, async open => {
   if (!open) { stopReply(); return }
   if (!messages.value.length) contextText.value = props.sourceText.slice(0, PDF_AI_CONTEXT_LIMIT)
   await nextTick()
-  if (props.open) questionInput.value?.focus({ preventScroll: true })
+  if (props.open && !settings.readingMode.eink.enabled) questionInput.value?.focus({ preventScroll: true })
 })
 watch(contextText, () => {
   // Prior answers must not be silently reused against an edited excerpt.
@@ -98,8 +99,6 @@ async function send() {
   const einkOn = !!settings.readingMode.eink.enabled
   const aggregator = new EinkStreamAggregator({
     einkEnabled: einkOn,
-    maxBatchChars: 18,
-    maxWaitMs: 650,
     signal: abort.signal,
     onFlush: chunk => {
       if (run !== generation || !props.open) return
@@ -122,6 +121,8 @@ async function send() {
     messages.value[index]!.content = pendingText
     messages.value[index]!.state = 'done'
     if (question.value.trim() === draft) question.value = ''
+    await nextTick()
+    if (messagesEl.value) messagesEl.value.scrollTop = messagesEl.value.scrollHeight
   } catch (cause) {
     if (run !== generation || !props.open) return
     aggregator.abort()
@@ -156,7 +157,7 @@ async function send() {
     <p v-if="sourceError" class="pdf-ai-error" role="alert">{{ sourceError }}</p>
     <p v-if="sourceLoading" role="status">{{ t('common.loading') }}</p>
     <p v-else-if="!contextText.trim()" class="pdf-ai-hint">{{ t('ai.pdfNoText') }}</p>
-    <div class="pdf-ai-messages" role="log" :aria-label="t('ai.title')" aria-live="off">
+    <div ref="messagesEl" class="pdf-ai-messages" role="log" :aria-label="t('ai.title')" aria-live="off">
       <article v-for="(message, index) in messages" :key="index" class="pdf-ai-message" :data-role="message.role" :data-state="message.state">
         <strong>{{ message.role === 'user' ? t('ai.pdfYou') : t('ai.title') }}</strong>
         <p>{{ message.content }}</p>
@@ -181,7 +182,9 @@ async function send() {
 <style scoped>
 .pdf-reading-assistant { position: fixed; z-index: 1000; inset: max(12px, env(safe-area-inset-top)) 12px auto auto; box-sizing: border-box; width: min(440px, calc(100vw - 24px)); max-height: calc(100vh - 24px); overflow-y: auto; overscroll-behavior: contain; padding: 16px; border: 2px solid var(--border); background: var(--bg); color: var(--text); box-shadow: 0 4px 16px #0002; }
 .pdf-reading-assistant.docked { position: static; width: 100%; height: 100%; max-height: none; border-width: 0 0 0 2px; border-color: var(--border-strong); box-shadow: none; }
-:global(.pagewise-eink) .pdf-reading-assistant { box-shadow: none; border-radius: 0; border-color: var(--border-strong); }
+:global(.pagewise-eink) .pdf-reading-assistant { box-shadow: none; border-radius: 0; border-color: var(--border-strong); color: var(--text); }
+:global(.pagewise-eink) .pdf-ai-message,
+:global(.pagewise-eink) .pdf-ai-message p { color: var(--text); }
 .pdf-ai-header, .pdf-ai-actions { display: flex; align-items: center; justify-content: space-between; gap: 8px; }
 .pdf-ai-field { display: flex; flex-direction: column; gap: 6px; margin: 12px 0; }
 .pdf-ai-field textarea { width: 100%; resize: vertical; min-height: 64px; white-space: pre-wrap; }

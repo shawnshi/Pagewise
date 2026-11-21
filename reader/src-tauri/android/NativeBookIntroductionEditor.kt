@@ -131,10 +131,10 @@ internal class NativeBookIntroductionEditor(
                 }
             },
         )
-        val window: AlertDialog = IntroductionDialog(
+        val window = IntroductionDialog(
             activity,
             tr("AI 书籍简介", "AI book introduction"),
-            ScrollView(activity).apply { isFillViewport = true; addView(form) },
+            NativeUi.configureEinkScroll(ScrollView(activity).apply { isFillViewport = true; addView(form) }),
             foreground,
             background,
             listOf(
@@ -156,16 +156,16 @@ internal class NativeBookIntroductionEditor(
         }
         window.setOnShowListener {
             if (Build.VERSION.SDK_INT >= 33) backCleanup = BackApi33.bind(window, ::requestClose)
-            window.getButton(AlertDialog.BUTTON_POSITIVE).setOnClickListener { generate() }
-            window.getButton(AlertDialog.BUTTON_NEUTRAL).setOnClickListener { save() }
-            window.getButton(AlertDialog.BUTTON_NEGATIVE).setOnClickListener { requestClose() }
+            window.getButton(AlertDialog.BUTTON_POSITIVE)?.setOnClickListener { generate() }
+            window.getButton(AlertDialog.BUTTON_NEUTRAL)?.setOnClickListener { save() }
+            window.getButton(AlertDialog.BUTTON_NEGATIVE)?.setOnClickListener { requestClose() }
             for (which in listOf(AlertDialog.BUTTON_POSITIVE, AlertDialog.BUTTON_NEUTRAL, AlertDialog.BUTTON_NEGATIVE)) {
-                window.getButton(which).minimumHeight =
+                window.getButton(which)?.minimumHeight =
                     NativeUi.dp(activity, 48)
             }
             controls()
         }
-        window.setOnDismissListener {
+        window.addOnDismiss {
             if (!closed) {
                 closed = true
                 epoch++
@@ -358,6 +358,8 @@ internal class NativeBookIntroductionEditor(
         private val surface: Int,
         captions: List<Pair<Int, String>>,
     ) : AlertDialog(activity) {
+        private val dismissHooks = mutableListOf<() -> Unit>()
+        private var externalDismissListener: android.content.DialogInterface.OnDismissListener? = null
         private val actions = captions.associate { (which, caption) ->
             which to NativeUi.button(activity, caption, ink, surface) {}.apply {
                 id = when (which) {
@@ -376,6 +378,52 @@ internal class NativeBookIntroductionEditor(
             }
             setTitle(title)
             setView(IntroductionContent(activity, body, footer))
+            super.setOnDismissListener {
+                externalDismissListener?.onDismiss(this)
+                dismissHooks.toList().forEach { it() }
+                NativeUi.onDialogDismissRepaint()
+            }
+        }
+
+        override fun setOnDismissListener(listener: android.content.DialogInterface.OnDismissListener?) {
+            externalDismissListener = listener
+        }
+
+        fun addOnDismiss(hook: () -> Unit) {
+            dismissHooks.add(hook)
+        }
+
+        private fun findScrollView(root: View): ScrollView? {
+            if (root is ScrollView) return root
+            if (root is ViewGroup) {
+                for (i in 0 until root.childCount) {
+                    findScrollView(root.getChildAt(i))?.let { return it }
+                }
+            }
+            return null
+        }
+
+        override fun dispatchKeyEvent(event: KeyEvent): Boolean {
+            if (currentFocus is EditText) return super.dispatchKeyEvent(event)
+            val volPref =
+                context.getSharedPreferences("pagewise_native_ui", Context.MODE_PRIVATE).getBoolean("volume_keys_paging", true)
+            val audioActive =
+                NativeUi.isSpeechActive() ||
+                    ((context.getSystemService(Context.AUDIO_SERVICE) as? android.media.AudioManager)?.isMusicActive == true)
+            val volAllowed = !audioActive && volPref
+            val direction =
+                when (event.keyCode) {
+                    KeyEvent.KEYCODE_PAGE_DOWN -> View.FOCUS_DOWN
+                    KeyEvent.KEYCODE_PAGE_UP -> View.FOCUS_UP
+                    KeyEvent.KEYCODE_VOLUME_DOWN -> if (volAllowed) View.FOCUS_DOWN else return super.dispatchKeyEvent(event)
+                    KeyEvent.KEYCODE_VOLUME_UP -> if (volAllowed) View.FOCUS_UP else return super.dispatchKeyEvent(event)
+                    else -> return super.dispatchKeyEvent(event)
+                }
+            val scroll = window?.decorView?.let { findScrollView(it) } ?: return super.dispatchKeyEvent(event)
+            if (event.action == KeyEvent.ACTION_DOWN) {
+                NativeUi.stepScroll(scroll, direction)
+            }
+            return true
         }
 
         override fun getButton(whichButton: Int): Button? = actions[whichButton] ?: super.getButton(whichButton)

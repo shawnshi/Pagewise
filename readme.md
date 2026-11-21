@@ -4,24 +4,40 @@
 
 # 知页阅读器 · Pagewise
 
-面向文石（Onyx BOOX）Android 墨水屏设备的本地阅读应用。当前版本为 **2.6.0**，Android 版本码为 **2006000**。
+面向文石（Onyx BOOX）Android 墨水屏设备的本地阅读应用。当前版本为 **2.7.0**，Android 版本码为 **2007000**。
 
 项目专为 BOOX Android 设备设计与调优。浏览器仅用于前端组件开发与单元测试，不提供桌面、iOS 或 PWA 发行版。
 
 ## 当前状态
 
-2.6.0 已在 **Note X3 Pro（Android API 32, Carta 1200 墨水屏）** 上完成构建、覆盖安装与设备端版本核验：
+2.7.0 已在 **Note X3 Pro（Android API 32, Carta 1200 墨水屏）** 上完成构建、覆盖安装与设备端版本核验：
 
 | 变体 | 桌面显示名称 | 包名 | 下载 |
 |---|---|---|---|
-| Release | 知页 | `io.pagewise.reader` | [Pagewise-2.6.0-release.apk](https://github.com/shawnshi/Pagewise/releases/download/v2.6.0/Pagewise-2.6.0-release.apk) |
-| Debug | 知页 2.6.0 测试版 | `io.pagewise.reader.debug` | [Pagewise-2.6.0-debug.apk](https://github.com/shawnshi/Pagewise/releases/download/v2.6.0/Pagewise-2.6.0-debug.apk) |
+| Release | 知页 | `io.pagewise.reader` | [Pagewise-2.7.0-release.apk](https://github.com/shawnshi/Pagewise/releases/download/v2.7.0/Pagewise-2.7.0-release.apk) |
+| Debug | 知页 2.7.0 测试版 | `io.pagewise.reader.debug` | [Pagewise-2.7.0-debug.apk](https://github.com/shawnshi/Pagewise/releases/download/v2.7.0/Pagewise-2.7.0-debug.apk) |
 
 ### 校验信息 (SHA-256)
-- **Release APK (`Pagewise-2.6.0-release.apk`)**:
-  `c3a9fcb8ec6cbf88aff6ecf90d0921e2805584d4ea1762605ee03a956b157534`
-- **Debug APK (`Pagewise-2.6.0-debug.apk`)**:
-  `d0185a0e0527b55e44cf18b559f3a1aa6d0f0ed7199173adc182c71fac1da54`
+- **Release APK (`Pagewise-2.7.0-release.apk`)**:
+  `5dc1841456e2af72e6e24249dac040d4fb3e6ac93259f589f0d3f5d5ee6cb857`
+- **Debug APK (`Pagewise-2.7.0-debug.apk`)**:
+  `e066b4538a7ec628cf30c2c393baf794427297a33aba7a9033fcc69245ab6216`
+
+### 2.7.0 核心演进：BOOX 原生 SDK 集成、手写持久化与藏书两行控台优化
+
+本版在 2.6.0 基础上接入文石官方 SDK、闭环全端墨水屏体验审计项并收敛多端交互细节：
+
+1. **BOOX 原生 SDK 集成与清单权限收敛**：
+   - 引入 `onyxsdk-device:1.3.7`、`onyxsdk-pen:1.5.9` 与 `hiddenapibypass:4.3`，在 `OnyxSdkBridge` 实现真实机型探测、波形刷新调度与双色温前光并发锁控；
+   - 通过 `prepare-android-project.mjs` 剥离高危传递权限，并清理 `AndroidManifest.xml` 中 `text/plain` `ACTION_SEND` 冗余声明。
+2. **PDF 竖屏滚动与 Wacom 手写持久化**：
+   - 解除 PDF 竖屏滚动锁并补齐 `scrollByScreen`、`onyxScribble` IndexedDB 缓存与撤销/清屏持久化；
+   - 扩展 `backup.ts` 与 `boundedArchive.ts`，使书库归档支持 `OnyxInkStroke` 手写笔迹备份恢复及跨书 ID 重映射。
+3. **藏书页两行控台精简与原生管理层加固**：
+   - 在 `NativeLibraryPanel.kt` 与 `LibraryView.vue` 收敛筛选胶囊触发条件：选中第一行可见类别时仅保留两行控台（靠第一行高亮与 `全部` 重置），不再弹出第三行筛选胶囊；
+   - 落地批量 SQL 查询与封面缓存、4 级黑白几何年历热力图、原生手册表格自动折行与英文 i18n 补齐。
+4. **阅读交互与 EPD 调度统一**：
+   - 统一 EPD 刷新波形编排与后台 WebView 动作静默化，移除平滑滚动并补齐点击热区、翻页手势、划词浮条、排版字号下限、`WakeLock` 与休眠封面生成。
 
 ### 2.6.0 核心演进：全端 E-Ink 体验与硬件深度治理闭环
 
@@ -177,9 +193,9 @@ npm run android:build:release
 ```
 
 编译产物生成于：
-- `reader/src-tauri/gen/android/app/build/outputs/apk/universal/debug/app-universal-debug.apk`
-- `reader/src-tauri/gen/android/app/build/outputs/apk/universal/release/app-universal-release.apk`
-（历史或独立 ABI 产物亦保留于同级 `arm64/` 目录）
+- `reader/src-tauri/gen/android/app/build/outputs/apk/arm64/release/app-arm64-release.apk`
+- `reader/src-tauri/gen/android/app/build/outputs/apk/arm64/debug/app-arm64-debug.apk`
+（当触发全架构打包时，通用 APK 生成于同级 `universal/` 目录）
 
 ### 侧载部署至 BOOX 设备
 

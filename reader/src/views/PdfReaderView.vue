@@ -34,9 +34,10 @@ import { importFile } from '../services/importer'
 import { detectFormat, isSupportedBookFormat } from '../services/format'
 import { FONT_FAMILIES, HIGHLIGHT_COLORS, READER_THEME_CHOICES, resolveReaderColors, resolveReaderTheme, annotationLineStyle, annotationLabelKey, annotationSwatchStyle } from '../services/readerTheme'
 import { resolvedTheme } from '../services/appearance'
+import { setKeepScreenOn } from '../services/systemBars'
 import { injectFontIntoDoc, resolveFontFamily } from '../services/fonts'
 import { useLibrary } from '../stores/library'
-import { useSettings } from '../stores/settings'
+import { isEinkHardwareEnvironment, useSettings } from '../stores/settings'
 import { useReadingTimer } from '../composables/useReadingTimer'
 import { usePortraitView } from '../composables/usePortraitView'
 import { effectivePdfLayout } from '../services/portraitLayout'
@@ -113,6 +114,7 @@ let pdm: PdfiumDoc | null = null
 let rasterClient: PdfRasterClient | null = null
 let rasterRevision = 0
 let rasterViewKey = ''
+let rasterConfigKey = ''
 const bitmapCache = new PdfByteLru<string, HTMLCanvasElement>(PDF_BITMAP_BYTES, canvas => {
   const thumbnail = Number(canvas.dataset.thumbnailPage)
   if (thumbnail) {
@@ -126,11 +128,18 @@ const bitmapCache = new PdfByteLru<string, HTMLCanvasElement>(PDF_BITMAP_BYTES, 
   canvas.width = canvas.height = 0
 })
 function syncRasterView() {
-  const key = `${bookPaged.value ? pagedPages.value.join(',') : currentPage.value}:${curScale.value}:${DPR()}:${settings.pdf.renderer}`
+  const configKey = `${curScale.value}:${DPR()}:${settings.pdf.renderer}`
+  const key = `${bookPaged.value ? pagedPages.value.join(',') : currentPage.value}:${configKey}`
+  if (configKey !== rasterConfigKey) {
+    rasterConfigKey = configKey
+    rasterViewKey = key
+    bitmapCache.unpinAll()
+    rasterClient?.setRevision(++rasterRevision)
+    return
+  }
   if (key === rasterViewKey) return
   rasterViewKey = key
   bitmapCache.unpinAll()
-  rasterClient?.setRevision(++rasterRevision)
 }
 function reportRasterError(cause: unknown) {
   if (readerAlive && !(cause instanceof DOMException && cause.name === 'AbortError')) {
@@ -167,12 +176,15 @@ const presentationMode = ref(false)
  * settings.pdf.mode / spreadMode。只算生效值, 不改写用户保存的设置。
  */
 const portraitView = usePortraitView()
+const isEinkDevice = isEinkHardwareEnvironment()
+const einkRuntime = computed(() => Boolean(settings.readingMode.eink.enabled || isEinkDevice))
 const pdfEffective = computed(() => effectivePdfLayout({
   mode: settings.pdf.mode,
   spreadMode: settings.pdf.spreadMode,
   portraitScroll: settings.reader.portraitScroll,
   portrait: portraitView.value,
   presentation: presentationMode.value,
+  einkActive: einkRuntime.value,
 }))
 /** 所有 PDF 共用阅读模式；v7 起默认连续滚动。 */
 const mode = computed<'paged' | 'scroll'>(() => pdfEffective.value.mode)
@@ -279,6 +291,10 @@ const renderedScale = new Map<number, string>()
 const rendering = new Set<number>()
 /** 已挂载位图的页: 与渲染 key 分开追踪, 缩放后旧的 canvas 仍能被淘汰。 */
 const mountedPages = new Set<number>()
+const mountedPageSet = ref<Set<number>>(new Set())
+function syncMountedPageSet() {
+  mountedPageSet.value = new Set(mountedPages)
+}
 
 function renderKeyFor(pageNum: number, scale: number) {
   const display = displaySizeOf(pageNum, scale)
@@ -396,7 +412,10 @@ async function renderScrollPage(num: number, priority = 0) {
     if (!readerAlive || !pdm || revision !== rasterRevision || scale !== curScale.value || holderOf(num) !== holder || !holder.isConnected) return
     holder.querySelector('.p-canvas')?.replaceChildren(canvas)
     renderedScale.set(num, renderKey)
-    mountedPages.add(num)
+    if (!mountedPages.has(num)) {
+      mountedPages.add(num)
+      syncMountedPageSet()
+    }
     renderPdmLinks(holder, num)
   } finally {
     rendering.delete(num)
@@ -420,6 +439,12 @@ async function renderPaged() {
   if (pages !== pagedPages.value) return
   syncRasterView()
   const revision = rasterRevision
+  bitmapCache.unpinAll()
+  for (const page of pages) {
+    const { w, h } = displaySizeOf(page, curScale.value)
+    const { key } = rasterTargetFor(page, w, h, 0, DPR())
+    bitmapCache.pin(key)
+  }
   // 页组切换会创建新的 holder；位图缓存可复用，DOM 挂载状态不可复用。
   for (const page of pages) renderedScale.delete(page)
   await nextTick()
@@ -436,7 +461,26 @@ async function renderPaged() {
   if (!readerAlive || revision !== rasterRevision) return
   pagedBox.value?.scrollTo({ top: 0, left: 0 })
   considerPdfEndOffer()
+  const nextKey = pages.join(',')
+  const pageChanged = lastRenderedPagedKey !== '' && lastRenderedPagedKey !== nextKey
+  lastRenderedPagedKey = nextKey
+  if (pageChanged && einkRuntime.value) {
+    requestAnimationFrame(() => requestAnimationFrame(() => {
+      if (readerAlive) onyxEpd.notifyPageTurn()
+    }))
+  }
+  const prefetchCandidates = new Set<number>()
+  if (pages.length) {
+    const first = pages[0]!
+    const last = pages[pages.length - 1]!
+    if (last < pageCount.value) for (const p of spreadOf(last + 1)) prefetchCandidates.add(p)
+    if (first > 1) for (const p of spreadOf(first - 1)) prefetchCandidates.add(p)
+    for (const p of pages) prefetchCandidates.delete(p)
+  }
+  if (prefetchCandidates.size) schedulePrefetchRender(Array.from(prefetchCandidates), true)
 }
+
+let lastRenderedPagedKey = ''
 
 async function pagedGoto(page: number) {
   const pages = spreadOf(page)
@@ -556,7 +600,8 @@ function renderPdmLinks(holder: HTMLElement, num: number) {
 }
 
 function evictFarPages(center: number) {
-  for (const num of mountedPages) {
+  let changed = false
+  for (const num of Array.from(mountedPages)) {
     if (Math.abs(num - center) <= KEEP) continue
     const holder = holderOf(num)
     if (holder) {
@@ -564,8 +609,9 @@ function evictFarPages(center: number) {
       holder.querySelector('.p-links')?.replaceChildren()
     }
     renderedScale.delete(num)
-    mountedPages.delete(num)
+    if (mountedPages.delete(num)) changed = true
   }
+  if (changed) syncMountedPageSet()
 }
 
 function pageAtScrollOffset(viewportOffset: number): number {
@@ -619,10 +665,10 @@ function updateViewport() {
   evictFarPages(cur)
 }
 
-const prefetchQueue: number[] = []
+const prefetchQueue: Array<{ page: number; cacheOnly: boolean }> = []
 let prefetchDraining = false
-function schedulePrefetchRender(pages: number[]) {
-  prefetchQueue.splice(0, prefetchQueue.length, ...pages.slice(0, 6))
+function schedulePrefetchRender(pages: number[], cacheOnly = false) {
+  prefetchQueue.splice(0, prefetchQueue.length, ...pages.slice(0, 6).map(page => ({ page, cacheOnly })))
   if (prefetchDraining || prefetchQueue.length === 0) return
   prefetchDraining = true
   const drain = () => {
@@ -630,14 +676,17 @@ function schedulePrefetchRender(pages: number[]) {
       prefetchDraining = false
       return
     }
-    const page = prefetchQueue.shift()!
+    const item = prefetchQueue.shift()!
     // 用户已经滚远的页面不再预载, 交给下一次 updateViewport 决定。
-    if (Math.abs(page - currentPage.value) > 8) {
+    if (Math.abs(item.page - currentPage.value) > 8) {
       drain()
       return
     }
+    const task = item.cacheOnly && !holderOf(item.page)
+      ? renderBitmapCanvas(item.page, curScale.value, 1).then(() => undefined)
+      : renderScrollPage(item.page, 1)
     // 每页之间让出主线程, 让首屏 paint / 滚动事件先执行。
-    renderScrollPage(page, 1)
+    task
       .catch(reportRasterError)
       .then(() => setTimeout(drain, 0))
   }
@@ -645,6 +694,10 @@ function schedulePrefetchRender(pages: number[]) {
 }
 
 function onScroll() {
+  if (einkRuntime.value) {
+    onyxEpd.enterFastMode('scroll', 'du')
+    onyxEpd.scheduleExitFastMode(180)
+  }
   if (scrollScheduled) return
   scrollScheduled = true
   requestAnimationFrame(() => {
@@ -678,7 +731,8 @@ function pageTop(n: number): number {
 
 function scrollGoto(n: number, smooth = false, yOffsetPx = 0) {
   const clamped = Math.min(Math.max(1, n || 1), pageCount.value)
-  scroller.value?.scrollTo({ top: Math.max(0, pageTop(clamped) + yOffsetPx), behavior: smooth ? 'smooth' : 'auto' })
+  const useSmooth = smooth && !einkRuntime.value
+  scroller.value?.scrollTo({ top: Math.max(0, pageTop(clamped) + yOffsetPx), behavior: useSmooth ? 'smooth' : 'auto' })
 }
 
 function gotoPage(n: number, smooth = false, yOffsetPx = 0) {
@@ -714,7 +768,17 @@ function zoomStep(dir: 1 | -1) {
 const SUMATRA_ZOOM_LEVELS = [0.0833, 0.125, 0.18, 0.25, 0.3333, 0.5, 0.6667, 0.75, 1, 1.25, 1.5, 2, 3, 4]
 const ZOOM_PRESETS = [0.125, 0.25, 0.5, 0.6667, 0.75, 1, 1.25, 1.5, 2, 3, 4]
 const zoomMenu = ref(false)
-const pdfContrast = ref<'normal' | 'dark' | 'bleach'>('normal')
+const pdfContrastKey = `pagewise:pdf-contrast:${bookId}`
+function loadPdfContrast(): 'normal' | 'dark' | 'bleach' {
+  try {
+    const saved = localStorage.getItem(pdfContrastKey)
+    return saved === 'dark' || saved === 'bleach' ? saved : 'normal'
+  } catch { return 'normal' }
+}
+const pdfContrast = ref<'normal' | 'dark' | 'bleach'>(loadPdfContrast())
+watch(pdfContrast, value => {
+  try { localStorage.setItem(pdfContrastKey, value) } catch { /* ignore */ }
+})
 
 function pickZoom(z: PdfZoom) {
   zoomMenu.value = false
@@ -1044,6 +1108,7 @@ function persistProgress(): Promise<void> {
   if (!pdfPositionReady) return Promise.resolve()
   const location = String(currentPage.value)
   const fraction = pageCount.value ? currentPage.value / pageCount.value : 0
+  onyxNativeAccelerator.stageReadingCheckpoint(bookId, location, fraction, 0)
   const key = `${location}|${pageCount.value}`
   if (key === lastSavedProgress) return progressWrite.then(() => { /* 已落库 */ })
   const write = progressWrite.then(() => library.saveProgress(bookId, location, fraction))
@@ -1094,30 +1159,26 @@ function onPdfScrubCommit(e: Event) {
 
 function prevPage() {
   markPdfEndInput()
-  if (pdfLayout.value === 'reflow') reflowStep(-1)
-  else if (bookPaged.value) void pagedGoto(pagedPages.value[0] - 1)
-  else if (scrollSpread.value) {
-    const index = scrollPageGroups.value.findIndex(group => group.includes(currentPage.value))
-    const target = scrollPageGroups.value[Math.max(0, index - 1)]?.[0]
-    if (target) scrollGoto(target, true)
-  } else scrollGoto(currentPage.value - 1, true)
-  onyxEpd.notifyPageTurn()
+  if (pdfLayout.value === 'reflow') {
+    if (einkRuntime.value) scrollByScreen(-1)
+    else reflowStep(-1)
+  } else if (bookPaged.value) {
+    void pagedGoto(pagedPages.value[0] - 1)
+  } else {
+    scrollByScreen(-1, true)
+  }
 }
 function nextPage() {
   markPdfEndInput()
   if (pdfLayout.value === 'reflow') {
-    reflowStep(1)
+    if (einkRuntime.value) scrollByScreen(1)
+    else reflowStep(1)
   } else if (bookPaged.value) {
     const next = (pagedPages.value.at(-1) ?? currentPage.value) + 1
     if (next <= pageCount.value) void pagedGoto(next)
-  } else if (scrollSpread.value) {
-    const index = scrollPageGroups.value.findIndex(group => group.includes(currentPage.value))
-    const target = scrollPageGroups.value[Math.min(scrollPageGroups.value.length - 1, index + 1)]?.[0]
-    if (target) scrollGoto(target, true)
   } else {
-    scrollGoto(currentPage.value + 1, true)
+    scrollByScreen(1, true)
   }
-  onyxEpd.notifyPageTurn()
 }
 
 /* ================= 跳转返回 (引文 / 目录跳转后回到原位) ================= */
@@ -1892,7 +1953,7 @@ function boundaryAt(page: number, clientX: number, clientY: number, clampToPage 
 }
 
 function onScrollerPointerDown(e: PointerEvent) {
-  if (!pdm) return
+  if (!pdm || scribbleEnabled.value) return
   if (e.button === 1 || e.button === 2) {
     const viewport = e.currentTarget as HTMLElement | null
     if (!viewport) return
@@ -2023,6 +2084,7 @@ function touchDistance(touches: TouchList): number {
 }
 
 function onPdfTouchStart(e: TouchEvent) {
+  if (scribbleEnabled.value) return
   if (e.touches.length >= 2) {
     onyxEpd.enterFastMode('pdf-zoom', 'du')
     touchGesture = {
@@ -2049,7 +2111,7 @@ function onPdfTouchStart(e: TouchEvent) {
 }
 
 function onPdfTouchMove(e: TouchEvent) {
-  if (!touchGesture || e.touches.length < 2) return
+  if (scribbleEnabled.value || !touchGesture || e.touches.length < 2) return
   e.preventDefault()
   const distance = touchDistance(e.touches)
   if (!touchGesture.lastDistance) {
@@ -2067,6 +2129,10 @@ function onPdfTouchMove(e: TouchEvent) {
 }
 
 function onPdfTouchEnd(e: TouchEvent) {
+  if (scribbleEnabled.value) {
+    touchGesture = null
+    return
+  }
   const gesture = touchGesture
   if (!gesture) return
   if (gesture.pinching) {
@@ -2153,7 +2219,7 @@ function finishPdmSelection(page: number, a: number, b: number) {
 }
 
 function onScrollerDblClick(e: MouseEvent) {
-  if (!pdm) return
+  if (!pdm || scribbleEnabled.value) return
   const holder = (e.target as HTMLElement).closest?.('.p-holder') as HTMLElement | null
   if (!holder) return
   const page = Number(holder.dataset.page)
@@ -2372,6 +2438,7 @@ function liveRectStyle(page: number, r: HlRect) {
 
 /** 点击命中已有高亮 → 打开想法编辑 (高亮矩形不拦截事件, 以免影响划词) */
 function onHolderClick(e: MouseEvent, page: number) {
+  if (scribbleEnabled.value) return
   if (suppressClick) {
     suppressClick = false
     return
@@ -2390,31 +2457,37 @@ function onHolderClick(e: MouseEvent, page: number) {
   if (hit) {
     noteDraft.value = hit.a.note ?? ''
     popPos.value = clampPop(e.clientX - 160, e.clientY + 12)
-    activeAnnotation.value = hit.a
+    activeAnnotation.value = { ...hit.a }
     return
   }
-  if (bookPaged.value) {
-    const ratioX = (e.clientX - hb.left) / Math.max(1, hb.width)
-    const ratioY = (e.clientY - hb.top) / Math.max(1, hb.height)
-    if (presentationMode.value) {
-      if (ratioX <= 0.5) prevPage()
-      else nextPage()
-    } else if (settings.readingMode.eink.oneHandedTapZones) {
-      if (ratioX >= 0.35 && ratioX <= 0.65 && ratioY >= 0.35 && ratioY <= 0.65) {
-        pdfBarsVisible.value = !pdfBarsVisible.value
-      } else if (ratioY < 1 / 3) {
-        prevPage()
-      } else {
-        nextPage()
-      }
-    } else {
-      if (ratioX < 0.30) prevPage()
-      else if (ratioX > 0.70) nextPage()
-      else pdfBarsVisible.value = !pdfBarsVisible.value
+  const viewportWidth = Math.max(1, window.innerWidth)
+  const viewportHeight = Math.max(1, window.innerHeight)
+  const ratioX = e.clientX / viewportWidth
+  const ratioY = e.clientY / viewportHeight
+  const tapLayout = settings.readingMode.eink.tapZoneLayout
+    ?? (settings.readingMode.eink.oneHandedTapZones ? 'right' : 'standard')
+  const resolveAction = (): 'prev' | 'next' | 'bars' => {
+    if (bookPaged.value && presentationMode.value) return ratioX <= 0.5 ? 'prev' : 'next'
+    if (tapLayout === 'left' || tapLayout === 'right') {
+      if (ratioX >= 0.35 && ratioX <= 0.65 && ratioY >= 0.35 && ratioY <= 0.65) return 'bars'
+      if (ratioY < 1 / 3) return 'prev'
+      if (tapLayout === 'right' && ratioX < 0.25) return 'prev'
+      if (tapLayout === 'left' && ratioX > 0.75) return 'prev'
+      return 'next'
     }
+    if (ratioX < 0.30) return 'prev'
+    if (ratioX > 0.70) return 'next'
+    return 'bars'
+  }
+  const tapAction = resolveAction()
+  if (tapAction === 'bars') {
+    pdfBarsVisible.value = !pdfBarsVisible.value
+  } else if (bookPaged.value) {
+    if (tapAction === 'prev') prevPage()
+    else nextPage()
   } else {
-    const ratioX = (e.clientX - hb.left) / Math.max(1, hb.width)
-    if (ratioX >= 0.30 && ratioX <= 0.70) pdfBarsVisible.value = !pdfBarsVisible.value
+    if (tapAction === 'prev') scrollByScreen(-1)
+    else scrollByScreen(1)
   }
 }
 
@@ -2677,7 +2750,7 @@ function reflowGoto(n: number, smooth = false) {
   if (!target) return
   const section = el.querySelector<HTMLElement>(`[data-reflow-page="${target.page}"]`)
   if (!section) return
-  el.scrollTo({ top: Math.max(0, section.offsetTop - 24), behavior: smooth ? 'smooth' : 'auto' })
+  el.scrollTo({ top: Math.max(0, section.offsetTop - 24), behavior: smooth && !einkRuntime.value ? 'smooth' : 'auto' })
   currentPage.value = target.page
 }
 
@@ -2804,6 +2877,15 @@ function startAutoRead() {
       }
       nextPage()
     }, settings.autoReadSeconds * 1000)
+  } else if (einkRuntime.value) {
+    autoPageTimer = setInterval(() => {
+      const el = pdfLayout.value === 'reflow' ? reflowScroller.value : scroller.value
+      if (!el || el.scrollTop + el.clientHeight >= el.scrollHeight - 1) {
+        stopAutoRead()
+        return
+      }
+      scrollByScreen(1)
+    }, settings.autoReadSeconds * 1000)
   } else {
     autoScrollAt = performance.now()
     autoScrollFrame = requestAnimationFrame(stepAutoScroll)
@@ -2858,7 +2940,11 @@ watch(pdfEndBlocked, blocked => {
 })
 watch([zoom, mode, spreadMode, presentationMode], cancelPdfEndNavigation, { flush: 'sync' })
 onBeforeRouteLeave(() => !endRecommendationsDialog.value?.isWriting())
-onBeforeRouteUpdate(() => !endRecommendationsDialog.value?.isWriting())
+onBeforeRouteUpdate(() => {
+  if (endRecommendationsDialog.value?.isWriting()) return false
+  lastRenderedPagedKey = ''
+  return true
+})
 async function navigatePdfEndRecommendation(id: string) {
   if (endRecommendationsDialog.value?.isWriting()) return
   try { await flushProgress(); if (readerAlive) await router.push(`/book/${encodeURIComponent(id)}`) }
@@ -3093,19 +3179,22 @@ function originalViewport(): HTMLElement | undefined {
   return bookPaged.value ? pagedBox.value : scroller.value
 }
 
-function scrollViewportBy(dx: number, dy: number): boolean {
+function scrollViewportBy(dx: number, dy: number, smooth = false): boolean {
   const viewport = pdfLayout.value === 'reflow' ? reflowScroller.value : originalViewport()
   if (!viewport) return false
   const left = viewport.scrollLeft
   const top = viewport.scrollTop
-  viewport.scrollBy({ left: dx, top: dy })
+  viewport.scrollBy({ left: dx, top: dy, behavior: smooth && !einkRuntime.value ? 'smooth' : 'auto' })
   return Math.abs(viewport.scrollLeft - left) > 0.5 || Math.abs(viewport.scrollTop - top) > 0.5
 }
 
-function scrollByScreen(dir: 1 | -1) {
+function scrollByScreen(dir: 1 | -1, smooth = false) {
   const viewport = pdfLayout.value === 'reflow' ? reflowScroller.value : originalViewport()
   if (!viewport) return
-  const moved = scrollViewportBy(0, dir * Math.max(80, viewport.clientHeight * 0.88))
+  const step = einkRuntime.value
+    ? Math.max(120, Math.round(viewport.clientHeight - 48))
+    : Math.max(80, viewport.clientHeight * 0.88)
+  const moved = scrollViewportBy(0, dir * step, smooth)
   if (bookPaged.value && !moved) void pagedTurnFromEdge(dir)
 }
 
@@ -3345,6 +3434,22 @@ const pdfModalOrPopoverOpen = computed(() =>
   || selection.value !== null
   || selTr.value !== null,
 )
+const pdfBlockingKeyOverlay = computed(() =>
+  moreMenu.value
+  || zoomMenu.value
+  || (drawerOpen.value && !widePdfViewport.value)
+  || (pdfSearchOpen.value && !widePdfViewport.value)
+  || propertiesOpen.value
+  || shortcutsOpen.value
+  || typographyOpen.value
+  || (pdfAiOpen.value && !widePdfViewport.value)
+  || ttsPanel.value
+  || autoPanel.value
+  || endRecommendationsOpen.value
+  || activeAnnotation.value !== null
+  || selection.value !== null
+  || selTr.value !== null,
+)
 function isPdfInteractiveFocused(): boolean {
   const el = document.activeElement as HTMLElement | null
   return !!el && (el.isContentEditable || /^(INPUT|TEXTAREA|SELECT)$/.test(el.tagName))
@@ -3353,17 +3458,22 @@ onMounted(() => {
   nativeBackHost.__pagewiseReaderBack = handleNativeReaderBack
   window.addEventListener('resize', onPdfViewportResize)
   unbindPdfHardwareKeys = onyxNativeAccelerator.bindHardwarePageTurn(dir => {
-    if (pdfModalOrPopoverOpen.value || isPdfInteractiveFocused()) return
+    if (pdfBlockingKeyOverlay.value || isPdfInteractiveFocused()) return
     runPdfShortcutCommand(dir === 'next' ? 'nextPage' : 'previousPage')
   })
 })
 watch(
-  [() => settings.readingMode.eink.volumeKeysEnabled, pdfModalOrPopoverOpen] as const,
+  [() => settings.readingMode.eink.volumeKeysEnabled, pdfBlockingKeyOverlay] as const,
   ([volEnabled, blocked]) => {
     onyxNativeAccelerator.setHardwareKeyCapture(!blocked, volEnabled !== false)
   },
   { immediate: true },
 )
+watch(pdfModalOrPopoverOpen, (open, prev) => {
+  if (prev && !open && einkRuntime.value) {
+    onyxEpd.repaintAfterOverlayClose('regal')
+  }
+})
 watch(() => [settings.readingMode.eink.enabled, settings.readingMode.eink.gcIntervalPages] as const, ([enabled, interval]) => {
   onyxEpd.configureGcInterval(enabled ? interval : 0)
 }, { immediate: true })
@@ -3454,10 +3564,27 @@ onMounted(async () => {
     pageDims.value = pdm.pages.map(page => ({ w: page.w, h: page.h }))
     baseDims.value = pageDims.value[0] ?? { w: 612, h: 792 }
     const requestedPage = resolvePdfRouteTargetPage(route.query.loc)
-    const saved = requestedPage ?? parseInt(meta.value.location ?? '1', 10)
+    const recoveredCheckpoint = onyxNativeAccelerator.consumeReadingCheckpoint()
+    if (recoveredCheckpoint && recoveredCheckpoint.bookId === bookId && recoveredCheckpoint.readingDeltaSeconds > 0) {
+      void library.addReadingTime(bookId, recoveredCheckpoint.readingDeltaSeconds, recoveredCheckpoint.updatedAtMs || undefined)
+    }
+    const useCheckpointPage = Boolean(
+      requestedPage == null
+      && recoveredCheckpoint
+      && recoveredCheckpoint.bookId === bookId
+      && recoveredCheckpoint.updatedAtMs > (meta.value.lastReadAt ?? 0),
+    )
+    const checkpointPage = useCheckpointPage && recoveredCheckpoint
+      ? (parseInt(recoveredCheckpoint.cfi, 10) || Math.round(recoveredCheckpoint.progress * pageCount.value))
+      : NaN
+    const saved = requestedPage ?? (Number.isFinite(checkpointPage) && checkpointPage >= 1 ? checkpointPage : parseInt(meta.value.location ?? '1', 10))
     currentPage.value = Number.isFinite(saved)
       ? Math.min(Math.max(saved, 1), pageCount.value)
       : 1
+    if (useCheckpointPage && Number.isFinite(checkpointPage) && checkpointPage >= 1 && checkpointPage <= pageCount.value) {
+      void library.saveProgress(bookId, String(currentPage.value), pageCount.value ? currentPage.value / pageCount.value : 0)
+    }
+    syncPdfSleepCoverIfEnabled()
     loading.value = false
     await nextTick()
     if (!readerAlive) return
@@ -3525,12 +3652,31 @@ watch(() => route.query.loc, raw => {
 watch([pdfSearchOpen, drawerOpen, typographyOpen, ttsPanel, moreMenu, propertiesOpen], flags => {
   if (pdfAiOpen.value && flags.some(Boolean)) closePdfAssistant()
 })
+watch(() => [einkRuntime.value, autoReading.value, ttsState.value] as const, ([, autoOn, tts]) => {
+  void setKeepScreenOn(autoOn || tts === 'playing')
+})
+
+let lastPdfSleepCoverKey = ''
+function syncPdfSleepCoverIfEnabled(): void {
+  if (!settings.readingMode.eink.sleepCover || !meta.value || pageCount.value <= 0) return
+  const pct = Math.max(0, Math.min(100, Math.round((currentPage.value / pageCount.value) * 100)))
+  const title = meta.value.title ?? ''
+  const author = meta.value.author ?? ''
+  const key = `${bookId}:${pct}:${title}:${author}`
+  if (key === lastPdfSleepCoverKey) return
+  lastPdfSleepCoverKey = key
+  try {
+    const bridge = (window as Window & { LightReadInsets?: { updateSleepCover?: (t: string, a: string, p: number, c: string) => string } }).LightReadInsets
+    bridge?.updateSleepCover?.(title, author, pct, `covers/${bookId}.jpg`)
+  } catch { /* ignore */ }
+}
 
 // 切后台 / 进程可能被回收: 把防抖中的当前页立即落库; 失败留给下次有界重试的旧值。
 function onVisibilityCheckpoint() {
   if (document.visibilityState !== 'hidden' || !readerAlive) return
   pdfNoteDraftSaver?.flush()
   void flushProgress().catch(reportProgressError)
+  syncPdfSleepCoverIfEnabled()
 }
 function onPdfBeforeUnload() {
   if (readerAlive) pdfNoteDraftSaver?.flush()
@@ -3540,6 +3686,8 @@ document.addEventListener('visibilitychange', onVisibilityCheckpoint)
 window.addEventListener('beforeunload', onPdfBeforeUnload)
 
 onBeforeUnmount(() => {
+  syncPdfSleepCoverIfEnabled()
+  void setKeepScreenOn(false)
   document.removeEventListener('visibilitychange', onVisibilityCheckpoint)
   window.removeEventListener('beforeunload', onPdfBeforeUnload)
   readerAlive = false
@@ -3596,9 +3744,20 @@ onBeforeUnmount(() => {
   <div
     ref="paperRoot"
     class="paper"
-    :class="[{ 'is-fullscreen': isFullscreen, 'is-presentation': presentationMode, 'lr-eink': settings.readingMode.eink.enabled }, `pdf-contrast-${pdfContrast}`]"
+    :class="[{ 'is-fullscreen': isFullscreen, 'is-presentation': presentationMode, 'lr-eink': settings.readingMode.eink.enabled, 'eink-reduced-motion': einkRuntime }, `pdf-contrast-${pdfContrast}`]"
     :data-reader-theme="resolveReaderTheme(settings.reader.theme, resolvedTheme === 'dark')"
   >
+    <svg aria-hidden="true" width="0" height="0" style="position: absolute; width: 0; height: 0; pointer-events: none">
+      <defs>
+        <filter id="pw-pdf-scan-darken">
+          <feComponentTransfer>
+            <feFuncR type="gamma" amplitude="1" exponent="1.55" offset="0" />
+            <feFuncG type="gamma" amplitude="1" exponent="1.55" offset="0" />
+            <feFuncB type="gamma" amplitude="1" exponent="1.55" offset="0" />
+          </feComponentTransfer>
+        </filter>
+      </defs>
+    </svg>
     <BookEndRecommendationsDialog v-if="endRecommendationsOpen" ref="endRecommendationsDialog" v-model="endRecommendationsOpen" :book-id="bookId" @navigate="navigatePdfEndRecommendation" />
     <input
       ref="pdfOpenInput"
@@ -4169,6 +4328,7 @@ onBeforeUnmount(() => {
               </div>
               <div class="p-links" />
               <OnyxInkLayer
+                v-if="n === currentPage || mountedPageSet.has(n)"
                 :book-id="bookId"
                 :page-key="`pdf-page-${n}`"
                 v-model:enabled="scribbleEnabled"
@@ -4229,6 +4389,7 @@ onBeforeUnmount(() => {
               </div>
               <div class="p-links" />
               <OnyxInkLayer
+                v-if="n === currentPage || mountedPageSet.has(n)"
                 :book-id="bookId"
                 :page-key="`pdf-page-${n}`"
                 v-model:enabled="scribbleEnabled"
@@ -4681,7 +4842,8 @@ onBeforeUnmount(() => {
 .fullscreen-toc-toggle:hover,
 .fullscreen-toc-toggle:focus-visible {
   opacity: 1;
-  background: rgba(18, 20, 24, 0.9);
+  background: var(--eink-solid-black, #000000);
+  color: var(--eink-surface-pure, #ffffff);
 }
 .fullscreen-exit:active,
 .fullscreen-toc-toggle:active {
@@ -5561,7 +5723,7 @@ onBeforeUnmount(() => {
   border-radius: 2px;
 }
 .paper.pdf-contrast-dark .p-canvas :deep(canvas) {
-  filter: contrast(1.45) brightness(0.96);
+  filter: url(#pw-pdf-scan-darken) contrast(1.3);
 }
 .paper.pdf-contrast-bleach .p-canvas :deep(canvas) {
   filter: grayscale(1) contrast(1.85) brightness(1.08);
@@ -5582,6 +5744,22 @@ onBeforeUnmount(() => {
 .p-search-rect.active {
   background: rgba(255, 137, 31, 0.62);
   box-shadow: inset 0 0 0 1px rgba(185, 72, 0, 0.58);
+}
+.paper.lr-eink .p-search-rect {
+  background: transparent;
+  border: 2px dashed #000000;
+  box-shadow: none;
+  mix-blend-mode: normal;
+}
+.paper.lr-eink .p-search-rect.active {
+  background: transparent;
+  border: 2px solid #000000;
+  box-shadow: none;
+  mix-blend-mode: normal;
+}
+.paper.lr-eink[data-reader-theme='dark'] .p-search-rect,
+.paper.lr-eink[data-reader-theme='dark'] .p-search-rect.active {
+  border-color: #ffffff;
 }
 /* 高亮层: 荧光笔效果, 不拦截事件 (点击命中由 holder 统一处理) */
 .p-hl {
@@ -6770,5 +6948,14 @@ onBeforeUnmount(() => {
 .paper .fullscreen-exit span,
 .paper .fullscreen-toc-toggle span {
   display: inline;
+}
+.paper.lr-eink .zoom-layout-chip,
+.paper.lr-eink .zoom-item {
+  min-height: 48px;
+}
+.paper.eink-reduced-motion,
+.paper.eink-reduced-motion * {
+  transition: none !important;
+  animation: none !important;
 }
 </style>

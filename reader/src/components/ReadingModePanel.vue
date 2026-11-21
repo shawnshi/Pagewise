@@ -51,6 +51,14 @@ const settings = useSettings()
 const tw = computed(() => settings.readingMode.typewriter)
 const eye = computed(() => settings.readingMode.eyeCare)
 
+const einkTapZoneLayout = computed<'standard' | 'left' | 'right'>({
+  get: () => settings.readingMode.eink.tapZoneLayout ?? (settings.readingMode.eink.oneHandedTapZones ? 'right' : 'standard'),
+  set: v => {
+    settings.readingMode.eink.tapZoneLayout = v
+    settings.readingMode.eink.oneHandedTapZones = v !== 'standard'
+  },
+})
+
 const tab = computed<ReadingModeTab>({
   get: () => props.modes.panelTab.value,
   set: v => { props.modes.panelTab.value = v },
@@ -350,14 +358,33 @@ function onSpeedInput(e: Event) {
               <span class="rm-switch-track" aria-hidden="true"></span>
             </span>
           </label>
+          <div class="rm-row">
+            <span class="rm-label">{{ t('readingMode.einkTapZones') }}</span>
+            <div class="segmented rm-self-start">
+              <button
+                v-for="opt in ([
+                  ['standard', 'readingMode.einkTapStandard'],
+                  ['left', 'readingMode.einkTapLeft'],
+                  ['right', 'readingMode.einkTapRight'],
+                ] as const)"
+                :key="opt[0]"
+                type="button"
+                :class="{ active: einkTapZoneLayout === opt[0] }"
+                :aria-pressed="einkTapZoneLayout === opt[0]"
+                @click="einkTapZoneLayout = opt[0]"
+              >
+                {{ t(opt[1]) }}
+              </button>
+            </div>
+          </div>
           <label class="rm-toggle">
-            <span>{{ t('readingMode.einkOneHanded') }}</span>
+            <span>{{ t('readingMode.einkSleepCover') }}</span>
             <span class="rm-switch">
               <input
-                v-model="settings.readingMode.eink.oneHandedTapZones"
+                v-model="settings.readingMode.eink.sleepCover"
                 type="checkbox"
                 role="switch"
-                :aria-checked="settings.readingMode.eink.oneHandedTapZones"
+                :aria-checked="settings.readingMode.eink.sleepCover"
               />
               <span class="rm-switch-track" aria-hidden="true"></span>
             </span>
